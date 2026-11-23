@@ -37,11 +37,12 @@ music)
     src=services/music; image=newalisa-music; name=newalisa-music; port=8904
     run="-p 8904:8904"; cmd=""; health=/health ;;
 router)
-    # no source of ours: the prebuilt llama.cpp CUDA server + a model on the server
+    # no source of ours: the prebuilt llama.cpp CUDA server + a model on the server.
+    # 8080 inside: the image's own healthcheck asks there (on 8906 docker said "unhealthy")
     image=ghcr.io/ggml-org/llama.cpp:server-cuda; name=eva-router; port=8906
     "${SSH[@]}" "docker rm -f $name >/dev/null 2>&1; docker run -d --name $name --restart unless-stopped --gpus all \
--p 8906:8906 -v \$HOME/eva-router/models:/models:ro $image \
--m /models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --host 0.0.0.0 --port 8906 -ngl 99 -c 4096 -np 1 --cache-reuse 256 >/dev/null \
+-p 8906:8080 -v \$HOME/eva-router/models:/models:ro $image \
+-m /models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --host 0.0.0.0 --port 8080 -ngl 99 -c 4096 -np 1 --cache-reuse 256 >/dev/null \
 && for i in \$(seq 60); do curl -sf localhost:$port/health >/dev/null && echo $name up && exit 0; sleep 2; done; echo $name NOT up; exit 1"
     exit $? ;;
 *) echo "unknown service $svc" >&2; exit 1 ;;
