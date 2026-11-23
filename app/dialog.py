@@ -733,6 +733,7 @@ MUSIC_CMD_ONCE = profile.tune("dialog.music_cmd_once", 2.5)          # s: the sa
 MUSIC_FILLER = {"пожалуйста", "музыку", "музыка", "песню", "песня", "трек", "эту", "это", "ну", "а", "давай",
                 "включи", "сделай", "немного", "чуть", "чуть-чуть", "по", "поставь", "на"}
 MUSIC_CMD_FAM = profile.tune("dialog.music_cmd_family", 0.4)           # a family-like voice: a word of the song itself is not a command
+MUSIC_CMD_GOING_ON = profile.tune("dialog.music_cmd_going_on", 20.0)   # s after a music command: the next short one needs no family voice
 
 
 def music_down():
@@ -760,7 +761,11 @@ def music_command(words, item):
         core.append(w)
     if not 1 <= len(core) <= 3:
         return False
-    if not named and (item.get("fam_sim") or 0) < MUSIC_CMD_FAM:
+    # a second command right after the first is the same person going on, not a
+    # word of the song: «Ева, сделай тише» worked, the «сделай тише» after it
+    # (voice 0.35 like the family) was dropped (2026-11-23)
+    going_on = time.time() - state.get("music_cmd_at", 0.0) < MUSIC_CMD_GOING_ON
+    if not named and not going_on and (item.get("fam_sim") or 0) < MUSIC_CMD_FAM:
         return False
     words = core
     for keys, action in MUSIC_WORDS:

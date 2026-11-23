@@ -24,7 +24,7 @@ from core.util import log
 SERVICE = profile.service("music")
 DEVICE = "eva"
 DUCK = profile.tune("music.duck", 0.2)                     # the music's share of its volume while she talks or listens
-VOLUME_STEP = profile.tune("music.volume_step", 5)                # % of the speakers' master per «громче» / «тише»
+VOLUME_STEP = profile.tune("music.volume_step", 10)               # % of the master per «громче» / «тише» (5 % = 2 dB was not heard, 2026-11-23)
 
 
 MUSIC_FLAG = "/run/eva/music"     # ear.py: music plays -> listen in short windows over it
