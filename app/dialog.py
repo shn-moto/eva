@@ -39,7 +39,10 @@ NAME = re.compile(r"\b(ева|евочка|евушка|эва)\b", re.I)
 LOOSE_NAME = re.compile(r"(ева|евочка|евушка|эва|ев|эв|ив|иве|еве|еву|евы|евой)", re.I)
 # how the recogniser mangles the name at the start of a phrase ("Ева, ты на
 # связи?" came out as "е вот на связи")
-MAYBE_NAME = re.compile(r"^\s*(е|э|и|ив|иве|ева\w*|эва\w*|эв|ев)\b", re.I)
+# Not "и" / "э": the conjunction and the interjection start plenty of talk - 21 of
+# 21 phrases in 4 days starting with "и" were not to her, and «и вырезаешь
+# что-то» got "Не расслышала, повтори" (2026-11-23)
+MAYBE_NAME = re.compile(r"^\s*(е|ив|иве|ева\w*|эва\w*|эв|ев)\b", re.I)
 # a call on its own, the question comes after a pause ("Ева, … кто такая Ольга"
 # arrived as "евро" + "кто такая ольга")
 CALL_ONLY = re.compile(r"^\s*(?:эй\s+|слушай\s+)?(ева\w{0,3}|эва\w{0,2}|ев\w{0,2}|эв\w{0,2}|ив\w?|иве)\s*$", re.I)
