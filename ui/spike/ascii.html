@@ -24,10 +24,12 @@
   #bar { height: 100%; width: 100%; transform: scaleX(0); transform-origin: center; will-change: transform; border-radius: 3px; background: #8fe9ff;
     box-shadow: 0 0 12px rgba(143, 233, 255, 0.7); }
   #attn.live #bar { background: #d8f8ff; box-shadow: 0 0 22px rgba(190, 245, 255, 1); }
+  /* what she heard: the whole phrase, up to 3 lines - fitStatus() makes the font
+     smaller until it fits (a 2-line clamp cut long phrases and the "думаю" after
+     them, and on the TV's WPE it did not always clamp at all, 2026-11-23) */
   #status { position: absolute; left: 3%; right: 43%; bottom: 60px; z-index: 4; text-align: center;
     font-size: 26px; color: #8fe9ff; opacity: 0; transition: opacity 0.4s ease;
-    line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2; }
+    line-height: 1.25; overflow: hidden; max-height: 3.75em; }
   #status.on { opacity: 1; }
   #status.dim { color: var(--muted); }
   /* screen v2: something is shown - it takes the screen, the face goes to a corner */
@@ -637,6 +639,20 @@ function onHear(ev) {
   else if (ev.state === "none") { if (["on", "stt"].includes(hear.state)) setHear("idle"); }
 }
 let shownStatus = null;
+// the heard phrase whole: 26 px, smaller (to 16 px) until it fits in 3 lines;
+// still too long - its beginning goes, the end and the state ("думаю") stay
+function fitStatus(txt) {
+  statusEl.textContent = txt;
+  for (let fs = 26; fs >= 16; fs -= 2) {
+    statusEl.style.fontSize = fs + "px";
+    if (statusEl.scrollHeight <= statusEl.clientHeight + 1) return;
+  }
+  let t = txt;
+  while (t.length > 20 && statusEl.scrollHeight > statusEl.clientHeight + 1) {
+    t = t.slice(Math.ceil(t.length * 0.1));
+    statusEl.textContent = "…" + t.replace(/^\S*\s/, "");
+  }
+}
 function drawStatus(now, t) {
   if (hear.until && now > hear.until) setHear("idle");
   const dots = ".".repeat(1 + Math.floor(t * 3) % 3), q = hear.text ? "«" + hear.text + "»" : "";
@@ -646,7 +662,7 @@ function drawStatus(now, t) {
   const key = hear.state + txt;
   if (key !== shownStatus) {
     shownStatus = key;
-    if (txt) statusEl.textContent = txt;
+    if (txt) fitStatus(txt);
     statusEl.classList.toggle("on", !!txt);
     statusEl.classList.toggle("dim", hear.state === "ignored");
   }
