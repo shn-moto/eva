@@ -203,8 +203,10 @@ def direction(raw7):
     {"lags": 21 pair delays, "peak", "blocks": per 0.5 s}, or None."""
     try:
         body = np.clip(raw7 * 32768, -32768, 32767).astype(np.int16).tobytes()
-        req = urllib.request.Request(DOA_URL, data=body, headers={"Content-Type": "application/octet-stream",
-                                                                    "X-Channels": str(raw7.shape[1])})
+        hdr = {"Content-Type": "application/octet-stream", "X-Channels": str(raw7.shape[1])}
+        if os.path.exists(RECORD_FLAG):
+            hdr["X-Keep"] = "1"            # recording a test set: the hub keeps the raw mics too
+        req = urllib.request.Request(DOA_URL, data=body, headers=hdr)
         with urllib.request.urlopen(req, timeout=5) as r:
             return json.loads(r.read()) or None
     except Exception as e:
@@ -214,8 +216,10 @@ def direction(raw7):
 
 def stt(pcm16, split=False):
     """-> {"text", "split"?: {"t", "win", "whole", "embs", "texts"}} (stt_server.py)"""
-    req = urllib.request.Request(STT_URL + ("?split=1" if split else ""), data=pcm16.tobytes(),
-                                 headers={"Content-Type": "application/octet-stream"})
+    hdr = {"Content-Type": "application/octet-stream"}
+    if os.path.exists(RECORD_FLAG):
+        hdr["X-Record"] = "1"              # the hub marks the phrase as a test-set recording
+    req = urllib.request.Request(STT_URL + ("?split=1" if split else ""), data=pcm16.tobytes(), headers=hdr)
     with urllib.request.urlopen(req, timeout=15) as r:
         res = json.loads(r.read())
     res["text"] = (res.get("text") or "").strip()
@@ -394,9 +398,10 @@ def deliver(seg, meta, text, v, pcm, peak, hold=True):
         f"stt {meta['stt_ms']}ms self {meta.get('self_sim')} fam {meta.get('fam_sim')}: {text!r}"
         + (f" doa {meta['doa']['lags'][:6]} peak {meta['doa']['peak']}" if meta.get("doa") else ""))
     if os.path.exists(RECORD_FLAG):
-        if not meta.get("window") and pcm is not None:
-            save_sample(pcm, seg, peak, meta)
-        return                            # recording a test set: Eva stays out of it
+        # recording a test set: Eva stays out of it. The STT server keeps the
+        # phrase (mono, + its 7 raw mics via /doa) on the hub - nothing goes to
+        # the Station's small disk any more (2026-11-23)
+        return
     # her own echo is never held: joined with his next phrase it swallowed his
     # "хорошо" (echo "снова я" held, the merge came out "снова я" again, 2026-11-19)
     echo = meta.get("playback", 0) > 0.3 or (meta.get("self_sim") or 0) >= 0.45

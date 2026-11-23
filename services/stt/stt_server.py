@@ -200,9 +200,28 @@ async def doa_route(request: Request):
     """body: int16 interleaved, X-Channels channels, 16 kHz (the Station's raw mics)"""
     ch = int(request.headers.get("X-Channels", "7"))
     body = await request.body()
-    m = np.frombuffer(body, dtype=np.int16).astype(np.float32).reshape(-1, ch) / 32768.0
+    raw = np.frombuffer(body, dtype=np.int16).reshape(-1, ch)
+    if request.headers.get("X-Keep") and LOG_DIR:
+        _keep_raw(raw)
+    m = raw.astype(np.float32) / 32768.0
     m = m - m.mean(0)
     return doa(m) or {}
+
+
+def _keep_raw(raw):
+    """The Station's raw mics of a test-set phrase (7 channels, 16 kHz), next to
+    its mono phrase in the STT log: for front-end work (first word, direction)."""
+    import time
+    d = os.path.join(LOG_DIR, time.strftime("%Y-%m-%d"))
+    try:
+        os.makedirs(d, exist_ok=True)
+        with wave.open(os.path.join(d, time.strftime("%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}-raw{raw.shape[1]}.wav"), "wb") as w:
+            w.setnchannels(raw.shape[1])
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(raw.astype("<i2").tobytes())
+    except OSError as e:
+        print("keep raw:", e, flush=True)
 
 
 @app.get("/health")
@@ -256,7 +275,7 @@ async def stt(request: Request):
     if len(audio) < 1600:
         return {"text": ""}
     out = _stt(audio, request.query_params.get("split") == "1")
-    keep(audio, out, int(1000 * (time.time() - t)))
+    keep(audio, dict(out, record=True) if request.headers.get("X-Record") else out, int(1000 * (time.time() - t)))
     return out
 
 
