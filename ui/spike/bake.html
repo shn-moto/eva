@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Eva face bake</title>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+<style>body { margin: 0; background: #222; color: #ddd; font: 14px monospace; } canvas { display: block; }</style>
+</head>
+<body>
+<div id="status">baking…</div>
+<script type="module">
+// Runs on the workstation (WebGL2): renders the face in each pose into one
+// atlas (4x4 cells of 256 px) and sends it to spike_server's /snap.
+import * as THREE from "three";
+import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
+import { VRMLoaderPlugin, VRMUtils } from "./vendor/three-vrm.module.js";
+
+const CELL = 256, COLS = 4;
+// pose name -> expression weights (the atlas order is the contract with ascii.html)
+const POSES = [
+  ["neutral", {}], ["blink", { blink: 1 }],
+  ["aa", { aa: 0.9 }], ["ih", { ih: 0.9 }], ["ou", { ou: 0.9 }], ["ee", { ee: 0.9 }], ["oh", { oh: 0.9 }],
+  ["smile", { happy: 0.7 }], ["smile_blink", { happy: 0.7, blink: 1 }],
+  ["smile_aa", { happy: 0.5, aa: 0.7 }], ["smile_oh", { happy: 0.5, oh: 0.7 }],
+  ["surprised", { surprised: 0.8 }], ["sad", { sad: 0.6 }], ["think", { relaxed: 0.6 }],
+  ["half_blink", { blink: 0.5 }], ["smile_ee", { happy: 0.5, ee: 0.7 }],
+];
+const status = document.getElementById("status");
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(CELL, CELL);
+renderer.setPixelRatio(1);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const camera = new THREE.PerspectiveCamera(20, 1, 0.05, 10);
+scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+const key = new THREE.DirectionalLight(0xffffff, 1.8);
+key.position.set(0.5, 0.7, 1.5);
+scene.add(key);
+
+const atlas = document.createElement("canvas");
+atlas.width = CELL * COLS; atlas.height = CELL * Math.ceil(POSES.length / COLS);
+const ac = atlas.getContext("2d");
+
+const loader = new GLTFLoader();
+loader.register((p) => new VRMLoaderPlugin(p));
+loader.load("./vendor/sample.vrm", async (gltf) => {
+  const vrm = gltf.userData.vrm;
+  VRMUtils.removeUnnecessaryVertices(gltf.scene);
+  VRMUtils.rotateVRM0(vrm);   // VRM 0.x faces -Z; VRM 1.0 already faces the camera (+Z)
+  scene.add(vrm.scene);
+  vrm.update(0);
+  vrm.scene.updateMatrixWorld(true);
+  const head = new THREE.Vector3();
+  vrm.humanoid.getNormalizedBoneNode("head").getWorldPosition(head);
+  camera.position.set(head.x, head.y + 0.07, head.z + 0.75);
+  camera.lookAt(head.x, head.y + 0.06, head.z);
+  const em = vrm.expressionManager;
+  const names = em.expressions.map((e) => e.expressionName);
+  POSES.forEach(([name, w], i) => {
+    names.forEach((n) => em.setValue(n, 0));
+    Object.entries(w).forEach(([k, v]) => em.setValue(k, v));
+    vrm.update(0);
+    renderer.render(scene, camera);
+    ac.drawImage(renderer.domElement, (i % COLS) * CELL, Math.floor(i / COLS) * CELL);
+  });
+  status.textContent = "baked " + POSES.length + " poses; expressions: " + names.join(" ");
+  document.body.appendChild(atlas);
+  await fetch("/snap", { method: "POST", headers: { "X-Name": "face-atlas" }, body: atlas.toDataURL("image/png") });
+  status.textContent += " — sent";
+}, undefined, (e) => { status.textContent = "error " + e.message; });
+</script>
+</body>
+</html>

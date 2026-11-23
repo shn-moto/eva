@@ -1,0 +1,9 @@
+[Unit]
+Description=Eva: check that this boot came up
+
+[Timer]
+OnBootSec=8min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

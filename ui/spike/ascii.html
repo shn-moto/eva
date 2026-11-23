@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Eva ASCII face</title>
+<style>
+  :root { --bg: #000; --panel: #0b0f1a; --me: #1f4fb8; --eva: #182033; --text: #eef2ff; --muted: #55607f; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "DejaVu Sans", sans-serif; overflow: hidden; }
+  #wrap { display: flex; height: 100%; opacity: 0; transition: opacity 1.2s ease; }
+  #wrap.on { opacity: 1; }
+  #stage { flex: 1 1 60%; position: relative; }
+  #stage canvas { width: 100%; height: 100%; display: block; }
+  #chat { flex: 0 0 40%; background: var(--panel); display: flex; flex-direction: column;
+    padding: 24px; box-sizing: border-box; gap: 12px; overflow: hidden; justify-content: flex-end; }
+  .msg { max-width: 85%; padding: 12px 18px; border-radius: 18px; font-size: 22px; line-height: 1.3; }
+  .me { align-self: flex-end; background: var(--me); }
+  .eva { align-self: flex-start; background: var(--eva); }
+  /* attention: how long she still takes a phrase as meant for her; hearing:
+     that what was said did not vanish (listening -> recognising -> thinking) */
+  #attn { position: absolute; left: 5%; right: 45%; bottom: 40px; z-index: 4; height: 6px; border-radius: 3px;
+    background: rgba(143, 233, 255, 0.08); opacity: 0; transition: opacity 0.6s ease; }
+  #attn.on { opacity: 1; }
+  #bar { height: 100%; width: 100%; transform: scaleX(0); transform-origin: center; will-change: transform; border-radius: 3px; background: #8fe9ff;
+    box-shadow: 0 0 12px rgba(143, 233, 255, 0.7); }
+  #attn.live #bar { background: #d8f8ff; box-shadow: 0 0 22px rgba(190, 245, 255, 1); }
+  #status { position: absolute; left: 3%; right: 43%; bottom: 60px; z-index: 4; text-align: center;
+    font-size: 26px; color: #8fe9ff; opacity: 0; transition: opacity 0.4s ease;
+    line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2; }
+  #status.on { opacity: 1; }
+  #status.dim { color: var(--muted); }
+  /* screen v2: something is shown - it takes the screen, the face goes to a corner */
+  #view { position: absolute; inset: 0; display: none; background: #05070d; padding: 28px 36px 96px;
+    box-sizing: border-box; flex-direction: column; gap: 14px; }
+  #wrap.show #view { display: flex; }
+  #wrap.show #chat { display: none; }
+  #wrap.show #stage { position: absolute; right: 24px; bottom: 24px; width: 300px; height: 260px;
+    z-index: 5; border-radius: 14px; overflow: hidden; background: #000;
+    box-shadow: 0 0 0 1px rgba(143, 233, 255, 0.25), 0 8px 30px rgba(0, 0, 0, 0.8); }
+  #wrap { position: relative; }
+  #wrap.show #status { left: 36px; right: 360px; bottom: 50px; text-align: left; }
+  #wrap.show #attn { left: 36px; right: 360px; bottom: 30px; }
+  #vhead { display: flex; align-items: baseline; gap: 18px; font-size: 30px; }
+  #vhead .sub { font-size: 20px; color: var(--muted); }
+  #vbody { flex: 1; min-height: 0; display: flex; gap: 28px; }
+  .grid { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr);
+    gap: 12px; min-height: 0; }
+  .cell { position: relative; background: #111725; border-radius: 10px; overflow: hidden; }
+  .cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cell .n { position: absolute; left: 8px; top: 6px; font: bold 24px "DejaVu Sans"; color: #fff;
+    text-shadow: 0 0 6px #000, 0 0 2px #000; }
+  .cell .c { position: absolute; right: 8px; bottom: 6px; font-size: 15px; color: #dfe6ff;
+    text-shadow: 0 0 4px #000; }
+  .full { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  .full img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
+  .card { flex: 0 0 300px; display: flex; flex-direction: column; gap: 10px; font-size: 20px; line-height: 1.35; }
+  .card img { width: 220px; height: 220px; object-fit: cover; border-radius: 50%; background: #111725; }
+  .card .ln { color: #c9d3f0; }
+  #avimg { position: absolute; inset: 0; display: none; background: #000; }
+  #stage.pic #avimg { display: block; }
+  #stage.pic canvas { visibility: hidden; }
+  /* no cross-fade: two half-transparent pictures let the black through and the
+     face dimmed at every change of pose - it flickered while she talked. The
+     neutral pose is always under the others; a pose is shown on top at once. */
+  #avimg img { position: absolute; left: 50%; top: 0; height: 100%; transform: translateX(-50%); visibility: hidden; }
+  #avimg img.on, #avimg img.base { visibility: visible; }
+  #l2d { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+  #stage.l2d #l2d { display: block; }
+  #stage.l2d #c { visibility: hidden; }
+  #hud { position: absolute; left: 10px; top: 8px; font: 13px monospace; color: var(--muted); }
+  /* music mode: the player takes the screen (no blur - the Mali-400 also draws the face) */
+  #view.music { background: #05070d; }
+  .mbg { position: absolute; inset: 0; z-index: 0; background-size: cover; background-position: center;
+    opacity: 0.18; }
+  .mbg::after { content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, rgba(5,7,13,0.2) 0%, rgba(5,7,13,0.85) 55%, #05070d 100%); }
+  #view.music #vhead, #view.music #vbody { position: relative; z-index: 1; }
+  .player { flex: 1; display: flex; gap: 44px; align-items: center; min-height: 0; }
+  /* a page she wrote (show_html): in the view, or the whole screen without the face */
+  .page { flex: 1; min-height: 0; border: 0; width: 100%; background: #05070d; border-radius: 8px; }
+  #wrap.pagemode #vbody { margin-right: 320px; }   /* the face's column: it covered the chart's last bars */
+  #wrap.fullpage #vbody { margin-right: 0; }
+  #wrap.fullpage #view { padding: 0; }
+  #wrap.fullpage #vhead { display: none; }
+  #wrap.fullpage .page { border-radius: 0; }
+  #wrap.fullpage #stage { display: none; }
+  /* music: the face goes to the bottom LEFT (bottom right it covered the playlist);
+     the cover above it, smaller, the status and attention bar to the right of it */
+  #wrap.musicmode #stage { right: auto; left: 24px; }
+  #wrap.musicmode .player { align-items: flex-start; }
+  #wrap.musicmode .cover { flex: 0 0 300px; width: 300px; height: 300px; }
+  #wrap.musicmode #status { left: 360px; right: 36px; }
+  #wrap.musicmode #attn { left: 360px; right: 36px; }
+  .cover { flex: 0 0 440px; height: 440px; border-radius: 18px; object-fit: cover; background: #111725;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.7); }
+  .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+  .meta .t { font-size: 46px; font-weight: bold; color: #fff; line-height: 1.1;
+    overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .meta .a { font-size: 30px; color: #8fe9ff; }
+  .meta .al { font-size: 22px; color: var(--muted); }
+  .prog { margin-top: 18px; height: 8px; border-radius: 4px; background: rgba(143, 233, 255, 0.15); overflow: hidden; }
+  .prog i { display: block; height: 100%; width: 0; background: #8fe9ff; border-radius: 4px; }
+  .times { display: flex; justify-content: space-between; font-size: 20px; color: var(--muted); }
+  .state { font-size: 24px; color: #c9d3f0; }
+  .nexts { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .nexts .h { font-size: 18px; color: var(--muted); text-transform: uppercase; letter-spacing: 2px; }
+  .nx { display: flex; gap: 14px; align-items: center; font-size: 21px; color: #dfe6ff; }
+  .nx img { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; background: #111725; flex: 0 0 64px; }
+  .nx span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .nx em { font-style: normal; color: var(--muted); }
+  /* the chat column can be hidden: the face takes the whole width */
+  #wrap.nochat #chat { display: none; }
+  #wrap.nochat:not(.show) #status { right: 3%; }
+  #wrap.nochat:not(.show) #attn { right: 5%; }
+  /* debug status bar (top): what Claude costs today, by model, and the cache */
+  #sbar { position: absolute; left: 0; right: 0; top: 0; height: 30px; z-index: 9; display: none;
+    align-items: center; gap: 22px; padding: 0 14px; box-sizing: border-box; white-space: nowrap; overflow: hidden;
+    background: #0a0e18; border-bottom: 1px solid rgba(143, 233, 255, 0.14);
+    font: 15px "DejaVu Sans Mono", monospace; color: #9aa6c6; }
+  #wrap.sbar #sbar { display: flex; }
+  #wrap.sbar { padding-top: 30px; box-sizing: border-box; }
+  #wrap.sbar #view { top: 30px; }
+  #sbar b { color: #eef2ff; font-weight: normal; }
+  #sbar .k { color: #55607f; }
+  #sbar .m { display: flex; align-items: center; gap: 8px; }
+  #sbar .m .n { color: #8fe9ff; }
+  .meter { display: inline-flex; width: 70px; height: 7px; border-radius: 2px; overflow: hidden; background: #1a2133; }
+  .meter i { display: block; height: 100%; }
+  .meter .rd { background: #3ec98f; } .meter .wr { background: #e0a83c; } .meter .un { background: #5a6684; }
+  .meter .bu { background: #8fe9ff; } .meter .bu.hi { background: #e0a83c; } .meter .bu.over { background: #e05555; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="sbar"></div>
+  <div id="view"><div id="vhead"></div><div id="vbody"></div></div>
+  <div id="stage"><canvas id="c"></canvas><div id="avimg"></div><canvas id="l2d"></canvas><div id="hud"></div></div>
+  <div id="status"></div><div id="attn"><div id="bar"></div></div>
+  <div id="chat"></div>
+</div>
+<script>
+"use strict";
+// Eva's face in pseudo-graphics. The face is pre-baked (bake.html) into an
+// atlas of poses; one WebGL1 pass picks two poses, blends them, sways the
+// head and draws every cell as a glyph whose density follows brightness.
+const P = new URLSearchParams(location.search);
+let CELL_W = +(P.get("cw") || 7), CELL_H = +(P.get("ch") || 11);
+const CELL_BIG = [CELL_W, CELL_H], CELL_SMALL = [4, 6];   // the face in the corner: finer glyphs
+const COLOR_MIX = +(P.get("color") || 0.55);
+const TINT = (P.get("tint") || "8fe9ff").match(/../g).map((h) => parseInt(h, 16) / 255);
+const RAMP = " .`'-:;=+*ox%#@";
+const ATLAS_COLS = 4, ATLAS_ROWS = 4;
+const POSE = { neutral: 0, blink: 1, aa: 2, ih: 3, ou: 4, ee: 5, oh: 6, smile: 7, smile_blink: 8,
+  smile_aa: 9, smile_oh: 10, surprised: 11, sad: 12, think: 13, half_blink: 14, smile_ee: 15 };
+const log = (...a) => console.log("[ascii]", ...a);
+
+const canvas = document.getElementById("c"), hud = document.getElementById("hud");
+const gl = canvas.getContext("webgl", { antialias: false, alpha: false, depth: false, stencil: false,
+  preserveDrawingBuffer: P.has("snap") });
+log("webgl", gl.getParameter(gl.VERSION), gl.getParameter(gl.RENDERER));
+
+function shader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(fs) {
+  const pr = gl.createProgram();
+  gl.attachShader(pr, shader(gl.VERTEX_SHADER, `
+    attribute vec2 p; varying vec2 uv;
+    void main() { uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }`));
+  gl.attachShader(pr, shader(gl.FRAGMENT_SHADER, fs));
+  gl.bindAttribLocation(pr, 0, "p");
+  gl.linkProgram(pr);
+  if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+  const u = {};
+  return { pr, U: (n) => (n in u ? u[n] : (u[n] = gl.getUniformLocation(pr, n))) };
+}
+// Pass 1, once per glyph cell (a cols x rows target): pose blend, head sway,
+// contours, tone curve -> rgb = colour of the cell, a = brightness (glyph).
+// All the heavy math runs here, on ~10k cells instead of ~550k pixels.
+const cellPass = program(`
+  precision mediump float;
+  varying vec2 uv;
+  uniform sampler2D atlas;
+  uniform vec2 grid, aspect, poseA, poseB;
+  uniform float mixAB, colorMix, sway, nod, zoom, edgeGain;
+  uniform vec3 tint;
+  const vec3 Y = vec3(0.299, 0.587, 0.114);
+  vec3 face(vec2 q) {
+    if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0) return vec3(0.0);
+    vec2 t = vec2(q.x, 1.0 - q.y) * 0.25;       // atlas cells are 1/4, rows top-down
+    return mix(texture2D(atlas, poseA + t).rgb, texture2D(atlas, poseB + t).rgb, mixAB);
+  }
+  void main() {
+    vec2 q = (uv - 0.5) * aspect;               // uv is the cell centre here
+    float ca = cos(sway), sa = sin(sway);
+    q = vec2(ca * q.x - sa * q.y, sa * q.x + ca * q.y);
+    q.y += nod;
+    q = q * zoom + 0.5;
+    q.y = 1.0 - q.y;                            // face images: y down
+    vec3 col = face(q);
+    float l = dot(col, Y);
+    vec2 d = aspect * zoom / grid;
+    float lx = dot(face(q + vec2(d.x, 0.0)), Y) - dot(face(q - vec2(d.x, 0.0)), Y);
+    float ly = dot(face(q + vec2(0.0, d.y)), Y) - dot(face(q - vec2(0.0, d.y)), Y);
+    float edge = clamp(length(vec2(lx, ly)) * edgeGain, 0.0, 1.0);
+    l = pow(smoothstep(0.06, 0.98, l), 1.7);
+    l = clamp(l * (1.0 - edge * 0.85), 0.0, 1.0);
+    vec3 c = mix(tint * (0.35 + 0.65 * l), col * 1.35 + 0.05, colorMix);
+    gl_FragColor = vec4(c, l);
+  }`);
+// Pass 2, per pixel: the cell's glyph, two texture reads
+const glyphPass = program(`
+  precision mediump float;
+  varying vec2 uv;
+  uniform sampler2D cells, glyphs;
+  uniform vec2 grid;
+  uniform float n;
+  void main() {
+    vec2 g = uv * grid;
+    vec4 c = texture2D(cells, (floor(g) + 0.5) / grid);
+    float gi = floor(c.a * (n - 0.001));
+    float m = texture2D(glyphs, vec2((gi + fract(g).x) / 16.0, fract(g).y)).r;
+    gl_FragColor = vec4(c.rgb * m, 1.0);
+  }`);
+
+// Avatar "eq": no face - her voice as bars (the same jaw openness that moves
+// the lips), a slow breath when quiet, a running wave while she thinks.
+const eqPass = program(`
+  precision mediump float;
+  varying vec2 uv;
+  uniform vec2 res;
+  uniform float t, level, think;
+  uniform vec3 tint;
+  const float N = 27.0;
+  float h1(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
+  void main() {
+    vec2 p = uv * res;
+    float W = min(res.x * 0.8, res.y * 1.5);
+    float x = (p.x - (res.x - W) * 0.5) / W;
+    float y = abs(p.y - res.y * 0.5) / res.y;           // 0 in the middle, 0.5 at the edge
+    if (x < 0.0 || x > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    float i = floor(x * N), f = fract(x * N);
+    float c = 1.0 - pow(abs(i - (N - 1.0) * 0.5) / ((N - 1.0) * 0.5), 2.0) * 0.65;   // the middle reaches higher
+    float wob = 0.55 + 0.45 * sin(t * (5.0 + h1(i) * 9.0) + h1(i + 7.0) * 6.283);
+    float h = 0.012 + 0.006 * sin(t * 1.4 + i * 0.35)                                 // breath
+            + level * 0.36 * c * wob
+            + think * 0.05 * (0.5 + 0.5 * sin(t * 5.0 - i * 0.55));
+    float body = step(abs(f - 0.5), 0.3) * step(y, h);
+    float glow = step(abs(f - 0.5), 0.42) * exp(-max(y - h, 0.0) * 60.0) * 0.35;
+    vec3 col = tint * (0.55 + 0.45 * (1.0 - y / max(h, 0.001)));
+    gl_FragColor = vec4(col * max(body, glow), 1.0);
+  }`);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+function texture(unit, source, filter = gl.LINEAR) {
+  const t = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  if (source) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, source);
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, filter], [gl.TEXTURE_MAG_FILTER, filter],
+    [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+  return t;
+}
+// glyph atlas: 16 cells of 16x32 (power of two: 256x32), white on black
+const ga = document.createElement("canvas");
+ga.width = 256; ga.height = 32;
+const gc = ga.getContext("2d");
+gc.fillStyle = "#000"; gc.fillRect(0, 0, 256, 32);
+gc.fillStyle = "#fff"; gc.font = 'bold 26px "DejaVu Sans Mono", monospace';
+gc.textAlign = "center"; gc.textBaseline = "middle";
+[...RAMP].forEach((ch, i) => gc.fillText(ch, i * 16 + 8, 17));
+texture(1, ga);
+// texture units: 0 face atlas, 1 glyphs, 2 the cell target
+const cellTex = texture(2, null, gl.NEAREST);
+const fbo = gl.createFramebuffer();
+
+gl.useProgram(cellPass.pr);
+gl.uniform1i(cellPass.U("atlas"), 0);
+gl.uniform1f(cellPass.U("colorMix"), COLOR_MIX);
+gl.uniform1f(cellPass.U("edgeGain"), +(P.get("edge") || 2.5));
+gl.uniform1f(cellPass.U("zoom"), +(P.get("zoom") || 1.15));
+gl.uniform3fv(cellPass.U("tint"), TINT);
+// which avatar: ascii | image | eq - the brain switches it (event "avatar"), ui_server remembers it
+let avatar = P.get("avatar") || "ascii", level = 0;
+gl.useProgram(glyphPass.pr);
+gl.uniform1i(glyphPass.U("glyphs"), 1);
+gl.uniform1i(glyphPass.U("cells"), 2);
+gl.uniform1f(glyphPass.U("n"), RAMP.length);
+
+let cols = 1, rows = 1;
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  // eq: half resolution, the browser scales it up (the Mali-400 fills 1080p at 13 fps there)
+  const k = avatar === "eq" ? 0.5 : 1;
+  canvas.width = Math.round(w * k); canvas.height = Math.round(h * k);
+  cols = Math.floor(w / CELL_W); rows = Math.floor(h / CELL_H);
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, cellTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cols, rows, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, cellTex, 0);
+  const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.useProgram(cellPass.pr);
+  gl.uniform2f(cellPass.U("grid"), cols, rows);
+  // face is square: the shorter side spans 0..1
+  gl.uniform2f(cellPass.U("aspect"), w > h ? w / h : 1, h > w ? h / w : 1);
+
+  gl.useProgram(glyphPass.pr);
+  gl.uniform2f(glyphPass.U("grid"), cols, rows);
+  log("grid", cols + "x" + rows, "canvas", w + "x" + h, "fbo", ok);
+}
+addEventListener("resize", resize);
+resize();
+
+// --- avatar "image": the poses as they are, 1024 px (face/<pose>.jpg made by
+// gen_face.py), stacked; the pose logic below picks which one is visible ---
+const stageEl = document.getElementById("stage"), avimg = document.getElementById("avimg");
+const PICS = Object.keys(POSE).map((name) => {
+  const i = new Image(); i.src = "face/" + name + ".jpg";
+  i.decode().catch(() => {});            // decoded before the first show: no blank frame on a new pose
+  avimg.append(i); return i;
+});
+PICS[POSE.neutral].classList.add("base");
+let picOn = -1;
+function picShow(i) {
+  if (i === picOn) return;
+  if (picOn >= 0) PICS[picOn].classList.remove("on");
+  PICS[i].classList.add("on"); picOn = i;
+}
+
+// --- face animation: two poses and a blend between them ---
+const cellOf = (i) => [(i % ATLAS_COLS) / ATLAS_COLS, 1 - (Math.floor(i / ATLAS_ROWS) + 1) / ATLAS_ROWS];
+let cur = POSE.neutral, next = POSE.neutral, blend = 1, blendSpeed = 12;   // mouth closed
+function show(pose, speed = 12) {
+  if (pose === next) return;
+  cur = blend >= 1 ? next : cur;
+  next = pose; blend = 0; blendSpeed = speed;
+}
+// speech: a viseme track from eva_say.py (via ui_server.py SSE), played on
+// the wall clock of this device: track.start = when the first sample leaves the speaker
+let track = null, speaking = false, nextBlink = 2, blinkUntil = 0, thinkUntil = 0;
+let mood = 0, moodUntil = 0, nextMood = 12;
+const REST = POSE.neutral;
+const MOODS = [POSE.smile, POSE.smile, POSE.think, POSE.half_blink];
+const chat = document.getElementById("chat");
+function addMsg(who, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + (who === "eva" ? "eva" : "me");
+  d.textContent = text;
+  chat.appendChild(d);
+  while (chat.children.length > 8) chat.firstChild.remove();
+}
+function connect() {
+  const es = new EventSource("/events");
+  es.onmessage = (m) => {
+    const ev = JSON.parse(m.data);
+    if (ev.type === "speak") { track = ev; thinkUntil = 0; log("speak", ev.frames.length, "frames, starts in", Math.round(ev.start - Date.now()), "ms"); }
+    else if (ev.type === "chat") addMsg(ev.who, ev.text);
+    else if (ev.type === "clear") chat.replaceChildren();
+    else if (ev.type === "stop") { track = null; thinkUntil = 0; show(REST, 14); }
+    else if (ev.type === "think") {
+      if (!track) { thinkUntil = Date.now() + 8000; show(POSE.think, 6); }
+      setHear("think", ev.text || hear.text, 25000);
+    }
+    else if (ev.type === "attention") attn = ev;
+    else if (ev.type === "hear") onHear(ev);
+    else if (ev.type === "view") showView(ev);
+    else if (ev.type === "volume") { if (music) music.vol.textContent = Math.round(ev.level * 100) + "%"; }
+    else if (ev.type === "stats") drawStats(ev);
+    else if (ev.type === "panel") setPanel(ev.panel, ev.on);
+    else if (ev.type === "avatar" && ["ascii", "image", "eq", "live2d"].includes(ev.mode)) {
+      avatar = ev.mode; stageEl.classList.toggle("pic", avatar === "image"); resize(); log("avatar", avatar);
+      l2dMode(avatar === "live2d");
+    }
+    if (ev.type === "speak" || ev.type === "stop") setHear("idle");
+  };
+  es.onerror = () => { es.close(); setTimeout(connect, 1000); };
+}
+connect();
+
+// --- screen v2: views drawn from the brain's "view" events ---
+const wrap = document.getElementById("wrap"), vhead = document.getElementById("vhead"),
+  vbody = document.getElementById("vbody");
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function img(src) { const i = el("img"); i.decoding = "async"; i.src = src; return i; }
+function grid(items) {
+  const g = el("div", "grid");
+  for (const it of items) {
+    const c = el("div", "cell");
+    c.append(img("/img/" + it.id + "/thumb"), el("span", "n", it.n), el("span", "c", it.caption || ""));
+    g.append(c);
+  }
+  return g;
+}
+// --- avatar "live2d": a Live2D model (pixi-live2d-display, Cubism Core; test
+// model Hiyori, Live2D Free Material License). It moves, blinks, breathes and
+// keeps its hair physics itself; the lips come from the same speech track as
+// the face above (track: [viseme, opening] every hop ms). Loaded only when
+// chosen: 23-27 fps alone on the Station (2026-11-20). ---
+const L2D_FORM = { ee: 0.8, ih: 0.6, aa: 0.1, oh: -0.5, ou: -0.9, rest: 0 };
+let l2d = null, l2dLoading = false;
+function loadScript(src) {
+  return new Promise((ok, fail) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = fail; document.head.append(s); });
+}
+async function l2dMode(on) {
+  stageEl.classList.toggle("l2d", on);
+  // pixi writes display:block into the canvas' own style - CSS cannot hide it,
+  // the stopped model stayed over the eq as a still frame (2026-11-20)
+  document.getElementById("l2d").style.display = on ? "block" : "none";
+  if (!on) { if (l2d) l2d.app.ticker.stop(); return; }
+  if (l2d) { l2d.app.ticker.start(); l2dFit(); return; }
+  if (l2dLoading) return;
+  l2dLoading = true;
+  try {
+    for (const f of ["live2dcubismcore.min.js", "pixi.min.js", "cubism4.min.js"]) await loadScript("live2d/lib/" + f);
+    const app = new PIXI.Application({ view: document.getElementById("l2d"), resizeTo: stageEl,
+      backgroundColor: 0x000000, antialias: false, resolution: 1 });
+    const model = await PIXI.live2d.Live2DModel.from("live2d/hiyori/Hiyori.model3.json", { autoInteract: false });
+    app.stage.addChild(model);
+    l2d = { app, model };
+    model.internalModel.on("beforeModelUpdate", () => {
+      const core = model.internalModel.coreModel;
+      dance(core);
+      if (!track) return;
+      const pos = (Date.now() - track.start) / track.hop, i = Math.floor(pos);
+      if (i < 0 || i >= track.frames.length) return;
+      const [v, o] = track.frames[i];
+      const o2 = i + 1 < track.frames.length ? track.frames[i + 1][1] : 0;
+      core.setParameterValueById("ParamMouthOpenY", Math.min(1, (o + (o2 - o) * (pos - i)) * 1.6));   // her mouth is small: open it wider
+      core.setParameterValueById("ParamMouthForm", L2D_FORM[v] ?? 0);
+    });
+    app.renderer.on("resize", l2dFit);
+    l2dFit();
+    if (avatar !== "live2d") app.ticker.stop();
+    setInterval(() => { if (avatar === "live2d") log("live2d fps", app.ticker.FPS.toFixed(1)); }, 60000);
+    log("live2d ready");
+  } catch (e) { log("live2d error", e && e.message || e); }
+  l2dLoading = false;
+}
+function l2dFit() {
+  if (!l2d) return;
+  // pixi follows resizeTo only on a window resize; the stage changes size when
+  // the face goes to a corner and back - the canvas kept the old size and the
+  // model came out huge (2026-11-20)
+  const W = stageEl.clientWidth, H = stageEl.clientHeight, m = l2d.model;
+  // only when it differs: a renderer resize fires "resize", which calls this again
+  if (l2d.app.renderer.width !== W || l2d.app.renderer.height !== H) l2d.app.renderer.resize(W, H);
+  const small = wrap.classList.contains("show");          // the corner: the face only
+  // a close-up of the head: the mouth big enough to read the lips, and the
+  // arms (their pose swap fades them in and out "in the air") out of the frame
+  const s = (H * (small ? 4.8 : 4.2)) / m.internalModel.originalHeight;
+  m.scale.set(s); m.anchor.set(0.5, 0);
+  m.x = W / 2; m.y = l2d.baseY = -H * (small ? 0.27 : 0.2);
+}
+// Dancing to the music: the tempo and the first beat come with the player
+// (music_server /beats, measured on shn-linux); the beat clock is the
+// player's own (position from mpg123's "@S"). A nod down on every beat,
+// head and body swaying side to side over two beats, a small bounce.
+// Paused, loading or no tempo found: she does not dance.
+let danceAmt = 0;
+function dance(core) {
+  const on = !!(music && !music.paused && music.bpm && avatar === "live2d" && !track);
+  danceAmt += ((on ? 1 : 0) - danceAmt) * 0.06;          // eases in and out over ~1 s
+  if (danceAmt < 0.01) { if (l2d && l2d.baseY != null) l2d.model.y = l2d.baseY; return; }
+  const bpm = music ? music.bpm : 0;
+  if (!bpm) return;
+  const pos = music.pos + (Date.now() - music.at) / 1000;
+  const ph = (pos - music.first) * bpm / 60;              // beats since the first one
+  const hit = 0.5 + 0.5 * Math.cos(2 * Math.PI * ph);      // 1 on the beat, 0 between
+  const side = Math.sin(Math.PI * ph);                     // one side, the other: two beats
+  const k = danceAmt;
+  core.setParameterValueById("ParamAngleX", 14 * side * k);
+  core.setParameterValueById("ParamAngleY", -9 * Math.pow(hit, 2) * k);
+  core.setParameterValueById("ParamAngleZ", 7 * side * k);
+  core.setParameterValueById("ParamBodyAngleX", 7 * side * k);
+  core.setParameterValueById("ParamBodyAngleZ", 5 * side * k);
+  core.setParameterValueById("ParamEyeLSmile", 0.6 * k);
+  core.setParameterValueById("ParamEyeRSmile", 0.6 * k);
+  const H = stageEl.clientHeight;
+  l2d.model.y = l2d.baseY + H * 0.018 * Math.pow(hit, 3) * k;
+}
+
+function setCorner(on) {
+  if (wrap.classList.contains("show") === on) return;
+  wrap.classList.toggle("show", on);
+  setTimeout(l2dFit, 50);
+  [CELL_W, CELL_H] = on ? CELL_SMALL : CELL_BIG;
+  resize();
+}
+// --- music mode: the player (app/music.py sends it; progress runs here) ---
+const viewEl = document.getElementById("view");
+let music = null;
+function mmss(s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function showMusic(v) {
+  const n = v.now || {};
+  const bg = el("div", "mbg");
+  if (n.thumb) bg.style.backgroundImage = "url('" + n.thumb + "')";
+  vhead.replaceChildren(el("span", "", "Музыка"), el("span", "sub", v.count > 1 ? "трек " + v.index + " из " + v.count : ""));
+  const cover = img(n.thumb || ""); cover.className = "cover";
+  const meta = el("div", "meta");
+  meta.append(el("div", "t", n.title || ""), el("div", "a", n.artist || ""));
+  const al = [n.album, n.year].filter(Boolean).join(" · ");
+  if (al) meta.append(el("div", "al", al));
+  const prog = el("div", "prog"), bar = el("i"); prog.append(bar);
+  const times = el("div", "times"), cur = el("span", "", ""), tot = el("span", "", n.duration ? mmss(n.duration) : "");
+  times.append(cur, tot);
+  const vol = el("span", "", Math.round(v.volume) + "%");
+  const st = el("div", "state", (v.loading ? "…  загружается" : v.paused ? "❚❚  пауза" : "▶  играет") + "   ·   громкость ");
+  st.append(vol);
+  meta.append(prog, times, st);
+  if (v.next && v.next.length) {
+    const nx = el("div", "nexts"); nx.append(el("div", "h", "Дальше"));
+    for (const t of v.next.slice(0, 4)) {
+      const row = el("div", "nx"), im = img(t.thumb || ""), tx = el("span", "", t.title || "");
+      if (t.artist) tx.append(el("em", "", "  —  " + t.artist));
+      row.append(im, tx); nx.append(row);
+    }
+    meta.append(nx);
+  }
+  const p = el("div", "player"); p.append(cover, meta);
+  vbody.replaceChildren(p);
+  viewEl.querySelector(".mbg")?.remove(); viewEl.prepend(bg);
+  viewEl.classList.add("music");
+  wrap.classList.add("musicmode");
+  music = { pos: v.pos, at: v.at, paused: v.paused || v.loading, dur: n.duration || 0, bar, cur, vol,   // loading: stays at 0
+    bpm: v.bpm || 0, first: v.first || 0 };
+  tickMusic();
+}
+function tickMusic() {
+  if (!music) return;
+  const pos = music.paused ? music.pos : music.pos + (Date.now() - music.at) / 1000;
+  music.cur.textContent = mmss(pos);
+  if (music.dur) music.bar.style.width = Math.min(100, 100 * pos / music.dur) + "%";
+}
+setInterval(tickMusic, 500);
+
+function showView(v) {
+  if (v.kind !== "music") { music = null; viewEl.classList.remove("music"); wrap.classList.remove("musicmode"); viewEl.querySelector(".mbg")?.remove(); }
+  wrap.classList.toggle("fullpage", v.kind === "html" && !!v.full);
+  wrap.classList.toggle("pagemode", v.kind === "html");
+  if (v.kind === "close") { setCorner(false); vbody.replaceChildren(); return; }
+  if (v.kind === "html") {
+    vhead.replaceChildren(el("span", "", v.title || ""));
+    const f = el("iframe", "page");
+    f.setAttribute("sandbox", "allow-scripts");     // her page cannot touch this one
+    f.srcdoc = v.html || "";
+    vbody.replaceChildren(f);
+    setCorner(true);
+    return;
+  }
+  if (v.kind === "music") { showMusic(v); setCorner(true); return; }
+  const pages = v.pages > 1 ? "  стр. " + v.page + " из " + v.pages : "";
+  vbody.replaceChildren();
+  if (v.kind === "photos") {
+    vhead.replaceChildren(el("span", "", v.title || "Фото"), el("span", "sub", (v.total || "") + " фото" + pages));
+    vbody.append(grid(v.items));
+  } else if (v.kind === "photo") {
+    vhead.replaceChildren(el("span", "", v.caption || ""), el("span", "sub", v.count > 1 ? v.index + " из " + v.count : ""));
+    const f = el("div", "full"); f.append(img("/img/" + v.id + "/full")); vbody.append(f);
+  } else if (v.kind === "person") {
+    vhead.replaceChildren(el("span", "", v.name), el("span", "sub", pages));
+    const card = el("div", "card");
+    if (v.face) card.append(img("/face/" + v.face));
+    for (const l of v.lines || []) card.append(el("div", "ln", l));
+    vbody.append(card, grid(v.items));
+  }
+  setCorner(true);
+}
+
+// --- panels: the chat column (right) and the debug status bar (top), each
+// on or off by her tool "panel"; ui_server remembers them ---
+const sbar = document.getElementById("sbar");
+function setPanel(name, on) {
+  if (name === "chat") wrap.classList.toggle("nochat", !on);
+  else if (name === "stats") wrap.classList.toggle("sbar", !!on);
+  else return;
+  resize(); setTimeout(l2dFit, 50);
+}
+function kt(n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k" : String(n); }
+function meter(parts) {            // [[class, share 0..1], ...]
+  const m = el("span", "meter");
+  for (const [c, f] of parts) { const i = el("i", c); i.style.width = (100 * Math.max(0, f)).toFixed(1) + "%"; m.append(i); }
+  return m;
+}
+function drawStats(s) {
+  const usd = (x) => "$" + (x || 0).toFixed(2);
+  const share = s.limit ? s.today / s.limit : 0;
+  const head = el("span", "m");
+  head.append(el("span", "k", "claude"), el("b", "", usd(s.today)), el("span", "k", "/ " + usd(s.limit)),
+    meter([["bu" + (share >= 1 ? " over" : share > 0.7 ? " hi" : ""), Math.min(1, share)]]));
+  const month = el("span", "m");
+  month.append(el("span", "k", "месяц"), el("b", "", usd(s.month)), el("span", "k", "· " + (s.calls || 0) + " выз."));
+  const items = [head, month];
+  for (const [name, t] of Object.entries(s.models || {})) {
+    // the prompt as it was paid: read from the cache (cheap), written to it, not cached
+    const tot = (t.read + t.written + t.in) || 1;
+    const m = el("span", "m");
+    m.append(el("span", "n", name), el("b", "", usd(t.usd)),
+      el("span", "k", kt(t.read + t.written + t.in) + "→" + kt(t.out)),
+      meter([["rd", t.read / tot], ["wr", t.written / tot], ["un", t.in / tot]]),
+      el("span", "k", Math.round(100 * t.read / tot) + "%"));
+    items.push(m);
+  }
+  sbar.replaceChildren(...items);
+}
+
+// --- attention bar and hearing status ---
+let attn = { until: 0, total: 1, speaking: false };
+let hear = { state: "idle", text: "", until: 0 };
+const attnEl = document.getElementById("attn"), barEl = document.getElementById("bar"),
+  statusEl = document.getElementById("status");
+function setHear(state, text = "", ms = 0) { hear = { state, text, until: ms ? Date.now() + ms : 0 }; }
+function onHear(ev) {
+  const busy = hear.state === "think" && Date.now() < hear.until;
+  if (ev.state === "on") { if (!busy) setHear("on", "", 15000); }
+  else if (ev.state === "stt") { if (!busy) setHear("stt", "", 6000); }
+  else if (ev.state === "held") setHear("held", ev.text, 3000);
+  else if (ev.state === "text") { if (!busy) setHear("text", ev.text, 6000); }
+  else if (ev.state === "called") setHear("called", ev.text, 6000);
+  else if (ev.state === "ignored") { if (!busy || hear.text === ev.text) setHear("ignored", ev.text, 2500); }
+  else if (ev.state === "none") { if (["on", "stt"].includes(hear.state)) setHear("idle"); }
+}
+let shownStatus = null;
+function drawStatus(now, t) {
+  if (hear.until && now > hear.until) setHear("idle");
+  const dots = ".".repeat(1 + Math.floor(t * 3) % 3), q = hear.text ? "«" + hear.text + "»" : "";
+  const txt = { on: "слушаю" + dots, stt: "разбираю" + dots, held: q + " …", text: q,
+    called: "да? слушаю" + dots, think: q + "  — думаю" + dots, ignored: q + "  — не мне",
+    idle: "" }[hear.state];
+  const key = hear.state + txt;
+  if (key !== shownStatus) {
+    shownStatus = key;
+    if (txt) statusEl.textContent = txt;
+    statusEl.classList.toggle("on", !!txt);
+    statusEl.classList.toggle("dim", hear.state === "ignored");
+  }
+  const left = attn.speaking ? 1 : Math.max(0, (attn.until - now) / (attn.total || 1));
+  attnEl.classList.toggle("on", left > 0);
+  attnEl.classList.toggle("live", ["on", "stt", "held"].includes(hear.state));
+  barEl.style.transform = "scaleX(" + Math.min(1, left).toFixed(4) + ")";   // compositor only, no layout
+}
+
+const atlasImg = new Image();
+atlasImg.onload = () => {
+  texture(0, atlasImg);
+  log("atlas", atlasImg.width + "x" + atlasImg.height);
+  document.getElementById("wrap").classList.add("on");
+  requestAnimationFrame(frame);
+};
+atlasImg.src = P.get("atlas") || "./face-atlas.png";
+
+let t0 = performance.now(), lastT = t0, frames = 0, lastFps = t0, worst = 0, snapped = false, fpsLogs = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const t = (now - t0) / 1000, dt = Math.min(0.1, (now - lastT) / 1000);
+  worst = Math.max(worst, now - lastT); lastT = now;
+  speaking = false;
+  let jaw = 0;
+  if (track) {
+    const pos = (Date.now() - track.start) / track.hop;
+    const i = Math.floor(pos);
+    if (i >= track.frames.length) track = null;
+    else if (i >= 0) {
+      speaking = true;
+      const [v, o] = track.frames[i];
+      const o2 = i + 1 < track.frames.length ? track.frames[i + 1][1] : 0;
+      cur = REST;
+      next = v === "rest" ? REST : POSE[v];
+      blend = jaw = o + (o2 - o) * (pos - i);  // jaw opening, interpolated between 20 ms frames
+      blendSpeed = 1e9;
+    }
+  }
+  if (!speaking && Date.now() > thinkUntil) {
+    // alive without moving the frame: blinks and, now and then, a passing
+    // expression of her own (a smile, a thought)
+    if (t > nextMood) {
+      mood = MOODS[Math.floor(Math.random() * MOODS.length)];
+      moodUntil = t + 1.6 + Math.random() * 1.8; nextMood = t + 9 + Math.random() * 12;
+    }
+    const want = t < moodUntil ? mood : REST;
+    if (t > nextBlink) {
+      blinkUntil = t + 0.13; nextBlink = t + 2.5 + Math.random() * 3;
+      show(want === POSE.smile ? POSE.smile_blink : POSE.blink, 30);
+    } else if (t > blinkUntil && next !== want) {
+      show(want, next === POSE.blink || next === POSE.smile_blink ? 10 : 3);
+    }
+  }
+  drawStatus(Date.now(), t);
+  blend = Math.min(1, blend + dt * blendSpeed);
+  // no sway: turning the whole picture looked like a portrait swinging on a
+  // nail, not a head turning (Иван, 2026-11-20) - the life is in the face
+  const sway = 0, nod = 0;
+  level += ((speaking ? Math.max(jaw, 0.15) : 0) - level) * Math.min(1, dt * (speaking ? 30 : 8));
+  if (avatar === "live2d") {
+    // pixi draws the model on its own canvas; nothing for this one to do
+  } else if (avatar === "eq") {
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(eqPass.pr);
+    gl.uniform2f(eqPass.U("res"), canvas.width, canvas.height);
+    gl.uniform1f(eqPass.U("t"), t);
+    gl.uniform1f(eqPass.U("level"), level);
+    gl.uniform1f(eqPass.U("think"), Date.now() < thinkUntil ? 1 : 0);
+    gl.uniform3fv(eqPass.U("tint"), TINT);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  } else if (avatar === "image") {
+    picShow(blend < 0.5 ? cur : next);
+  } else {
+    gl.useProgram(cellPass.pr);
+    gl.uniform2fv(cellPass.U("poseA"), cellOf(cur));
+    gl.uniform2fv(cellPass.U("poseB"), cellOf(next));
+    gl.uniform1f(cellPass.U("mixAB"), blend);
+    gl.uniform1f(cellPass.U("sway"), sway);
+    gl.uniform1f(cellPass.U("nod"), nod);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, cols, rows);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(glyphPass.pr);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+  if (P.has("snap") && !snapped && t > 3) {
+    snapped = true;
+    fetch("/snap", { method: "POST", headers: { "X-Name": "ascii" }, body: canvas.toDataURL("image/png") });
+  }
+  frames++;
+  if (now - lastFps >= 2000) {
+    const fps = frames * 1000 / (now - lastFps);
+    if (P.has("hud")) hud.textContent = fps.toFixed(0) + " fps";
+    // the console goes to the journal (and on to Postgres): once a minute is enough
+    if (P.has("hud") || ++fpsLogs % 30 === 0) log("fps", fps.toFixed(1), "worst_ms", worst.toFixed(0));
+    frames = 0; lastFps = now; worst = 0;
+  }
+}
+
+// fake conversation, only with ?demo
+if (P.has("demo")) {
+  const lines = [["me", "Ева, привет!"], ["eva", "Привет! Чем займёмся?"]];
+  let li = 0;
+  setInterval(() => { const [w, x] = lines[li++ % lines.length]; addMsg(w, x); }, 2500);
+}
+</script>
+</body>
+</html>

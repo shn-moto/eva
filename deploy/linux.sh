@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Deploy Eva's services on shn-linux from git - a commit that is on origin.
+# Run from Git Bash in the repo root:
+#
+#   deploy/linux.sh stt|music|router [ref]      # default origin/main
+#
+# The source of the service is taken from the commit (git archive), built into
+# an image tagged with the commit, and the container is recreated with the run
+# settings below. Never `docker cp` code into a container: it is lost on the
+# next recreate (the speaker split was, 2026-11-23).
+# Models and data stay on the server (bind mounts), not in git.
+set -euo pipefail
+
+HOST=${HOST:-finances@192.168.1.107}
+KEY=${KEY:-$HOME/.ssh/finances_id}
+SSH=(ssh -i "$KEY" -o ConnectTimeout=10 "$HOST")
+
+svc=${1:?service: stt | music | router}
+ref=${2:-origin/main}
+git fetch -q origin
+sha=$(git rev-parse --verify "$ref^{commit}")
+git branch -r --contains "$sha" | grep -q "origin/" || { echo "commit $sha is not on origin - push it first" >&2; exit 1; }
+short=$(git rev-parse --short "$sha")
+
+case "$svc" in
+stt)
+    src=station1/work/stt-docker; image=newalisa-stt; name=newalisa-stt; port=8901
+    run="-p 8901:8901 -e STT_ENGINE=gigaam-rnnt -e GIGAAM_DIR=/models/giga3-rnnt -e STT_THREADS=8 \
+-e STT_LOG_DIR=/log -v /etc/localtime:/etc/localtime:ro \
+-v \$HOME/newalisa-stt-v3/models:/models:ro -v \$HOME/eva-data/stt-log:/log"
+    cmd="uvicorn stt_server:app --host 0.0.0.0 --port 8901"
+    health=/health ;;
+music)
+    src=station1/work/music-docker; image=newalisa-music; name=newalisa-music; port=8904
+    run="-p 8904:8904"; cmd=""; health=/health ;;
+router)
+    # no source of ours: the prebuilt llama.cpp CUDA server + a model on the server
+    image=ghcr.io/ggml-org/llama.cpp:server-cuda; name=eva-router; port=8906
+    "${SSH[@]}" "docker rm -f $name >/dev/null 2>&1; docker run -d --name $name --restart unless-stopped --gpus all \
+-p 8906:8906 -v \$HOME/eva-router/models:/models:ro $image \
+-m /models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --host 0.0.0.0 --port 8906 -ngl 99 -c 4096 -np 1 --cache-reuse 256 >/dev/null \
+&& for i in \$(seq 60); do curl -sf localhost:$port/health >/dev/null && echo $name up && exit 0; sleep 2; done; echo $name NOT up; exit 1"
+    exit $? ;;
+*) echo "unknown service $svc" >&2; exit 1 ;;
+esac
+
+echo "deploying $svc at $short ($(git log -1 --format=%s "$sha"))"
+git archive "$sha" "$src" | "${SSH[@]}" "rm -rf ~/eva-src/$svc && mkdir -p ~/eva-src/$svc && tar -x -C ~/eva-src/$svc --strip-components=$(echo "$src" | tr -cd / | wc -c | awk '{print $1+1}')"
+"${SSH[@]}" "cd ~/eva-src/$svc && echo $sha > DEPLOYED && docker build -q -t $image:$short -t $image:latest . >/dev/null \
+&& docker rm -f $name >/dev/null 2>&1; docker run -d --name $name --restart unless-stopped $run $image:$short $cmd >/dev/null \
+&& for i in \$(seq 60); do curl -sf localhost:$port$health >/dev/null && echo $name up at $short && exit 0; sleep 2; done; echo $name NOT up; docker logs --tail 20 $name; exit 1"

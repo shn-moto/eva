@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Eva logo</title></head>
+<body style="margin:0;background:#000">
+<canvas id="c" width="640" height="320"></canvas>
+<script>
+// Boot logo in the face's style: the word ЕВА drawn with the same glyph ramp
+// and tint, on black. Rendered here once and saved as the Plymouth image.
+const W = 640, H = 320, CW = 8, CH = 12;
+const RAMP = " .`'-:;=+*ox%#@";
+const c = document.getElementById("c"), g = c.getContext("2d");
+const m = document.createElement("canvas"); m.width = W; m.height = H;
+const mg = m.getContext("2d");
+mg.fillStyle = "#000"; mg.fillRect(0, 0, W, H);
+mg.fillStyle = "#fff"; mg.font = "bold 200px 'DejaVu Sans', sans-serif";
+mg.textAlign = "center"; mg.textBaseline = "middle";
+mg.fillText("ЕВА", W / 2, H / 2 + 8);
+const px = mg.getImageData(0, 0, W, H).data;
+g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+g.font = "bold 12px 'DejaVu Sans Mono', monospace"; g.textAlign = "center"; g.textBaseline = "middle";
+for (let y = 0; y + CH <= H; y += CH) for (let x = 0; x + CW <= W; x += CW) {
+  let s = 0, n = 0;
+  for (let yy = y; yy < y + CH; yy += 2) for (let xx = x; xx < x + CW; xx += 2) { s += px[(yy * W + xx) * 4]; n++; }
+  const l = s / n / 255;
+  const ch = RAMP[Math.min(RAMP.length - 1, Math.floor(l * RAMP.length))];
+  if (ch === " ") continue;
+  const k = 0.35 + 0.65 * l;
+  g.fillStyle = `rgb(${Math.round(143 * k)},${Math.round(233 * k)},${Math.round(255 * k)})`;
+  g.fillText(ch, x + CW / 2, y + CH / 2);
+}
+fetch("/snap", { method: "POST", headers: { "X-Name": "logo" }, body: c.toDataURL("image/png") });
+</script></body></html>

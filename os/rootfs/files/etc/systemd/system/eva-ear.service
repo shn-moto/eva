@@ -1,0 +1,14 @@
+[Unit]
+Description=Eva: hearing (mics, echo cancelling, phrases, speech to text)
+# the mic ADCs are set up by eva-sound, which needs the capture closed
+After=eva-sound.service eva-brain.service
+Wants=eva-sound.service eva-brain.service
+
+[Service]
+ExecStart=/opt/eva/venv/bin/python /opt/eva/app/ear.py
+Nice=-5
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=Eva: reboot a boot that never came up (the shim then counts it)
+
+[Service]
+Type=oneshot
+# eva-boot-ok ran: all good. Otherwise reboot: after three such boots the
+# shim starts the rescue system from recovery.
+ExecStart=/bin/sh -c 'systemctl is-active -q eva-boot-ok.service && exit 0; echo "boot never came up: rebooting"; systemctl reboot'

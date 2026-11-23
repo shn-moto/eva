@@ -1,0 +1,14 @@
+[Unit]
+Description=Eva: microphone ADCs and amplifiers set up
+After=sound.target systemd-modules-load.service
+Wants=sound.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# both cards (mics snddaudio0, amplifiers snddaudio1) must be there
+ExecStartPre=/bin/sh -c 'for i in $(seq 150); do [ -e /proc/asound/snddaudio0 ] && [ -e /proc/asound/snddaudio1 ] && exit 0; sleep 0.1; done; exit 1'
+ExecStart=/bin/sh /usr/local/lib/eva/station-audio-init.sh
+
+[Install]
+WantedBy=multi-user.target

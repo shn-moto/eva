@@ -1,0 +1,18 @@
+[Unit]
+Description=Eva UI on the TV (cog/WPE on KMS, Mali-400 via lima)
+After=eva-ui-http.service systemd-modules-load.service
+Wants=eva-ui-http.service
+
+[Service]
+Environment=XDG_RUNTIME_DIR=/run
+# the TV is Full HD; the page is composited at 720p (30 fps on Mali-400), the TV scales
+Environment=COG_PLATFORM_DRM_VIDEO_MODE=1280x720
+ExecStartPre=/bin/sh -c 'for i in $(seq 100); do [ -e /dev/dri/renderD128 ] && curl -sf -o /dev/null http://127.0.0.1:8080/ && exit 0; sleep 0.2; done; exit 1'
+# the boot logo gives up DRM master; its picture stays until cog draws
+ExecStartPre=-/usr/bin/pkill -USR1 -f /usr/local/lib/eva/splash.py
+ExecStart=/usr/bin/cog -P drm -O renderer=gles --enable-webgl=true --enable-write-console-messages-to-stdout=true "http://127.0.0.1:8080/ascii.html?cw=5&ch=8&color=0.7&edge=3"
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

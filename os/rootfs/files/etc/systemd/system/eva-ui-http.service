@@ -1,0 +1,11 @@
+[Unit]
+Description=Eva UI: local web server for the screen (127.0.0.1:8080)
+
+[Service]
+WorkingDirectory=/opt/eva/ui/spike
+ExecStart=/usr/bin/python3 ui_server.py 8080
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

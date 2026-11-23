@@ -1,0 +1,60 @@
+# --- secrets: never in git --------------------------------------------------
+.env
+*.env
+secrets.env
+*_ed25519
+*_ed25519.bak
+*_ed25519.ppk
+*.key
+*.pem
+lite-kit/certs/
+station1/work/claude.json
+
+# --- device images, firmware, backups: big binaries, kept outside git --------
+station1/backups/
+*.img
+*.cpio
+*.gz
+*.tgz
+*.zip
+*.bin
+*.run
+os/out/
+os/initramfs/
+lite-kit/firmware/
+lite-kit/log/
+tools/platform-tools/
+station1/work/putty_new/
+
+# --- family voices and recordings ---------------------------------------------
+*.wav
+*.mp3
+docs/stt-test/samples/
+docs/stt-test/conversation/
+
+# --- generated / caches -------------------------------------------------------
+__pycache__/
+*.pyc
+*.log
+ui/spike/snaps/
+ui/spike/face-gen/
+docs/claude_api_cost_*.csv
+
+# --- the household profile: family, address, names, health, money -----------
+# lives in /opt/eva/eva on the Station; eva.example/ shows the format
+eva/
+docs/claude_family_context.md
+docs/gemini_family_context.md
+docs/BACKLOG.md
+docs/stt-test/
+
+# --- scratch notes ---------------------------------------------------------------
+todo.txt
+eva.txt
+
+# --- separate projects / test assets ---
+lite-kit/
+ui/spike/vendor*/sample.vrm
+
+# --- runtime state of the setup scripts ---
+scripts/state/

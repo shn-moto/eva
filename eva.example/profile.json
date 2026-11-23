@@ -1,0 +1,21 @@
+{
+  "_comment": "Example of eva/profile.json (app/core/profile.py). Copy to /opt/eva/eva/profile.json on the device and fill in your household. The names here are made up.",
+  "household": {
+    "children": ["Лиза", "Соня"],
+    "name_stems": [["иван", "Иван"], ["ван", "Иван"], ["маш", "Маша"], ["мари", "Маша"],
+                   ["лиз", "Лиза"], ["елизавет", "Лиза"], ["сон", "Соня"], ["софи", "Соня"]],
+    "voice_call": {"Ivan": "Иван"},
+    "voice_person": {"Ivan": 1},
+    "voice_aliases": {"Ivan": ["ivan", "иван", "ваня", "папа"]},
+    "finance_users": {"ivan": "Иван", "masha": "Маша"}
+  },
+  "speech": {
+    "stt_fixes": [["\\b(?:лис\\w*|лез\\w*)", "лиза"]],
+    "hotwords": ["ева", "лиза", "соня", "маша", "иван"]
+  },
+  "services": {
+    "hub": "192.168.0.10",
+    "_comment": "Every service defaults to http://{hub}:<port>. Override one: \"stt\": \"http://other-host:8901/stt\". Env EVA_<NAME>_URL wins over both.",
+    "stt": "http://{hub}:8901/stt"
+  }
+}

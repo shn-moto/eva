@@ -1,0 +1,13 @@
+[Unit]
+Description=Eva: boot logo on the TV (DRM, until the UI takes the screen)
+DefaultDependencies=no
+After=systemd-tmpfiles-setup-dev-early.service
+Before=sysinit.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/eva/splash.py
+# it hands the screen over itself (SIGUSR1 from eva-ui) and exits
+TimeoutStopSec=3
+
+[Install]
+WantedBy=sysinit.target

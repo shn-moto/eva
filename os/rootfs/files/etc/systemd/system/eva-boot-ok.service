@@ -1,0 +1,16 @@
+[Unit]
+Description=Eva: mark this boot good for the shim
+After=network-online.target dropbear.service
+Wants=network-online.target
+Requires=dropbear.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=7min
+# up to 6 minutes for an address on wlan0 (a router slower than us after a power cut)
+ExecStartPre=/bin/sh -c 'for i in $(seq 360); do ip -4 addr show wlan0 | grep -q "inet " && exit 0; sleep 1; done; exit 1'
+ExecStart=/bin/sh /usr/local/lib/eva/boot-ok.sh
+
+[Install]
+WantedBy=multi-user.target

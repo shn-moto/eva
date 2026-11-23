@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Eva UI spike</title>
+<script type="importmap">
+{ "imports": { "three": "./vendor150/three.module.js" } }
+</script>
+<style>
+  :root { --bg: #0f1424; --panel: #182038; --me: #2f6fed; --eva: #2a3352; --text: #eef2ff; --muted: #9aa6c8; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "DejaVu Sans", sans-serif; overflow: hidden; }
+  #wrap { display: flex; height: 100%; }
+  #stage { flex: 1 1 60%; position: relative; }
+  #stage canvas { width: 100%; height: 100%; display: block; }
+  #chat { flex: 0 0 40%; background: var(--panel); display: flex; flex-direction: column;
+    padding: 32px; box-sizing: border-box; gap: 16px; overflow: hidden; justify-content: flex-end; }
+  .msg { max-width: 85%; padding: 16px 22px; border-radius: 22px; font-size: 30px; line-height: 1.3; }
+  .me { align-self: flex-end; background: var(--me); }
+  .eva { align-self: flex-start; background: var(--eva); }
+  #hud { position: absolute; left: 16px; top: 12px; font: 22px monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><div id="hud">…</div></div>
+  <div id="chat"></div>
+</div>
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "./vendor150/loaders/GLTFLoader.js";
+import { VRMLoaderPlugin, VRMUtils } from "./vendor150/three-vrm.module.js";
+
+const params = new URLSearchParams(location.search);
+const scale = parseFloat(params.get("scale") || "1");   // render resolution factor
+const stage = document.getElementById("stage");
+const hud = document.getElementById("hud");
+const log = (...a) => console.log("[spike]", ...a);
+
+// Mali-400 is GLES2 only: hand three.js a WebGL1 context, it would try WebGL2 first
+const canvas = document.createElement("canvas");
+const gl = canvas.getContext("webgl", { antialias: false, alpha: false, depth: true, stencil: false,
+  powerPreference: "high-performance", preserveDrawingBuffer: false });
+log("webgl", !!gl, gl && gl.getParameter(gl.VERSION), gl && gl.getParameter(gl.RENDERER),
+    "maxtex", gl && gl.getParameter(gl.MAX_TEXTURE_SIZE),
+    "ext", gl && gl.getSupportedExtensions().length);
+const ext = gl.getExtension("WEBGL_debug_renderer_info");
+if (ext) log("unmasked", gl.getParameter(ext.UNMASKED_RENDERER_WEBGL));
+
+const renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: false });
+renderer.setPixelRatio(scale);
+stage.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f1424);
+const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
+camera.position.set(0, 1.35, 1.6);
+camera.lookAt(0, 1.3, 0);
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(1, 2, 2);
+scene.add(sun);
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+resize();
+
+let vrm = null;
+const t0 = performance.now();
+const loader = new GLTFLoader();
+loader.register((p) => new VRMLoaderPlugin(p));
+if (params.get("model") !== "0") loader.load("./vendor150/sample.vrm", (gltf) => {
+  vrm = gltf.userData.vrm;
+  VRMUtils.removeUnnecessaryVertices(gltf.scene);
+  VRMUtils.removeUnnecessaryJoints(gltf.scene);
+  vrm.scene.rotation.y = Math.PI;
+  scene.add(vrm.scene);
+  let tris = 0;
+  vrm.scene.traverse((o) => { if (o.isMesh) tris += o.geometry.index ? o.geometry.index.count / 3 : 0; });
+  log("vrm loaded in", Math.round(performance.now() - t0), "ms, triangles", Math.round(tris));
+}, undefined, (e) => log("vrm error", e && e.message));
+
+// fake conversation: text layout + compositing load next to the 3D view
+const chat = document.getElementById("chat");
+const lines = [
+  ["me", "Ева, привет!"], ["eva", "Привет! Чем займёмся?"],
+  ["me", "Сколько мы потратили на еду в этом месяце?"],
+  ["eva", "В ноябре на продукты ушло 2 140 злотых — на 8 % меньше, чем в октябре."],
+  ["me", "Расскажи сказку про ёжика"], ["eva", "Жил-был в лесу маленький ёжик…"],
+];
+let li = 0;
+setInterval(() => {
+  const [who, text] = lines[li++ % lines.length];
+  const d = document.createElement("div");
+  d.className = "msg " + who;
+  d.textContent = text;
+  chat.appendChild(d);
+  while (chat.children.length > 8) chat.firstChild.remove();
+}, 2000);
+
+// talking/blinking animation + fps
+const clock = new THREE.Clock();
+let frames = 0, last = performance.now(), worst = 0, prev = performance.now();
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = clock.getDelta(), t = clock.elapsedTime;
+  if (vrm) {
+    const em = vrm.expressionManager;
+    if (em) {
+      em.setValue("aa", Math.max(0, Math.sin(t * 12)) * 0.8);
+      em.setValue("blink", (t % 4) < 0.15 ? 1 : 0);
+      em.setValue("happy", 0.3);
+    }
+    const h = vrm.humanoid;
+    if (h) {
+      const head = h.getNormalizedBoneNode("head");
+      if (head) head.rotation.y = Math.sin(t * 0.7) * 0.15;
+      const spine = h.getNormalizedBoneNode("spine");
+      if (spine) spine.rotation.x = Math.sin(t * 1.5) * 0.02;
+    }
+    vrm.update(dt);
+  }
+  renderer.render(scene, camera);
+  const now = performance.now();
+  worst = Math.max(worst, now - prev);
+  prev = now;
+  frames++;
+  if (now - last >= 2000) {
+    const fps = frames * 1000 / (now - last);
+    const c = renderer.domElement;
+    hud.textContent = `${fps.toFixed(1)} fps  worst ${worst.toFixed(0)} ms  ${c.width}x${c.height}`;
+    log("fps", fps.toFixed(1), "worst_ms", worst.toFixed(0), "canvas", c.width + "x" + c.height,
+        "calls", renderer.info.render.calls, "tris", renderer.info.render.triangles);
+    frames = 0; last = now; worst = 0;
+  }
+}
+frame();
+</script>
+</body>
+</html>

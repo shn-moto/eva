@@ -1,0 +1,41 @@
+# Eva OS root filesystem: Debian packages on top of debootstrap minbase.
+# Recommends are not installed; each group says who needs it.
+
+# init, devices, modules
+systemd
+systemd-sysv
+systemd-resolved
+systemd-timesyncd
+udev
+dbus
+kmod
+# network: Wi-Fi (wpa_supplicant@wlan0 + systemd-networkd), SSH
+wpasupplicant
+iw
+iproute2
+wireless-regdb
+dropbear
+ca-certificates
+curl
+# sound: amixer/aplay/arecord (eva-sound sets the mics and amplifiers up)
+alsa-utils
+# GPU: Mesa lima (GLES2/EGL/GBM) for the screen
+libgl1-mesa-dri
+libegl-mesa0
+libegl1
+libgles2
+libgbm1
+mesa-utils-bin
+# devmem for the shim's boot word (eva-boot-ok), memory, tools
+busybox
+zram-tools
+procps
+psmisc
+e2fsprogs
+i2c-tools
+less
+nano
+htop
+# the assistant
+python3
+python3-venv

@@ -1,0 +1,775 @@
+"""The voice channel's conversation: phrases from ear.py -> is it for Eva? ->
+answer, streamed, sentence by sentence to her voice. Interruptions (a stop or
+her name over her own voice), "знакомство" (learning a voice), the case of
+somebody else cutting in while she answers one person.
+"""
+import json
+import os
+import queue
+import random
+import re
+import threading
+import time
+import urllib.request
+
+import numpy as np
+
+import memory
+import music
+import voices
+from core import cost, identity, llm, profile, router, screen
+from core.prompt import SILENT, system
+from core.speech import Voice, ui
+from core.util import log, ru_now
+
+GATE_URL = profile.service("gate")
+DIALOG_WINDOW = 10.0          # s after Eva last spoke: a phrase is likely for her (25 held on too long, 2026-11-19)
+# The conversation survives a restart: two power-cut reboots on 2026-11-19 wiped
+# it and she congratulated on the birthday again each time.
+HISTORY_FILE = "/var/lib/eva/history.json"
+# how much she keeps: llm.HISTORY_CHARS (by volume, not by time - 2026-11-20)
+CONTINUE = "<продолжи>"
+# said when a tool call begins and she has not said anything yet (sounds cached at start)
+FILLERS = ["Секунду, сейчас посмотрю.", "Сейчас гляну.", "Погоди, посмотрю.", "Так, сейчас посмотрю."]       # a job: finish the reply that was cut by someone else
+
+# a call is the vocative: «почему ты назвал её Евой» is about her, not to her
+# (Лиза asked Иван that and Eva answered, 2026-11-19)
+NAME = re.compile(r"\b(ева|евочка|евушка|эва)\b", re.I)
+# her name as it comes out over her own voice ("у ев покане" = "Ева, сколько…")
+LOOSE_NAME = re.compile(r"(ева|евочка|евушка|эва|ев|эв|ив|иве|еве|еву|евы|евой)", re.I)
+# how the recogniser mangles the name at the start of a phrase ("Ева, ты на
+# связи?" came out as "е вот на связи")
+MAYBE_NAME = re.compile(r"^\s*(е|э|и|ив|иве|ева\w*|эва\w*|эв|ев)\b", re.I)
+# a call on its own, the question comes after a pause ("Ева, … кто такая Ольга"
+# arrived as "евро" + "кто такая ольга")
+CALL_ONLY = re.compile(r"^\s*(?:эй\s+|слушай\s+)?(ева\w{0,3}|эва\w{0,2}|ев\w{0,2}|эв\w{0,2}|ив\w?|иве)\s*$", re.I)
+CALL_WINDOW = 6.0             # s after a call: the next phrase is for her
+STOP = re.compile(r"\b(стоп|хватит|замолчи|молчи|тихо|тише|подожди|погоди|остановись|"
+                  r"перестань|прекрати|отстань|достаточно|всё|все|пауза|заткнись)\b", re.I)
+# everyday words that are a stop only said almost alone ("всё!", "тихо!"), not
+# inside a longer phrase ("всё отлично" in her own echo cut her off, 2026-11-19)
+WEAK_STOP = {"все", "всё", "тихо", "тише"}
+# her own voice recognised in what the mics heard (ear.py: CAM++ vs her TTS
+# voice): ignored while she talks - unless a family voice is in it too (a
+# "стоп" said over her). Measured 2026-11-19: family voices 0.0-0.22, her
+# clean TTS 0.72-1.0; through the room it is lower - to be tuned on the logs.
+SELF_SIM, SELF_MARGIN = 0.45, 0.1
+# "запомни мой голос, я Маша" / "я Лиза, запомни мой голос" / "меня зовут Миша, запомни голос"
+ENROLL = re.compile(r"запомни\s+(?:мой\s+)?голос\w*(?:\s+как|\s*,?\s*я|\s*,?\s*это)?\s+([а-яёa-z]+)", re.I)
+INTRO = re.compile(r"(?:\bя\s+|меня\s+зовут\s+|это\s+)([а-яё]+)\b.*запомни\s+(?:мой\s+)?голос", re.I)
+# family names by the stem: the recogniser bends them ("я Иван" -> "ля ивана")
+FAMILY = profile.NAME_STEMS                 # eva/profile.json
+NOT_A_NAME = {"тебя", "твой", "мой", "тоже", "хочу", "просто", "сейчас", "вот", "не", "ещё", "еще", "ля", "ну", "а", "и"}
+
+VOICE = Voice()
+VOICES = voices.Voices()
+WORK = queue.Queue()
+history = []                  # [{"role", "content"}], text only
+REPLIES = {}                  # gen -> its history entry, to cut it down if she is stopped
+RESTORED = {"note": False}    # the first answer after a restore gets a note about it
+OWNER = {"person": identity.GUEST}   # whom she is answering now
+state = {"last_spoke": 0.0, "called_until": 0.0}
+HEARD = []                    # (time, foreign words) heard over her voice, last few seconds
+# After an interruption she is quiet and listens: everything heard now is his,
+# no echo rules, no second "interruption" on her name. The answer goes out when
+# his phrase ends (or LISTEN_IDLE after the last thing heard).
+LISTEN = {"active": False, "parts": [], "deadline": 0.0}
+LISTEN_LOCK = threading.Lock()
+LISTEN_IDLE = 2.5
+
+
+def intro_name(text, m):
+    """The name in an introduction: a family name anywhere in it first, else the
+    word the pattern caught."""
+    for w in re.findall(r"\w+", text.lower()):
+        for stem, name in FAMILY:
+            if w.startswith(stem):
+                return name
+    return m.group(1).capitalize() if m and m.group(1).lower() not in NOT_A_NAME else None
+
+
+def gate(text):
+    """Local model (shn-linux): is this phrase meant for a home assistant at all?
+    Keeps household talk away from the cloud. False on error: a busy shn-linux
+    let Маша's talk from the corridor through to Claude (2026-11-19); a phrase
+    that really is for Eva names her or continues the conversation anyway."""
+    t = time.time()
+    body = {"messages": [
+        {"role": "system", "content": "Ты фильтр голосового помощника в семье. Тебе дают фразу, "
+         "услышанную в комнате. Ответь одним словом: ДА - если это вопрос, просьба или обращение "
+         "к помощнику; НЕТ - если люди говорят между собой, это обрывок, шум или телевизор."},
+        {"role": "user", "content": text}], "max_tokens": 3, "temperature": 0}
+    try:
+        r = urllib.request.urlopen(urllib.request.Request(
+            GATE_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}), timeout=2)
+        ans = json.loads(r.read())["choices"][0]["message"]["content"].strip().upper()
+        log(f"gate {int(1000 * (time.time() - t))}ms: {ans}")
+        return not ans.startswith("НЕТ")
+    except Exception as e:
+        log("gate error:", e)
+        return False
+
+
+# ------------------------------------------------------------------ history --
+def save_history():
+    """The context to disk after every change (small file, atomic replace)."""
+    tmp = HISTORY_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"saved": time.time(), "history": history}, f, ensure_ascii=False)
+        os.replace(tmp, HISTORY_FILE)
+    except OSError as e:
+        log("history save error:", e)
+
+
+def load_history():
+    """After a restart the conversation comes back, as much as fits the budget
+    (each phrase has its date and time - she sees how old it is)."""
+    try:
+        d = json.load(open(HISTORY_FILE, encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    h = [m for m in d.get("history", []) if m.get("role") in ("user", "assistant") and m.get("content")]
+    while h and h[-1]["role"] == "user":  # a question (or a tool result) left without an answer
+        h.pop()
+    history[:] = h
+    llm.trim(history)
+    RESTORED["note"] = bool(history)
+    return len(history)
+
+
+# --------------------------------------------------------------- answering --
+def answer(text, person, owner=None, note=None):
+    """owner: the Person she was answering when `person` cut in - she asks
+    `person` to wait, finishes for the owner, then answers `person`."""
+    now = ru_now()
+    who = person.name
+    if text == CONTINUE:
+        content = f"[{now}] [система: тебя перебили, но не тот, кому ты отвечала. Договори ответ с того места, где остановилась.]"
+    else:
+        content = f"[{now}] [{who or 'голос не узнан'}] {text}"
+    if note:
+        content += "\n" + note
+    if screen.state["p"] is not None or music.PLAYER.active():
+        content += f"\n[экран: {screen.describe()}]"
+    if owner:
+        content += (f"\n[система: {who} перебил(а) тебя, пока ты отвечала {owner.name}. Сначала одной "
+                    f"короткой фразой попроси {who} подождать (например «Подожди, {who}, я ещё не "
+                    f"закончила отвечать …» - назови {owner.name} так, как зовёт его/её {who}), потом "
+                    f"договори ответ {owner.name} с того места, где тебя перебили, и только потом "
+                    f"ответь {who}.]")
+    else:
+        OWNER["person"] = person
+    if RESTORED["note"]:
+        RESTORED["note"] = False
+        content += ("\n[система: колонка перезапускалась, разговор выше - до перезапуска, ты его помнишь. "
+                    "Уже сказанное (поздравления, приветствия) не повторяй.]")
+    history.append({"role": "user", "content": content})
+    llm.trim(history)
+    save_history()
+    gen0 = VOICE.gen
+    st = {"buf": "", "spoken": []}
+
+    def on_chunk(chunk):
+        if VOICE.gen != gen0:              # stopped mid-answer: stop writing it too
+            return False
+        st["buf"] += chunk
+        b = st["buf"].strip()
+        if SILENT.startswith(b[:len(SILENT)]) and len(b) <= len(SILENT):
+            return True                    # could still become <молчу>
+        while True:                        # sentence boundary: to the voice right away
+            m = re.search(r"[.!?…]+[\")»]*\s", st["buf"])
+            if not m:
+                return True
+            sent, st["buf"] = st["buf"][:m.end()].strip(), st["buf"][m.end():]
+            if sent:
+                if not st["spoken"] and text != CONTINUE:
+                    ui({"type": "chat", "who": "me", "text": text})
+                st["spoken"].append(sent)
+                VOICE.say(sent, gen0)
+
+    def on_tool(name):
+        """A tool call begins: what she wrote before it goes out now, or - if
+        she has said nothing yet - a short "секунду, посмотрю" (its sound is
+        cached), so the room does not wait in silence for the tool round."""
+        if VOICE.gen != gen0:
+            return
+        sent, st["buf"] = st["buf"].strip(), ""
+        if sent.startswith(SILENT):
+            sent = ""
+        if not sent and st["spoken"]:
+            return
+        sent = sent or random.choice(FILLERS)
+        if not st["spoken"] and text != CONTINUE:
+            ui({"type": "chat", "who": "me", "text": text})
+        st["spoken"].append(sent)
+        VOICE.say(sent, gen0)
+        log(f"tool {name}: said {sent!r} first")
+
+    t0 = time.time()
+    try:
+        rounds = []                    # her tool calls and their results, for the history
+        r = llm.stream(system("voice", person), history, person, on_chunk, on_show=show, on_tool=on_tool,
+                       record=rounds)
+    except cost.OverBudget as e:
+        history.pop()                  # not answered: not in the conversation
+        log("over the daily limit:", e)
+        if state.get("limit_said") != time.strftime("%Y-%m-%d"):
+            state["limit_said"] = time.strftime("%Y-%m-%d")
+            VOICE.say("На сегодня я исчерпала лимит на умные ответы. Завтра снова буду на связи.")
+        ui({"type": "hear", "state": "ignored", "text": text})
+        return
+    except llm.anthropic.APIError as e:
+        log("claude error:", e)
+        return
+    if r["cut"]:
+        # interrupted() has already put what she managed to say into history
+        log(f"reply cut while writing ({len(st['spoken'])} sentences queued)")
+        return
+    rest = st["buf"].strip()
+    if rest == SILENT or (not st["spoken"] and rest.startswith(SILENT)):
+        history.pop()
+        save_history()
+        log(f"silent ({int(1000 * (time.time() - t0))}ms)")
+        ui({"type": "hear", "state": "ignored", "text": text})
+        return
+    if rest:
+        if not st["spoken"] and text != CONTINUE:
+            ui({"type": "chat", "who": "me", "text": text})
+        st["spoken"].append(rest)
+        VOICE.say(rest, gen0)
+    reply = " ".join(st["spoken"])
+    if VOICE.gen != gen0:
+        log("reply interrupted before it was recorded")
+        return
+    # the history gets the real tool calls and results, then her last words
+    # (a note about them in her own text she did not believe, 2026-11-19)
+    history.extend(rounds)
+    entry = {"role": "assistant", "content": (llm.final_text(r["final"]) if rounds else "") or reply}
+    history.append(entry)
+    REPLIES[gen0] = entry
+    save_history()
+    state["last_spoke"] = time.time()
+    ui({"type": "chat", "who": "eva", "text": reply})
+    if person.known:
+        memory.write("assistant", reply)
+    u = r["final"].usage
+    log(f"reply: first token {int(1000 * (r['first'] or 0))}ms, "
+        f"cache read {u.cache_read_input_tokens} / written {u.cache_creation_input_tokens}, "
+        f"stop {r['final'].stop_reason}: {reply!r}")
+
+
+LOCAL_SAY = {"unclear": "Не расслышала. Повтори, пожалуйста.", "music_stop": "Выключила.",
+             "music_pause": "Пауза.", "music_resume": "Продолжаю.", "screen_close": None}
+AVATAR_SAY = {"ascii": "Лицо из символов.", "image": "Аниме лицо.", "eq": "Эквалайзер.", "live2d": "Живая модель."}
+
+
+def local(text, person, r):
+    """A command from the router's catalog, done without Claude. Whatever it
+    says goes into the history too, so Claude knows it later."""
+    intent, p = r["intent"], music.PLAYER
+    reply = LOCAL_SAY.get(intent, "")
+    try:
+        if intent == "ack":
+            reply = "Пожалуйста!" if re.search(r"спасиб", text, re.I) else None
+        elif intent == "music_play":
+            kind = r.get("kind") or "track"
+            found = music.search(r.get("query") or text, "album" if kind == "album" else "track",
+                                 {"track": 1, "selection": 8, "album": 1}.get(kind, 1))
+            if not found:
+                reply = f"Не нашла ничего по запросу «{r.get('query') or text}»."
+            else:
+                p.play(found)
+                t = found[0]
+                reply = f"Включаю {t.get('title')}" + (f", {t['artist']}" if t.get("artist") else "") + "."
+        elif intent == "music_stop":
+            p.stop()
+        elif intent in ("music_pause", "music_resume"):
+            p.pause(intent == "music_pause")
+        elif intent in ("music_next", "music_prev"):
+            reply = None if p.next(1 if intent == "music_next" else -1) else "Дальше в очереди ничего нет."
+        elif intent == "what_playing":
+            t = p.now()
+            reply = (f"Играет {t.get('title')}" + (f", {t['artist']}" if t.get("artist") else "") + ".") if t                 else "Сейчас ничего не играет."
+        elif intent in ("volume_up", "volume_down"):
+            p.louder(intent == "volume_up")
+            reply = None
+        elif intent == "volume_set":
+            from core.speech import volume_set
+            volume_set(max(5, min(100, int(r.get("level") or 50))))
+            reply = None
+        elif intent.startswith("screen_"):
+            screen.act(intent[7:], r.get("n"))          # next | prev | open | back | close
+            reply = None
+        elif intent == "avatar":
+            mode = r.get("mode") or "ascii"
+            ui({"type": "avatar", "mode": mode})
+            reply = AVATAR_SAY.get(mode)
+        elif intent == "panel":
+            from skills.screen import panel
+            if r.get("panel") not in ("chat", "stats"):
+                raise ValueError("panel?")
+            panel({"panel": r["panel"], "show": r.get("show", True)}, person)
+            reply = None
+        elif intent == "time":
+            reply = f"Сейчас {ru_now()}."
+    except Exception as e:
+        log(f"local {intent} failed: {e} - to Claude")
+        answer(text, person)
+        return
+    log(f"local {intent}: {reply!r}")
+    ui({"type": "chat", "who": "me", "text": text})
+    if reply:
+        VOICE.say(reply)
+        ui({"type": "chat", "who": "eva", "text": reply})
+        state["last_spoke"] = time.time()
+    else:
+        ui({"type": "hear", "state": "called", "text": text})
+    if intent != "unclear":
+        history.append({"role": "user", "content": f"[{ru_now()}] [{person.name or 'голос не узнан'}] {text}"})
+        history.append({"role": "assistant", "content": reply or "(сделано)"})
+        llm.trim(history)
+        save_history()
+
+
+def show(presentation):
+    """A tool's presentation goes on the TV."""
+    screen.present(presentation)
+
+
+def interrupted(gen, said):
+    """She was stopped: history keeps only what she really said, so she knows
+    she was cut off (she once said "I got to the end" after a "стоп")."""
+    note = (" ".join(said) + " [тебя перебили на этом месте]") if said else \
+        "[тебя перебили, ты не успела ничего сказать]"
+    entry = REPLIES.pop(gen, None)
+    if entry is not None:
+        entry["content"] = note
+    elif history and history[-1]["role"] == "user":
+        history.append({"role": "assistant", "content": note})
+    save_history()
+
+
+VOICE.on_stopped = interrupted
+
+
+# ------------------------------------------------------------ interruptions --
+def echo_fragment(w, own):
+    """One of her own words, or a broken piece of one ("тилось" from
+    "засветилось") cut by a recognition window."""
+    if w in own:
+        return True
+    return len(w) >= 3 and any(o != w and (o.endswith(w) or o.startswith(w)) for o in own)
+
+
+def start_listening(first):
+    with LISTEN_LOCK:
+        LISTEN.update(active=True, parts=[first] if first else [], deadline=time.time() + LISTEN_IDLE,
+                      owner=OWNER["person"], voice=None)
+    ui({"type": "think"})
+    threading.Thread(target=_listen_watch, daemon=True).start()
+
+
+def _listen_watch():
+    while True:
+        time.sleep(0.2)
+        with LISTEN_LOCK:
+            if not LISTEN["active"]:
+                return
+            if time.time() >= LISTEN["deadline"]:
+                _listen_finish("nothing more said")
+                return
+
+
+def _listen_finish(why):
+    """Under LISTEN_LOCK: what interrupted her, as one utterance - and who it was.
+    Someone else than the person she was answering: she asks them to wait,
+    finishes the first answer, then turns to them."""
+    text = " ".join(p for p in LISTEN["parts"] if p).strip()
+    owner, voice = LISTEN.get("owner") or identity.GUEST, LISTEN.get("voice")
+    LISTEN.update(active=False, parts=[], voice=None)
+    person = identity.GUEST
+    if voice:
+        label, _, known = VOICES.identify(voice[0], voice[1])
+        person = identity.from_voice(label, known)
+    other = person.known and owner.known and owner.profile != person.profile
+    words = text.split()
+    content = [w for w in words if not STOP.fullmatch(w) and not LOOSE_NAME.fullmatch(w)]
+    said_something = content or any(LOOSE_NAME.fullmatch(w) for w in words)
+    if other:
+        log(f"interrupted by {person.name} while answering {owner.name} ({why}): {text!r}")
+        if said_something:
+            WORK.put((text, person, owner))
+        else:
+            WORK.put((CONTINUE, owner, None))
+        return
+    if said_something and music_command(re.findall(r"\w+", text.lower()), {"fam_sim": 1.0}):
+        return
+    if said_something:
+        log(f"after interruption ({why}): {text!r}")
+        WORK.put((text, person, None))
+    else:
+        log(f"interruption was a bare stop: {text!r}")
+        ui({"type": "stop"})
+
+
+# ----------------------------------------------------------------- phrases --
+def on_phrase(item):
+    text = item.get("text", "").strip()
+    if len(text) < 2:
+        return
+    words = re.findall(r"\w+", text.lower())
+    with LISTEN_LOCK:
+        if LISTEN["active"]:
+            # she stopped for him: this is his; only the tail of her own last
+            # words at the very start is dropped
+            own = VOICE.own_words()
+            while words and echo_fragment(words[0], own):
+                words.pop(0)
+            LISTEN["parts"].append(" ".join(words))
+            if item.get("voice"):
+                LISTEN["voice"] = (item["voice"], item.get("dur", 0))
+            if item.get("window"):
+                LISTEN["deadline"] = time.time() + LISTEN_IDLE
+            else:
+                _listen_finish("his phrase ended")
+            return
+    if music_command(words, item):
+        return
+    named = bool(NAME.search(text))
+    maybe_named = named or bool(MAYBE_NAME.search(text))
+    if maybe_named and re.search(r"\b(еву|евы|евой|еве)\b", text, re.I) and not named:
+        maybe_named = False            # her name in an oblique case only: talk about her
+    t_speech = item.get("speech_start") or item.get("start") or time.time()
+    if VOICE.speaking() or VOICE.heard_while_talking(t_speech, item.get("end", time.time())) \
+            or item.get("playback", 0) > 0.3:
+        # said while she was talking: only a stop or her name gets through, the
+        # rest is her own echo (recognised late). A stop word or her name that
+        # she did not say herself wins over "mostly her words": her echo drowns
+        # the speaker, so his "стоп" comes inside a phrase of hers.
+        if item.get("self_sim", 0) >= SELF_SIM and item["self_sim"] > item.get("fam_sim", 0) + SELF_MARGIN:
+            log(f"own voice ({item['self_sim']} / family {item.get('fam_sim')}): {text!r}")
+            return
+        own = VOICE.own_words()
+        foreign = [w for w in words if not echo_fragment(w, own)]
+        now = time.time()
+        if foreign:
+            HEARD.append((now, " ".join(foreign)))
+        while HEARD and now - HEARD[0][0] > 6:
+            HEARD.pop(0)
+        hit = [w for w in foreign if (STOP.fullmatch(w) and (w not in WEAK_STOP or len(foreign) <= 2))
+               or LOOSE_NAME.fullmatch(w)]
+        if hit:
+            log(f"interrupted by: {text!r} ({' '.join(hit)})")
+            VOICE.stop()
+            said = " ".join(t for _, t in HEARD)
+            HEARD.clear()
+            start_listening(said)
+            if not item.get("window"):
+                with LISTEN_LOCK:
+                    if LISTEN["active"]:
+                        _listen_finish("phrase ended with the interruption")
+            return
+        # a short answer said over the tail of her own words («отлично» right
+        # after "передай…"): her words are dropped, the rest is the answer
+        if foreign and not item.get("window") and len(foreign) * 2 >= len(words) \
+                and relay_take(" ".join(foreign), item):
+            return
+        if VOICE.is_echo(text):
+            log(f"own echo: {text!r}")
+        return
+    # an answer awaited for someone in Telegram (after the echo filter above)
+    if relay_take(text, item):
+        return
+    # who is it
+    label, sim, known = (VOICES.identify(item["voice"], item.get("dur", 0)) if item.get("voice")
+                         else ("unknown", 0.0, False))
+    person = identity.from_voice(label, known)
+    log(f"voice: {label} ({sim})")
+    if introduction(text, item, label, sim, known, person):
+        return
+    if CALL_ONLY.match(" ".join(words)):
+        # just her name: she was called, the question follows
+        state["called_until"] = time.time() + CALL_WINDOW
+        log(f"called: {text!r}")
+        ui({"type": "hear", "state": "called", "text": text})
+        return
+    if STOP.search(text) and len(words) <= 3:
+        return                                     # "стоп" when she is quiet: nothing to do
+    # the window counts from when he BEGAN to speak (what the attention bar
+    # showed him), not from when the phrase came back recognised: answers begun
+    # with the bar still running were "not for Eva" (2026-11-19 evening)
+    began = item.get("speech_start") or time.time()
+    in_dialog = began - max(state["last_spoke"], VOICE.busy_until) < DIALOG_WINDOW
+    # every phrase by its own voice: the dialog window is for the one she talks
+    # with, not for whoever speaks next ("теперь можешь разговаривать" - Иван to
+    # Лиза, unrecognised - she took as Лиза's and for her, 2026-11-19)
+    other = not same_speaker(person, item.get("voice"))
+    if in_dialog and other:
+        log(f"dialog window: another voice ({label}), not taken as the conversation")
+        in_dialog = False
+    called = began < state["called_until"]
+    state["called_until"] = 0.0
+    # the local router first (shn-linux GPU): not for her / a simple command
+    # done here / Claude. Without it (down): the old gate.
+    last = history[-1]["content"] if history and history[-1]["role"] == "assistant" else None
+    r = router.route(text, named=maybe_named or called, in_dialog=in_dialog and not other,
+                     music_on=music.PLAYER.active(), screen=screen.describe() if screen.state["p"] else None,
+                     last_reply=last if isinstance(last, str) else None)
+    if r is None:
+        addressed = maybe_named or in_dialog or called or gate(text)
+    else:
+        log(f"router {r['ms']}ms: {r['intent']} {({k: v for k, v in r.items() if k not in ('intent', 'ms')}) or ''}")
+        if r["intent"] == "ignore" and (maybe_named or called):
+            r["intent"] = "claude"         # called by name: never dropped
+        addressed = r["intent"] != "ignore"
+        # garbage said to her by name: "не расслышала" (free); without her name
+        # it is mostly a remark to the children in between - silence
+        if r["intent"] == "unclear" and not (maybe_named or called):
+            addressed = False
+    if person.known:
+        # long-term memory keeps the voices it knows (as the old assistant did):
+        # not children's chatter of unknown guests, not the TV
+        memory.write("user", text, speaker=person.profile, dialog=in_dialog, addressed=addressed,
+                     voice_sim=sim, dur=item.get("dur"))
+    if addressed and r is not None and r["intent"] != "claude":
+        state.update(talker=person, talker_voice=item.get("voice"))
+        WORK.put((text, person, r))
+        return
+    if addressed:
+        ui({"type": "think", "text": text})
+        prev, note = state.get("talker"), None
+        if other and prev is not None and not named:
+            # she gets told it is not her last talker (an unknown voice is not "probably the same")
+            note = (f"[система: это другой голос, не {prev.name or 'тот, с кем ты говорила'}; "
+                    f"тебя по имени не назвали - скорее всего, люди говорят между собой]")
+        state.update(talker=person, talker_voice=item.get("voice"))
+        WORK.put((text, person, None, note))
+    else:
+        log(f"not for Eva: {text!r}")
+        ui({"type": "hear", "state": "ignored", "text": text})
+
+
+SAME_VOICE = 0.5             # CAM++ similarity of two phrases of one person
+
+
+def same_speaker(person, voice):
+    """Is this phrase by the person she talked with last? Known voices by
+    their name, the rest by the voice itself."""
+    prev, pv = state.get("talker"), state.get("talker_voice")
+    if prev is None:
+        return True
+    if person.known and prev.known:
+        return person.name == prev.name
+    if voice is None or pv is None:
+        return True                   # no voice to tell by: the benefit of the doubt
+    # one of them unrecognised: by the voice itself. Recognition flickers in a
+    # new room (Иван: "Иван", then a guest, then "Иван") and his answers in the
+    # window were ignored as "another voice" (2026-11-19 evening); two phrases of
+    # one person in one room are far closer to each other than to his profile
+    a, b = np.asarray(voice, dtype=np.float32), np.asarray(pv, dtype=np.float32)
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9)) >= SAME_VOICE
+
+
+# while music plays: a short command without her name (as in the old assistant)
+MUSIC_WORDS = [(("стоп", "хватит", "выключи", "выключай"), "stop"), (("пауза", "паузу"), "pause"),
+               (("дальше", "следующая", "следующую", "следующий", "пропусти", "другую"), "next"),
+               (("назад", "предыдущая", "предыдущую"), "previous"), (("тише", "потише"), "quieter"),
+               (("громче", "погромче"), "louder"), (("продолжи", "продолжай", "играй"), "resume")]
+
+
+# A message passed aloud at home for someone in Telegram: what is said at home
+# next is the answer, sent back to them by the system - Иван's «отлично» to
+# Маша's message stayed with Eva, unrecognised and taken as not for her
+# (2026-11-20).
+RELAY_WAIT = 180              # s she waits for the answer
+RELAY_GAP = 4.0               # s of quiet after the last phrase: the answer is complete
+RELAY = {"to": None, "until": 0.0, "parts": [], "timer": None}
+RELAY_LOCK = threading.Lock()
+
+
+def relay_start(person):
+    with RELAY_LOCK:
+        RELAY.update(to=person, until=time.time() + RELAY_WAIT, parts=[])
+
+
+def relay_take(text, item):
+    """A phrase at home while an answer is awaited: collected for the sender."""
+    with RELAY_LOCK:
+        if RELAY["to"] is None or time.time() > RELAY["until"]:
+            RELAY["to"] = None
+            return False
+        label, sim, known = (VOICES.identify(item["voice"], item.get("dur", 0)) if item.get("voice")
+                             else ("unknown", 0.0, False))
+        who = identity.from_voice(label, known).name if known else None
+        RELAY["parts"].append((who, text))
+        if RELAY["timer"]:
+            RELAY["timer"].cancel()
+        RELAY["timer"] = threading.Timer(RELAY_GAP, relay_send)
+        RELAY["timer"].start()
+    log(f"relay: {text!r} ({who or 'voice not recognised'})")
+    ui({"type": "hear", "state": "called", "text": text})
+    return True
+
+
+def relay_send():
+    from skills.home import notify
+    with RELAY_LOCK:
+        to, parts = RELAY["to"], RELAY["parts"]
+        RELAY.update(to=None, parts=[], timer=None)
+    if not to or not parts:
+        return
+    names = {w for w, _ in parts if w}
+    who = ", ".join(sorted(names)) if names else "голос не узнан"
+    text = f"Ответ дома ({who}): «{' '.join(t for _, t in parts)}»"
+    ok = notify(to, text)
+    log(f"relay to {to.name}: {text!r} - {'sent' if ok else 'NOT sent'}")
+    VOICE.say("Передала ответ." if ok else "Не получилось передать ответ.")
+    history.append({"role": "assistant", "content": f"[переслала {to.name} в Телеграм] {text}"})
+    save_history()
+
+
+MUSIC_CMD_ONCE = 2.5          # s: the same music command again is the same command
+MUSIC_FILLER = {"пожалуйста", "музыку", "музыка", "песню", "песня", "трек", "эту", "это", "ну", "а", "давай",
+                "включи", "сделай", "немного", "чуть", "чуть-чуть", "по", "поставь", "на"}
+MUSIC_CMD_FAM = 0.4           # a family-like voice: a word of the song itself is not a command
+
+
+def music_down():
+    """The music goes down only when she is wanted: her name was heard (the
+    call window), she listens after being interrupted, works on an answer or
+    talks. Any voice over the music turned it down before - nothing could be
+    listened to in a talking room (Иван, 2026-11-21)."""
+    return (VOICE.speaking() or LISTEN["active"] or state.get("answering")
+            or time.time() < state["called_until"])
+
+
+def music_command(words, item):
+    """«стоп», «пауза», «дальше», «тише»… said while music plays (or is paused),
+    up to three words, not over her voice, by a family-like voice (the ear hears
+    the song too, in windows). True if it was one."""
+    if not music.PLAYER.active() or VOICE.speaking():
+        return False
+    # her name, "please", "музыку" and a repeated word are not the command:
+    # «ева выключи выключи музыку» went to Claude for $0.16 (2026-11-21)
+    named = any(NAME.fullmatch(w) for w in words)
+    core = []
+    for w in words:
+        if NAME.fullmatch(w) or w in MUSIC_FILLER or (core and core[-1] == w):
+            continue
+        core.append(w)
+    if not 1 <= len(core) <= 3:
+        return False
+    if not named and (item.get("fam_sim") or 0) < MUSIC_CMD_FAM:
+        return False
+    words = core
+    for keys, action in MUSIC_WORDS:
+        if any(w in keys for w in words):
+            p = music.PLAYER
+            # one command, heard twice: by a window over the music and by the
+            # phrase's tail («включи следующий трек» + «следующий трек») - it
+            # skipped two tracks (2026-11-20)
+            if state.get("music_cmd") == action and time.time() - state.get("music_cmd_at", 0) < MUSIC_CMD_ONCE:
+                log(f"music command again: {' '.join(words)!r} -> {action} (ignored)")
+                return True
+            state.update(music_cmd=action, music_cmd_at=time.time())
+            state["called_until"] = 0.0        # «Ева… дальше»: done, the music comes back up
+            if action == "stop":
+                p.stop()
+            elif action in ("pause", "resume"):
+                p.pause(action == "pause")
+            elif action in ("next", "previous"):
+                p.next(1 if action == "next" else -1)
+            else:
+                p.louder(action == "louder")
+            log(f"music command: {' '.join(words)!r} -> {action}")
+            ui({"type": "hear", "state": "called", "text": " ".join(words)})
+            return True
+    return False
+
+
+def attention_until():
+    """When her attention ends: a phrase before that is taken as meant for her
+    without her name. -> (until, total) in seconds, or (0, 0)."""
+    if VOICE.speaking():
+        return time.time() + DIALOG_WINDOW, DIALOG_WINDOW
+    talk = max(state["last_spoke"], VOICE.busy_until) + DIALOG_WINDOW
+    until, total = max((talk, DIALOG_WINDOW), (state["called_until"], CALL_WINDOW))
+    return (until, total) if until > time.time() else (0.0, 0.0)
+
+
+def attention_watch():
+    """The attention bar on the screen and the LED ring: sent when it changes."""
+    last = None
+    while True:
+        until, total = attention_until()
+        cur = (round(until, 1), total, VOICE.speaking())
+        if last is None or abs(cur[0] - last[0]) > 0.3 or cur[1:] != last[1:]:
+            ui({"type": "attention", "until": int(until * 1000), "total": int(total * 1000),
+                "speaking": cur[2]})
+            last = cur
+        time.sleep(0.25)
+
+
+def introduction(text, item, label, sim, known, person):
+    """"знакомство": learning a voice. True if the phrase was handled here."""
+    if VOICES.enrolling():
+        n = len(VOICES.enroll["embs"])
+        if n >= 3:
+            name, cnt, moved = VOICES.finish_enroll()
+            log(f"enrolled {name}: {cnt} samples, merged {moved}")
+            VOICE.say(f"Готово, я запомнила голос: {voices.CALL.get(name, name)}.")
+        else:
+            VOICE.say("Ещё одну фразу." if n else "Слушаю, скажи ещё что-нибудь.")
+        return True
+    m = INTRO.search(text) or ENROLL.search(text)
+    name = intro_name(text, m) if m else None
+    if not name or "голос" not in text.lower():
+        return False
+    if known:
+        # a voice she already knows: no new profile under another name. Refused
+        # only when it is the name of somebody else in the family; a garbled
+        # name is the speaker's own ("я Лиза" came as "Аит", 2026-11-19)
+        other = next((p for p in VOICES.names() if p != label and voices.same_person(p, name)), None) \
+            or next((n for s, n in FAMILY if name.lower().startswith(s) and not voices.same_person(label, n)), None)
+        if voices.same_person(label, name) or not other:
+            # asked by the owner of the profile: refresh it with samples from today's microphones
+            VOICES.start_enroll(label, first=item.get("voice"))
+            log(f"refreshing voice {label} ({sim})")
+            VOICE.say(f"Узнаю тебя, {person.name}. Скажи ещё пару фраз, я обновлю твой голос.")
+        else:
+            VOICE.say(f"Не-а, я тебя уже знаю: ты {person.name}!")
+            log(f"introduction refused: {label} ({sim}) said to be {name}")
+        return True
+    profile, csim = VOICES.claim(item["voice"], name) if item.get("voice") else (None, 0.0)
+    if profile:
+        # the owner in other acoustics (Иван, another room: 0.44-0.49 to his
+        # profile, 0.25 to the others) - refresh, not "impostor" (2026-11-19)
+        VOICES.start_enroll(profile, first=item.get("voice"))
+        log(f"refreshing voice {profile} from an unrecognised voice ({csim}) that says it is {name}")
+        VOICE.say(f"Похоже, это правда ты, {voices.CALL.get(profile, profile)}, просто звучишь иначе. "
+                  f"Скажи ещё пару фраз, я обновлю твой голос.")
+        return True
+    if name.lower() in {n.lower() for n in VOICES.names()} or any(voices.same_person(p, name) for p in VOICES.names()):
+        VOICE.say(f"Я уже знаю голос по имени {name}, и это не твой. Как тебя зовут на самом деле?")
+        log(f"introduction refused: unknown voice ({sim}) claims existing profile {name}")
+        return True
+    VOICES.start_enroll(name, first=item.get("voice"))
+    log(f"enrolling voice {name}")
+    VOICE.say(f"Привет, {name}! Скажи мне ещё пару фраз, любых, я запоминаю твой голос.")
+    return True
+
+
+def worker():
+    while True:
+        text, person, owner, *note = WORK.get()
+        state["answering"] = True          # the music stays down while she works on it
+        try:
+            if isinstance(owner, dict):    # a command from the router's catalog: no Claude
+                local(text, person, owner)
+                continue
+            answer(text, person, owner, note[0] if note else None)
+        except Exception as e:
+            log("answer failed:", e)
+        finally:
+            state["answering"] = False

@@ -1,0 +1,6 @@
+{
+  "_comment": "Example: canonical name -> forms people actually say ('by' = who uses the form). Made-up names.",
+  "Ева": {"forms": ["Ева", {"form": "Эва", "by": "Соня"}]},
+  "Лиза": {"forms": ["Лиза", "Лизонька", "Лизок"]},
+  "Соня": {"forms": ["Соня", "Сонечка", {"form": "Сонька", "by": "Лиза"}]}
+}

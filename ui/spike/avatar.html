@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Eva avatar bake</title>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+<style>body { margin: 0; background: #222; color: #ddd; font: 14px monospace; } canvas { display: block; max-width: 512px; }</style>
+</head>
+<body>
+<div id="status">baking…</div>
+<script type="module">
+// Runs on the workstation: the Telegram avatar of @shn_eva_bot - the same
+// model and camera as bake.html (the TV face), 1024 px, smiling, on Eva's
+// teal; sent to spike_server's /snap.
+import * as THREE from "three";
+import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
+import { VRMLoaderPlugin, VRMUtils } from "./vendor/three-vrm.module.js";
+
+const SIZE = 1024;
+const status = document.getElementById("status");
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: true });
+renderer.setSize(SIZE, SIZE);
+renderer.setPixelRatio(1);
+renderer.setClearColor(0x000000, 0);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(22, 1, 0.05, 10);
+scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+const key = new THREE.DirectionalLight(0xffffff, 1.7);
+key.position.set(0.6, 0.8, 1.5);
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x8fe9ff, 0.9);
+rim.position.set(-1.2, 0.6, -0.8);
+scene.add(rim);
+
+const loader = new GLTFLoader();
+loader.register((p) => new VRMLoaderPlugin(p));
+loader.load("./vendor/sample.vrm", async (gltf) => {
+  const vrm = gltf.userData.vrm;
+  VRMUtils.removeUnnecessaryVertices(gltf.scene);
+  VRMUtils.rotateVRM0(vrm);
+  scene.add(vrm.scene);
+  vrm.update(0);
+  vrm.scene.updateMatrixWorld(true);
+  const head = new THREE.Vector3();
+  vrm.humanoid.getNormalizedBoneNode("head").getWorldPosition(head);
+  // a little wider than the TV face: the round crop of Telegram eats the corners
+  camera.position.set(head.x, head.y + 0.04, head.z + 1.15);
+  camera.lookAt(head.x, head.y + 0.0, head.z);
+  const em = vrm.expressionManager;
+  em.expressions.forEach((e) => em.setValue(e.expressionName, 0));
+  em.setValue("happy", 0.3);
+  vrm.update(0);
+  renderer.render(scene, camera);
+
+  const out = document.createElement("canvas");
+  out.width = out.height = SIZE;
+  const c = out.getContext("2d");
+  const g = c.createRadialGradient(SIZE / 2, SIZE * 0.42, SIZE * 0.05, SIZE / 2, SIZE / 2, SIZE * 0.72);
+  g.addColorStop(0, "#1d4f63");
+  g.addColorStop(0.55, "#0d2433");
+  g.addColorStop(1, "#05070d");
+  c.fillStyle = g;
+  c.fillRect(0, 0, SIZE, SIZE);
+  c.drawImage(renderer.domElement, 0, 0);
+  document.body.appendChild(out);
+  await fetch("/snap", { method: "POST", headers: { "X-Name": "eva-avatar" }, body: out.toDataURL("image/png") });
+  status.textContent = "baked and sent";
+}, undefined, (e) => { status.textContent = "error " + e.message; });
+</script>
+</body>
+</html>

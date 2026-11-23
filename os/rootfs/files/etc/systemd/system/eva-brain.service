@@ -1,0 +1,12 @@
+[Unit]
+Description=Eva: brain (decides, answers with Claude, speaks)
+After=eva-ui-http.service network-online.target
+Wants=eva-ui-http.service
+
+[Service]
+ExecStart=/opt/eva/venv/bin/python /opt/eva/app/brain.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
