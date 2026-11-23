@@ -16,6 +16,7 @@ import json
 import random
 import threading
 import time
+import urllib.parse
 import urllib.request
 
 import photolib
@@ -30,6 +31,12 @@ PER_YEAR = profile.tune("slideshow.per_year", 4)             # "on this day": ph
 THEMES = profile.tune("slideshow.themes", 3)                 # themes of the day from the local model
 PER_THEME = profile.tune("slideshow.per_theme", 8)
 BIRTHDAY_DAYS = profile.tune("slideshow.birthday_days", 3)   # birthdays within this many days get their photos
+# never on the TV: photos with these tags (photolib's system tags are out anyway),
+# and - with REQUIRE_GPS - photos without real coordinates: none, 0,0 or the
+# poles are junk in this archive (screens, scans, downloads)
+EXCLUDE_TAGS = profile.tune("slideshow.exclude_tags",
+                            ["private", "trash", "document", "документы", "aero", "t1", "body", "mosaic"])
+REQUIRE_GPS = profile.tune("slideshow.require_gps", True)
 
 MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа",
           "сентября", "октября", "ноября", "декабря")
@@ -51,8 +58,29 @@ def _caption(photo_date, extra=""):
     return f"{d.day} {MONTHS[d.month - 1]} {d.year}{ago}" + (f" · {extra}" if extra else "")
 
 
+def fit(photo_ids):
+    """The ids that may go on the TV: no excluded tag, real coordinates (photolib
+    /photo/{id}, in parallel). Search and person photos do not filter by these."""
+    from concurrent.futures import ThreadPoolExecutor
+    ex = {t.lower() for t in EXCLUDE_TAGS}
+
+    def ok(i):
+        try:
+            p = photolib.photo(i)
+        except Exception:
+            return False
+        if any(t.get("is_system") or (t.get("name") or "").lower() in ex for t in p.get("tags") or []):
+            return False
+        return not REQUIRE_GPS or photolib.place(p) is not None
+
+    with ThreadPoolExecutor(8) as pool:
+        return {i for i, good in zip(photo_ids, pool.map(ok, photo_ids)) if good}
+
+
 def on_this_day(today):
-    d = photolib._get(f"/memories/on-this-day?date={today.isoformat()}&per_year={PER_YEAR}")
+    q = urllib.parse.urlencode({"date": today.isoformat(), "per_year": PER_YEAR,
+                                "exclude_tags": ",".join(EXCLUDE_TAGS), "require_gps": str(REQUIRE_GPS).lower()})
+    d = photolib._get(f"/memories/on-this-day?{q}")
     out = []
     for y in sorted(d.get("years", []), key=lambda y: y["year"]):      # oldest year first
         for p in y["photos"]:
@@ -79,7 +107,9 @@ def birthday_photos(today):
             continue
         when = "сегодня" if delta == 0 else "завтра" if delta == 1 else f"через {delta} дн."
         photos, _ = photolib.person_photos(pid, limit=200)
-        for ph in photolib.spread(photos, 8):
+        cands = photolib.spread(photos, 24)
+        good = fit([ph["image_id"] for ph in cands])
+        for ph in [ph for ph in cands if ph["image_id"] in good][:8]:
             out.append({"id": ph["image_id"], "date": ph.get("photo_date"), "people": [p["name"]],
                         "title": f"{p['name']}: день рождения {when}"})
     return out
@@ -114,7 +144,9 @@ def themes(today, birthdays):
 
 
 def theme_photos(theme):
-    photos, _ = photolib.search(theme["query"], want=40)
+    photos, _ = photolib.search(theme["query"], want=60)
+    good = fit([p["image_id"] for p in photos])
+    photos = [p for p in photos if p["image_id"] in good]
     random.shuffle(photos)
     return [{"id": p["image_id"], "date": p.get("photo_date"), "people": [], "title": theme["title"]}
             for p in photolib.spread(photos, PER_THEME)]

@@ -98,6 +98,13 @@
     "cost.daily_limit": 3.0,
     "llm.model": "claude-sonnet-5-5",
     "slideshow.idle_after": 300,
-    "slideshow.seconds": 12
+    "slideshow.seconds": 12,
+    "slideshow.exclude_tags": [
+      "private",
+      "trash",
+      "document",
+      "aero"
+    ],
+    "slideshow.require_gps": true
   }
 }
