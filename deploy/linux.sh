@@ -2,7 +2,7 @@
 # Deploy Eva's services on shn-linux from git - a commit that is on origin.
 # Run from Git Bash in the repo root:
 #
-#   deploy/linux.sh stt|music|router [ref]      # default origin/main
+#   deploy/linux.sh stt|music|router|gpu-arbiter [ref]      # default origin/main
 #
 # The source of the service is taken from the commit (git archive), built into
 # an image tagged with the commit, and the container is recreated with the run
@@ -18,7 +18,7 @@ HUB_KEY=${HUB_KEY:?set HUB_KEY in deploy/local.env}
 HUB_KEY=${HUB_KEY/#\~/$HOME}
 SSH=(ssh -i "$HUB_KEY" -o ConnectTimeout=10 "$HOST")
 
-svc=${1:?service: stt | music | router}
+svc=${1:?service: stt | music | router | gpu-arbiter}
 ref=${2:-origin/main}
 git fetch -q origin
 sha=$(git rev-parse --verify "$ref^{commit}")
@@ -36,6 +36,12 @@ stt)
 music)
     src=services/music; image=newalisa-music; name=newalisa-music; port=8904
     run="-p 8904:8904"; cmd=""; health=/health ;;
+gpu-arbiter)
+    # stops eva-router while photolib indexes (indexing gets the whole GPU), starts it after
+    src=services/gpu-arbiter; image=eva-gpu-arbiter; name=eva-gpu-arbiter; port=8907
+    run="--network host -v /var/run/docker.sock:/var/run/docker.sock -v \$HOME/eva-data/arbiter:/state \
+-e PHOTOLIB_URL=http://127.0.0.1:8000 -e CONTAINERS=eva-router"
+    cmd=""; health=/health ;;
 router)
     # no source of ours: the prebuilt llama.cpp CUDA server + a model on the server.
     # 8080 inside: the image's own healthcheck asks there (on 8906 docker said "unhealthy")
