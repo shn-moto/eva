@@ -63,7 +63,7 @@ GAIN = profile.tune("ear.ref_gain", 32.0)      # the reference tap (PGA 0.5 dB)
 # keeps the levels the VAD and the canceller were tuned on.
 MIC_GAIN = profile.tune("ear.mic_gain", 32.0)   # with the mics' PGA at 20 dB (station-mics-init.sh)
 START_P, END_P = profile.tune("ear.start_p", 0.5), profile.tune("ear.end_p", 0.35)        # speech probability thresholds
-END_SILENCE = profile.tune("ear.end_silence", 0.65)                # s of non-speech that ends a phrase (0.5 cut phrases at a breath)
+END_SILENCE = profile.tune("ear.end_silence", 0.8)                 # s of non-speech that ends a phrase (0.5, then 0.65 cut phrases at a breath)
 TAIL_KEEP = profile.tune("ear.tail_keep", 0.3)                   # s of the trailing silence kept for STT
 # ...unless only a word or two was said: "Ева, <pause> кто такая Ольга" was cut
 # after "Ева" and the lone name came out as "ево" (test set 2026-11-19)
@@ -74,6 +74,17 @@ PLAYBACK_WINDOW = profile.tune("ear.playback_window", 1.5)             # s: whil
 OVERLAP = 19                      # chunks (~0.6 s) shared by consecutive windows: no word cut in half
 MUSIC_FLAG = "/run/eva/music"          # app/music.py holds it while music plays
 SPEAKING_FLAG = "/run/eva/speaking"   # the brain holds it while her voice plays
+HEARING_FLAG = "/run/eva/hearing"     # held while a phrase is being heard: the brain waits for its rest
+
+
+def hearing(on):
+    try:
+        if on:
+            open(HEARING_FLAG, "w").close()
+        elif os.path.exists(HEARING_FLAG):
+            os.remove(HEARING_FLAG)
+    except OSError:
+        pass
 ECHO_RESIDUAL = profile.tune("ear.echo_residual", 0.1)               # canceller left <10% of the energy: her own echo
 REF_ACTIVE = profile.tune("ear.ref_active", 5e-4)                 # reference level (of full scale) = speakers playing
 RECORD_FLAG = "/var/lib/eva/stt-record"   # exists: save phrases as a test set, do not answer
@@ -619,6 +630,7 @@ def main():
             pre.append((e, play_now, en_in, en_out, mics.astype(np.float32)))
             if p > START_P:
                 speaking, silence = True, 0.0
+                hearing(True)
                 seg = [c for c, *_ in pre]
                 seg_ref = [(r, i, o) for _, r, i, o, _ in pre]
                 seg_raw = [m for *_, m in pre]
@@ -655,6 +667,7 @@ def main():
             end_silence = END_SILENCE_SHORT if voiced < SHORT_HEAD and not play_now else END_SILENCE
             if silence >= end_silence or dur >= MAX_SPEECH:
                 speaking = False
+                hearing(False)
                 speech = dur - silence
                 played = [(i, o) for r, i, o in seg_ref if r]
                 playback = len(played) / len(seg_ref)

@@ -62,6 +62,9 @@ SCHEMA = {
         "mode": {"type": "string", "enum": ["ascii", "image", "eq", "live2d"]},
         "panel": {"type": "string", "enum": ["chat", "stats"]},
         "show": {"type": "boolean"},
+        # said to the end? false: the person goes on («Ева, напиши моей маме» ...
+        # pause ... «что я её жду») - the dialog waits for the rest
+        "complete": {"type": "boolean"},
     },
     "required": ["to_eva", "intent"],
 }
@@ -80,6 +83,9 @@ SYSTEM = ("Ты классификатор фраз для домашнего г
 - Вопрос, просьба рассказать, найти, посмотреть, передать, запомнить, показать фото или данные - claude.
 - "ева ты слушаешь", "ева ты тут" - claude.
 - music_* и what_playing - только про музыку; "стоп"/"выключи" при играющей музыке - music_stop.
+- complete: false, если просьба явно не договорена и человек сейчас продолжит: не сказано,
+  что написать или передать, что включить, или фраза оборвана на полуслове. Законченная
+  просьба или вопрос - true.
 
 Примеры (контекст: обращение по имени или разговор, если не сказано иначе):
 "ева включи квин" -> {"to_eva":true,"intent":"music_play","query":"Queen","kind":"selection"}
@@ -103,6 +109,10 @@ SYSTEM = ("Ты классификатор фраз для домашнего г
 "ева покажи фото из устки" -> {"to_eva":true,"intent":"claude"}
 "кто на третьем фото" -> {"to_eva":true,"intent":"claude"}
 "ева ты слушаешь" -> {"to_eva":true,"intent":"claude"}
+"ева напиши моей маме" -> {"to_eva":true,"intent":"claude","complete":false}
+"ева передай папе что" -> {"to_eva":true,"intent":"claude","complete":false}
+"ева напиши маме что я скоро буду" -> {"to_eva":true,"intent":"claude","complete":true}
+"ева какая завтра погода" -> {"to_eva":true,"intent":"claude","complete":true}
 "ева станет там" -> {"to_eva":true,"intent":"unclear"}
 Без имени и вне разговора:
 "мам почему у меня такая книга" -> {"to_eva":false,"intent":"ignore"}

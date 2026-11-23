@@ -512,6 +512,13 @@ def on_phrase(item):
     # the same person goes on right after asking, before she has said a word:
     # «Ева, напиши моей маме» + pause + «пусть ответит, когда приедет» - the
     # second half was dropped as side talk (2026-11-23)
+    with PENDING_LOCK:
+        waiting = PENDING["text"] is not None
+    if waiting and not other:
+        # the rest of a request she is still waiting with: one request
+        log(f"the rest of the request: {text!r}")
+        pend(text, person, None, open_end=False)
+        return
     following = not other and began - state.get("asked_at", 0.0) < FOLLOW_WINDOW
     unanswered = following and state.get("asked_at", 0.0) > state["last_spoke"]
     in_dialog = in_dialog or following
@@ -553,7 +560,6 @@ def on_phrase(item):
         WORK.put((text, person, r))
         return
     if addressed:
-        ui({"type": "think", "text": text})
         prev, note = state.get("talker"), None
         if other and prev is not None and not named:
             # she gets told it is not her last talker (an unknown voice is not "probably the same")
@@ -562,10 +568,53 @@ def on_phrase(item):
         elif unanswered:
             note = "[система: это продолжение предыдущей просьбы того же человека - она ещё не договорила, когда ты начала отвечать]"
         state.update(talker=person, talker_voice=item.get("voice"), talker_doa=item.get("doa"), asked_at=began)
-        WORK.put((text, person, None, note))
+        # not to Claude at once: the person may go on after a pause (pend)
+        pend(text, person, note, open_end=r is not None and r.get("complete") is False)
     else:
         log(f"not for Eva: {text!r}")
         ui({"type": "hear", "state": "ignored", "text": text})
+
+
+# A request goes to Claude only after a short wait: the phrase ended at a pause,
+# but the person may not be done («Ева, напиши моей маме» - pause - «пусть
+# ответит, когда приедет»: she was already thinking while Лиза went on,
+# 2026-11-23). While the ear hears someone (HEARING_FLAG) she keeps waiting; the
+# same person's next phrase is joined to the request. The ring shows "listening"
+# meanwhile, "thinking" only once the request is on its way.
+GRACE = profile.tune("dialog.grace", 0.8)              # s after a finished-sounding request
+GRACE_OPEN = profile.tune("dialog.grace_open", 2.5)    # s after one the router calls unfinished
+GRACE_MAX = profile.tune("dialog.grace_max", 12.0)     # s at most, however long others talk
+HEARING_FLAG = "/run/eva/hearing"                      # ear.py: a phrase is being heard
+PENDING = {"text": None, "person": None, "note": None, "until": 0.0, "since": 0.0}
+PENDING_LOCK = threading.Lock()
+
+
+def pend(text, person, note, open_end):
+    with PENDING_LOCK:
+        if PENDING["text"] is None:
+            PENDING.update(text=text, person=person, note=note, since=time.time())
+            threading.Thread(target=_pending_watch, daemon=True).start()
+        else:
+            PENDING["text"] += " " + text
+        PENDING["until"] = time.time() + (GRACE_OPEN if open_end else GRACE)
+        shown = PENDING["text"]
+    ui({"type": "hear", "state": "held", "text": shown})
+
+
+def _pending_watch():
+    while True:
+        time.sleep(0.1)
+        with PENDING_LOCK:
+            now = time.time()
+            heard = os.path.exists(HEARING_FLAG) and now - PENDING["since"] < GRACE_MAX
+            if now < PENDING["until"] or heard:
+                continue
+            text, person, note = PENDING["text"], PENDING["person"], PENDING["note"]
+            PENDING["text"] = None
+        log(f"request: {text!r}")
+        ui({"type": "think", "text": text})
+        WORK.put((text, person, None, note))
+        return
 
 
 SAME_VOICE = profile.tune("dialog.same_voice", 0.5)             # CAM++ similarity of two phrases of one person
