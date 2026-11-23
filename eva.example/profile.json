@@ -96,6 +96,8 @@
     "voices.threshold": 0.5,
     "dialog.window": 10.0,
     "cost.daily_limit": 3.0,
-    "llm.model": "claude-sonnet-5-5"
+    "llm.model": "claude-sonnet-5-5",
+    "slideshow.idle_after": 300,
+    "slideshow.seconds": 12
   }
 }

@@ -106,7 +106,10 @@ def describe():
     p = state["p"]
     if p is None:
         import music
-        return ("На экране плеер. " + music.PLAYER.describe()) if music.PLAYER.active() else "На экране только твоё лицо."
+        import slideshow
+        if music.PLAYER.active():
+            return "На экране плеер. " + music.PLAYER.describe()
+        return slideshow.describe() or "На экране только твоё лицо."
     items = _items()
     if state["open"] is not None:
         return f"Открыто фото {state['open'] + 1} из {len(items)}."

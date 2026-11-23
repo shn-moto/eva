@@ -22,6 +22,7 @@ import memory  # noqa: E402
 import music  # noqa: E402
 import photolib  # noqa: E402
 import say  # noqa: E402
+import slideshow  # noqa: E402
 from core import cost, identity, llm, screen, skills, speech  # noqa: E402
 from core.speech import ui  # noqa: E402
 from core.util import log, secrets  # noqa: E402
@@ -73,6 +74,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 pass
 
 
+def start_slideshow():
+    """Family photos on the TV when nobody needs her (app/slideshow.py)."""
+    import time
+    seen = {"music": time.time()}        # a fresh start counts as activity: no slideshow right away
+
+    def busy():
+        return bool(dialog.music_down()) or dialog.PENDING["text"] is not None
+
+    def last_activity():
+        if music.PLAYER.active():
+            seen["music"] = time.time()
+        return max(dialog.state["last_spoke"], dialog.state.get("asked_at", 0.0), screen.state["touched"],
+                   dialog.VOICE.busy_until, seen["music"])
+
+    def screen_free():
+        return screen.state["p"] is None and not music.PLAYER.active()
+
+    threading.Thread(target=slideshow.run, args=(busy, last_activity, screen_free), daemon=True).start()
+
+
 if __name__ == "__main__":
     skills.load()
     skills.start_refresher()
@@ -89,6 +110,7 @@ if __name__ == "__main__":
     cost.on_change = lambda: threading.Thread(target=ui, args=(cost.stats(),), daemon=True).start()
     cost.on_change()
     threading.Thread(target=music.PLAYER.duck_watch, daemon=True).start()
+    start_slideshow()
     # "секунду, посмотрю" must sound at once: its speech is made now, once, and cached
     threading.Thread(target=lambda: [say.tts(f) for f in dialog.FILLERS], daemon=True).start()
     threading.Thread(target=speech.buttons, args=(dialog.VOICE,), daemon=True).start()

@@ -111,6 +111,17 @@
   .nx img { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; background: #111725; flex: 0 0 64px; }
   .nx span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .nx em { font-style: normal; color: var(--muted); }
+  /* idle slideshow (app/slideshow.py): the photo over the whole screen, two
+     layers cross-fading (the new one shows only once it is loaded), a caption */
+  #wrap.slidemode #view { padding: 0; background: #000; }
+  #wrap.slidemode #vhead { display: none; }
+  .slides { position: absolute; inset: 0; }
+  .slides img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+    opacity: 0; transition: opacity 1.2s ease; }
+  .slides img.on { opacity: 1; }
+  .slidecap { position: absolute; left: 36px; right: 360px; bottom: 26px; font-size: 26px; color: #fff;
+    text-shadow: 0 0 10px #000, 0 0 3px #000; line-height: 1.3; }
+  .slidecap .t { font-size: 17px; color: #8fe9ff; text-transform: uppercase; letter-spacing: 2px; }
   /* the chat column can be hidden: the face takes the whole width */
   #wrap.nochat #chat { display: none; }
   #wrap.nochat:not(.show) #status { right: 3%; }
@@ -552,10 +563,25 @@ function tickMusic() {
 }
 setInterval(tickMusic, 500);
 
+function showSlide(v) {
+  let box = vbody.querySelector(".slides");
+  if (!box) {
+    box = el("div", "slides");
+    box.append(img(""), img(""), el("div", "slidecap"));
+    vbody.replaceChildren(box);
+  }
+  const [a, b] = box.querySelectorAll("img"), cap = box.querySelector(".slidecap");
+  const cur = a.classList.contains("on") ? a : b.classList.contains("on") ? b : null;
+  const nxt = cur === a ? b : a;
+  nxt.onload = () => { nxt.classList.add("on"); if (cur && cur !== nxt) cur.classList.remove("on"); };
+  nxt.src = "/img/" + v.id + "/full";
+  cap.replaceChildren(el("div", "t", v.title || ""), el("div", "", v.caption || ""));
+}
 function showView(v) {
   if (v.kind !== "music") { music = null; viewEl.classList.remove("music"); wrap.classList.remove("musicmode"); viewEl.querySelector(".mbg")?.remove(); }
   wrap.classList.toggle("fullpage", v.kind === "html" && !!v.full);
   wrap.classList.toggle("pagemode", v.kind === "html");
+  wrap.classList.toggle("slidemode", v.kind === "slide");
   if (v.kind === "close") { setCorner(false); vbody.replaceChildren(); return; }
   if (v.kind === "html") {
     vhead.replaceChildren(el("span", "", v.title || ""));
@@ -566,6 +592,7 @@ function showView(v) {
     setCorner(true);
     return;
   }
+  if (v.kind === "slide") { showSlide(v); setCorner(true); return; }
   if (v.kind === "music") { showMusic(v); setCorner(true); return; }
   const pages = v.pages > 1 ? "  стр. " + v.page + " из " + v.pages : "";
   vbody.replaceChildren();

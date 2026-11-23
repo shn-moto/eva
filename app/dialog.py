@@ -151,7 +151,8 @@ def answer(text, person, owner=None, note=None):
         content = f"[{now}] [{who or 'голос не узнан'}] {text}"
     if note:
         content += "\n" + note
-    if screen.state["p"] is not None or music.PLAYER.active():
+    import slideshow
+    if screen.state["p"] is not None or music.PLAYER.active() or slideshow.describe():
         content += f"\n[экран: {screen.describe()}]"
     if owner:
         content += (f"\n[система: {who} перебил(а) тебя, пока ты отвечала {owner.name}. Сначала одной "
