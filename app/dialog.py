@@ -44,6 +44,7 @@ MAYBE_NAME = re.compile(r"^\s*(е|э|и|ив|иве|ева\w*|эва\w*|эв|е�
 # arrived as "евро" + "кто такая ольга")
 CALL_ONLY = re.compile(r"^\s*(?:эй\s+|слушай\s+)?(ева\w{0,3}|эва\w{0,2}|ев\w{0,2}|эв\w{0,2}|ив\w?|иве)\s*$", re.I)
 CALL_WINDOW = profile.tune("dialog.call_window", 6.0)             # s after a call: the next phrase is for her
+FOLLOW_WINDOW = profile.tune("dialog.follow_window", 10.0)   # s after asking: the same person going on is the same request
 STOP = re.compile(r"\b(стоп|хватит|замолчи|молчи|тихо|тише|подожди|погоди|остановись|"
                   r"перестань|прекрати|отстань|достаточно|всё|все|пауза|заткнись)\b", re.I)
 # everyday words that are a stop only said almost alone ("всё!", "тихо!"), not
@@ -508,6 +509,12 @@ def on_phrase(item):
     if in_dialog and other:
         log(f"dialog window: another voice ({label}), not taken as the conversation")
         in_dialog = False
+    # the same person goes on right after asking, before she has said a word:
+    # «Ева, напиши моей маме» + pause + «пусть ответит, когда приедет» - the
+    # second half was dropped as side talk (2026-11-23)
+    following = not other and began - state.get("asked_at", 0.0) < FOLLOW_WINDOW
+    unanswered = following and state.get("asked_at", 0.0) > state["last_spoke"]
+    in_dialog = in_dialog or following
     called = began < state["called_until"]
     state["called_until"] = 0.0
     # the local router first (shn-linux GPU): not for her / a simple command
@@ -523,8 +530,17 @@ def on_phrase(item):
         if r["intent"] == "ignore" and (maybe_named or called):
             r["intent"] = "claude"         # called by name: never dropped
         addressed = r["intent"] != "ignore"
+        if in_dialog and r["intent"] in ("ignore", "unclear"):
+            # in a conversation with this same person nothing is dropped: Claude
+            # has the context and answers <молчу> if it was not for her. The answer
+            # to her own question «Что написать маме?» came as "unclear" and was
+            # thrown away; 7 of 14 phrases dropped after her replies were real
+            # follow-ups (2026-11-19..23)
+            log(f"kept in the conversation ({r['intent']} by the router)")
+            r["intent"] = "claude"
+            addressed = True
         # garbage said to her by name: "не расслышала" (free); without her name
-        # it is mostly a remark to the children in between - silence
+        # and outside a conversation it is mostly a remark in between - silence
         if r["intent"] == "unclear" and not (maybe_named or called):
             addressed = False
     if person.known:
@@ -533,7 +549,7 @@ def on_phrase(item):
         memory.write("user", text, speaker=person.profile, dialog=in_dialog, addressed=addressed,
                      voice_sim=sim, dur=item.get("dur"))
     if addressed and r is not None and r["intent"] != "claude":
-        state.update(talker=person, talker_voice=item.get("voice"), talker_doa=item.get("doa"))
+        state.update(talker=person, talker_voice=item.get("voice"), talker_doa=item.get("doa"), asked_at=began)
         WORK.put((text, person, r))
         return
     if addressed:
@@ -543,7 +559,9 @@ def on_phrase(item):
             # she gets told it is not her last talker (an unknown voice is not "probably the same")
             note = (f"[система: это другой голос, не {prev.name or 'тот, с кем ты говорила'}; "
                     f"тебя по имени не назвали - скорее всего, люди говорят между собой]")
-        state.update(talker=person, talker_voice=item.get("voice"), talker_doa=item.get("doa"))
+        elif unanswered:
+            note = "[система: это продолжение предыдущей просьбы того же человека - она ещё не договорила, когда ты начала отвечать]"
+        state.update(talker=person, talker_voice=item.get("voice"), talker_doa=item.get("doa"), asked_at=began)
         WORK.put((text, person, None, note))
     else:
         log(f"not for Eva: {text!r}")
