@@ -165,20 +165,34 @@ class Vad:
 
 
 class HighPass:
-    """One-pole DC / rumble filter (~60 Hz at 16 kHz), continuous across chunks."""
+    """Rumble filter: 4th-order Butterworth high-pass at 120 Hz (two biquads,
+    continuous across chunks): -32 dB at 48 Hz, -0.7 dB at 150 Hz.
+    The one-pole filter at ~60 Hz before it let a 46-49 Hz rumble (a machine
+    in the room, 2026-11-23) through almost whole (-4 dB): it set the phrase
+    normalisation and the VAD heard no speech - every phrase came out empty."""
+
+    SOS = ((0.9402805365982765, -1.880561073196553, 0.9402805365982765, -1.9144610905921862, 0.9165887437442231),
+           (1.0, -2.0, 1.0, -1.9624037752498193, 0.9645847099256387))   # b0 b1 b2 a1 a2, scipy butter(4, 120, fs=16000)
 
     def __init__(self):
-        self.px = self.py = 0.0
+        self.z = [[0.0, 0.0] for _ in self.SOS]
 
     def __call__(self, v):
-        out = np.empty_like(v)
-        px, py = self.px, self.py
-        for i, s in enumerate(v):
-            py = 0.977 * (py + s - px)
-            px = s
-            out[i] = py
-        self.px, self.py = px, py
-        return out
+        # plain floats and a list: indexing a numpy array per sample was 4x slower
+        # on the Station's A53 (7.9 ms a chunk)
+        out = np.asarray(v, dtype=np.float64).tolist()
+        for (b0, b1, b2, a1, a2), z in zip(self.SOS, self.z):
+            z1, z2 = z
+            res = []
+            append = res.append
+            for x in out:                   # direct form II transposed
+                y = b0 * x + z1
+                z1 = b1 * x - a1 * y + z2
+                z2 = b2 * x - a2 * y
+                append(y)
+            z[0], z[1] = z1, z2
+            out = res
+        return np.array(out)
 
 
 DOA_URL = STT_URL.rsplit("/", 1)[0] + "/doa"
