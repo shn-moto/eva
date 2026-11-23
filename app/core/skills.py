@@ -117,8 +117,14 @@ def run(block, person):
         return {"type": "tool_result", "tool_use_id": block.id, "is_error": True, "content": "bad tool call"}, None
     if not person.may(tool.needs):
         log(f"tool {tool.name}: denied for {person.name or 'unknown voice'}")
+        # the reason, so she can say it (a bare "no access" made her answer "I do not know why")
+        why = {"adult": "это только для взрослых", "admin": "это может только хозяин системы",
+               "private": "личное - только дома, голосом", "control": "управлять домом можно только дома, голосом",
+               "screen": "экран - только голосом у колонки"}.get(tool.needs, "этому человеку это не разрешено")
+        if not person.known:
+            why = "голос не узнан - личное и действия только для своих"
         return {"type": "tool_result", "tool_use_id": block.id, "is_error": True,
-                "content": "Нет доступа: этому человеку это не разрешено."}, None
+                "content": f"Нет доступа: {why}."}, None
     # required: present and not empty - a string with text, a list with items
     # (a list of devices was taken for "missing", 2026-11-20)
     missing = [k for k in tool.schema.get("required", [])

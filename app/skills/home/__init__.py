@@ -196,7 +196,8 @@ SKILL = Skill(
         schema={"type": "object", "additionalProperties": False, "required": ["text"],
                 "properties": {"text": {"type": "string"}}},
         handler=say_home,
-        needs="adult",
+        # children too: calling someone at home is not money or acting in the house
+        needs="known",
     ), Tool(
         name="send_message",
         description="Написать члену семьи в Телеграм от себя (у кого Телеграм есть в photolib): передать "
@@ -204,6 +205,9 @@ SKILL = Skill(
         schema={"type": "object", "additionalProperties": False, "required": ["name", "text"],
                 "properties": {"name": {"type": "string"}, "text": {"type": "string"}}},
         handler=send,
-        needs="adult",
+        # children too - a child asking Eva to write to mum was refused ("adult"),
+        # and she could not say why (2026-11-23). Only to family members with a
+        # Telegram in photolib (_family_chat), so not to strangers.
+        needs="known",
     )],
 )
