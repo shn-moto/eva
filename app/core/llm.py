@@ -15,26 +15,27 @@ import time
 import anthropic
 
 from core import cost, skills
+from core import profile
 from core.util import log, secrets
 
-MODEL = os.environ.get("EVA_MODEL", "claude-sonnet-5-5")   # user choice 2026-11-18: ~0.4 s faster than Opus
-EFFORT = os.environ.get("EVA_EFFORT", "low")
+MODEL = profile.tune("llm.model", "claude-sonnet-5-5")   # user choice 2026-11-18: ~0.4 s faster than Opus
+EFFORT = profile.tune("llm.effort", "low")
 CLIENT = anthropic.Anthropic(api_key=secrets()["ANTHROPIC_API_KEY"], max_retries=1, timeout=30)
-ROUNDS = 8                           # tool rounds in one answer (an agent: look, then act, then report)
+ROUNDS = profile.tune("llm.rounds", 8)                           # tool rounds in one answer (an agent: look, then act, then report)
 # Weighing what the tools gave and deciding the next step is the agent's work:
 # Opus at medium (Иван, 2026-11-20 - Sonnet low took one short word for "Маша
 # is at home"). The voice keeps Sonnet low for its first round (the first word,
 # small talk, "сейчас гляну"); once a tool has run, the rounds go to Opus.
 # Text channels: Opus medium all the way, no one waits for a first word there.
-AGENT_MODEL = os.environ.get("EVA_AGENT_MODEL", "claude-opus-5-5")
-AGENT_EFFORT = os.environ.get("EVA_AGENT_EFFORT", "medium")
+AGENT_MODEL = profile.tune("llm.agent_model", "claude-opus-5-5")
+AGENT_EFFORT = profile.tune("llm.agent_effort", "medium")
 # ...but only when there is something to think over. A simple action is done
 # by Sonnet to the end: «выключи музыку» went Sonnet -> tool -> Opus, and Opus
 # (its own cache, cold) wrote 26k tokens to say "Выключила музыку" - $0.16
 # (2026-11-21). Opus comes in after a tool that brings data to weigh; any tool
 # not listed here counts as such.
-LIGHT_TOOLS = {"music_play", "music_control", "screen", "panel", "avatar", "say_at_home", "send_message",
-               "eva_spend", "photo_indexing", "show_html", "show_feed"}
+LIGHT_TOOLS = profile.tune("llm.light_tools", {"music_play", "music_control", "screen", "panel", "avatar", "say_at_home", "send_message",
+               "eva_spend", "photo_indexing", "show_html", "show_feed"})
 
 
 def _escalate(message, params):
@@ -48,7 +49,7 @@ def _escalate(message, params):
     return dict(params, model=AGENT_MODEL, output_config={"effort": AGENT_EFFORT})
 
 
-KEEP_RESULT = 1500                   # chars of a tool result kept in the conversation history (4000 was 60 % of it)
+KEEP_RESULT = profile.tune("llm.keep_result", 1500)                   # chars of a tool result kept in the conversation history (4000 was 60 % of it)
 
 
 def _params(system, person, max_tokens, effort=None, model=None):
@@ -152,8 +153,8 @@ def prepare(history, person):
 # How much of a conversation she keeps: by volume, not by time (Иван,
 # 2026-11-20) - a quiet day is remembered for days, a busy one for hours.
 # ~40k characters is ~15k tokens a request, read mostly from the cache.
-HISTORY_CHARS = int(os.environ.get("EVA_HISTORY_CHARS", "24000"))   # 40000 was ~10k tokens a request
-TRIM_TO = 0.6
+HISTORY_CHARS = profile.tune("llm.history_chars", 24000)   # 40000 was ~10k tokens a request
+TRIM_TO = profile.tune("llm.trim_to", 0.6)
 
 
 def _size(m):

@@ -32,7 +32,7 @@ def breakdown(args, person):
     d = _get("/api/breakdown", period=args["period"], kind=args.get("kind") or "expense", user=args.get("user"))
     t = d.get("totals") or {}
     cats = "; ".join(f"{c['category']}: {c['total']} ({c['count']})" for c in d.get("categories", []))
-    return (f"{args['period']}: доход {t.get('income')}, расход {t.get('expense')}, итог {t.get('net')} (PLN). "
+    return (f"{args['period']}: доход {t.get('income')}, расход {t.get('expense')}, итог {t.get('net')}{' ' + profile.CURRENCY if profile.CURRENCY else ''}. "
             f"По категориям (сумма, число операций): {cats}")
 
 
@@ -63,7 +63,7 @@ PROMPT = """## Финансы (банковские выписки семьи)
 
 finance_breakdown - доходы/расходы за месяц (YYYY-MM) или год (YYYY) по
 категориям; finance_series - категории по месяцам за период (для графиков и
-сравнений); finance_transactions - операции. Суммы в злотых (PLN), считает
+сравнений); finance_transactions - операции. Суммы в валюте счёта""" + (f" ({profile.CURRENCY})" if profile.CURRENCY else "") + """, считает
 портал home-finances. user - чей счёт: """ + ", ".join(f"{k} ({v})" for k, v in profile.FINANCE_USERS.items()) + """; без него - все."""
 
 _USER = {"type": "string", "enum": list(profile.FINANCE_USERS) or ["me"]}

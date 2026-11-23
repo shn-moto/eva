@@ -11,6 +11,10 @@ texts (BOOTSTRAP.md, LEGEND.md, PRIVATE.md, names.json) live next to it.
     household.finance_users  login in the finance service -> the person's name
     speech.stt_fixes         [regex, replacement]: names the recogniser always mangles
     speech.hotwords          names to push up in recognition
+    household.currency       what the finance service counts in ("PLN")
+    household.document_tags  photolib tag ids whose photos are documents (hidden, private)
+    skills                   the skills this home has (names of app/skills packages); absent = all
+    tuning.<module.name>     any tuning value (see tune()): thresholds, windows, models, limits
     services.hub             the server that runs the heavy services (STT, router, music...)
     services.<name>          URL of one service; "{hub}" is replaced. An environment
                              variable EVA_<NAME>_URL overrides it.
@@ -40,6 +44,9 @@ VOICE_CALL = dict(_H.get("voice_call", {}))
 VOICE_PERSON = {k: int(v) for k, v in _H.get("voice_person", {}).items()}
 VOICE_ALIASES = {k: set(v) for k, v in _H.get("voice_aliases", {}).items()}
 FINANCE_USERS = dict(_H.get("finance_users", {}))
+CURRENCY = _H.get("currency", "")
+SKILLS = set(_P["skills"]) if isinstance(_P.get("skills"), list) else None   # None: all skills in app/skills
+DOCUMENT_TAGS = tuple(_H.get("document_tags", []))
 STT_FIXES = [tuple(x) for x in _S.get("stt_fixes", [])]
 HOTWORDS = list(_S.get("hotwords", []))
 HUB = os.environ.get("EVA_HUB", _SV.get("hub", "127.0.0.1"))
@@ -55,6 +62,29 @@ DEFAULTS = {
     "finance": "http://{hub}:8686",
     "power": "http://{hub}:8484",
 }
+
+
+_T = _P.get("tuning", {})
+
+
+def tune(key, default):
+    """A tuning value: env EVA_<KEY> (dots -> _), else profile.json tuning.<key>,
+    else `default` - the value measured here, kept in the code next to the
+    reason for it. The type follows the default (a list for a tuple default
+    becomes a tuple)."""
+    env = os.environ.get("EVA_" + key.upper().replace(".", "_"))
+    if env is None and key not in _T:
+        return default
+    v = env if env is not None else _T[key]
+    if isinstance(default, bool):
+        return v if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes")
+    if isinstance(default, int):
+        return int(float(v))
+    if isinstance(default, float):
+        return float(v)
+    if isinstance(default, (tuple, list, set, frozenset)):
+        return type(default)(json.loads(v) if isinstance(v, str) else v)
+    return v
 
 
 def service(name):

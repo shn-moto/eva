@@ -23,14 +23,14 @@ from core.speech import Voice, ui
 from core.util import log, ru_now
 
 GATE_URL = profile.service("gate")
-DIALOG_WINDOW = 10.0          # s after Eva last spoke: a phrase is likely for her (25 held on too long, 2026-11-19)
+DIALOG_WINDOW = profile.tune("dialog.window", 10.0)          # s after Eva last spoke: a phrase is likely for her (25 held on too long, 2026-11-19)
 # The conversation survives a restart: two power-cut reboots on 2026-11-19 wiped
 # it and she congratulated on the birthday again each time.
 HISTORY_FILE = "/var/lib/eva/history.json"
 # how much she keeps: llm.HISTORY_CHARS (by volume, not by time - 2026-11-20)
 CONTINUE = "<продолжи>"
 # said when a tool call begins and she has not said anything yet (sounds cached at start)
-FILLERS = ["Секунду, сейчас посмотрю.", "Сейчас гляну.", "Погоди, посмотрю.", "Так, сейчас посмотрю."]       # a job: finish the reply that was cut by someone else
+FILLERS = profile.tune("dialog.fillers", ["Секунду, сейчас посмотрю.", "Сейчас гляну.", "Погоди, посмотрю.", "Так, сейчас посмотрю."])
 
 # a call is the vocative: «почему ты назвал её Евой» is about her, not to her
 # (Лиза asked Иван that and Eva answered, 2026-11-19)
@@ -43,7 +43,7 @@ MAYBE_NAME = re.compile(r"^\s*(е|э|и|ив|иве|ева\w*|эва\w*|эв|е�
 # a call on its own, the question comes after a pause ("Ева, … кто такая Ольга"
 # arrived as "евро" + "кто такая ольга")
 CALL_ONLY = re.compile(r"^\s*(?:эй\s+|слушай\s+)?(ева\w{0,3}|эва\w{0,2}|ев\w{0,2}|эв\w{0,2}|ив\w?|иве)\s*$", re.I)
-CALL_WINDOW = 6.0             # s after a call: the next phrase is for her
+CALL_WINDOW = profile.tune("dialog.call_window", 6.0)             # s after a call: the next phrase is for her
 STOP = re.compile(r"\b(стоп|хватит|замолчи|молчи|тихо|тише|подожди|погоди|остановись|"
                   r"перестань|прекрати|отстань|достаточно|всё|все|пауза|заткнись)\b", re.I)
 # everyday words that are a stop only said almost alone ("всё!", "тихо!"), not
@@ -53,7 +53,7 @@ WEAK_STOP = {"все", "всё", "тихо", "тише"}
 # voice): ignored while she talks - unless a family voice is in it too (a
 # "стоп" said over her). Measured 2026-11-19: family voices 0.0-0.22, her
 # clean TTS 0.72-1.0; through the room it is lower - to be tuned on the logs.
-SELF_SIM, SELF_MARGIN = 0.45, 0.1
+SELF_SIM, SELF_MARGIN = profile.tune("dialog.self_sim", 0.45), profile.tune("dialog.self_margin", 0.1)
 # "запомни мой голос, я Маша" / "я Лиза, запомни мой голос" / "меня зовут Миша, запомни голос"
 ENROLL = re.compile(r"запомни\s+(?:мой\s+)?голос\w*(?:\s+как|\s*,?\s*я|\s*,?\s*это)?\s+([а-яёa-z]+)", re.I)
 INTRO = re.compile(r"(?:\bя\s+|меня\s+зовут\s+|это\s+)([а-яё]+)\b.*запомни\s+(?:мой\s+)?голос", re.I)
@@ -75,7 +75,7 @@ HEARD = []                    # (time, foreign words) heard over her voice, last
 # his phrase ends (or LISTEN_IDLE after the last thing heard).
 LISTEN = {"active": False, "parts": [], "deadline": 0.0}
 LISTEN_LOCK = threading.Lock()
-LISTEN_IDLE = 2.5
+LISTEN_IDLE = profile.tune("dialog.listen_idle", 2.5)
 
 
 def intro_name(text, m):
@@ -550,7 +550,7 @@ def on_phrase(item):
         ui({"type": "hear", "state": "ignored", "text": text})
 
 
-SAME_VOICE = 0.5             # CAM++ similarity of two phrases of one person
+SAME_VOICE = profile.tune("dialog.same_voice", 0.5)             # CAM++ similarity of two phrases of one person
 
 
 def same_speaker(person, voice):
@@ -582,8 +582,8 @@ MUSIC_WORDS = [(("стоп", "хватит", "выключи", "выключай
 # next is the answer, sent back to them by the system - Иван's «отлично» to
 # Маша's message stayed with Eva, unrecognised and taken as not for her
 # (2026-11-20).
-RELAY_WAIT = 180              # s she waits for the answer
-RELAY_GAP = 4.0               # s of quiet after the last phrase: the answer is complete
+RELAY_WAIT = profile.tune("dialog.relay_wait", 180)              # s she waits for the answer
+RELAY_GAP = profile.tune("dialog.relay_gap", 4.0)               # s of quiet after the last phrase: the answer is complete
 RELAY = {"to": None, "until": 0.0, "parts": [], "timer": None}
 RELAY_LOCK = threading.Lock()
 
@@ -629,10 +629,10 @@ def relay_send():
     save_history()
 
 
-MUSIC_CMD_ONCE = 2.5          # s: the same music command again is the same command
+MUSIC_CMD_ONCE = profile.tune("dialog.music_cmd_once", 2.5)          # s: the same music command again is the same command
 MUSIC_FILLER = {"пожалуйста", "музыку", "музыка", "песню", "песня", "трек", "эту", "это", "ну", "а", "давай",
                 "включи", "сделай", "немного", "чуть", "чуть-чуть", "по", "поставь", "на"}
-MUSIC_CMD_FAM = 0.4           # a family-like voice: a word of the song itself is not a command
+MUSIC_CMD_FAM = profile.tune("dialog.music_cmd_family", 0.4)           # a family-like voice: a word of the song itself is not a command
 
 
 def music_down():

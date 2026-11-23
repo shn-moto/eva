@@ -221,7 +221,7 @@ def _text_search(query, person_ids, date_from, date_to, top_k, area=None):
     return _post("/search/text", body).get("results", [])
 
 
-DOC_TAGS = (3, 9)                    # "document" (system) and "документы": hidden photos
+DOC_TAGS = profile.DOCUMENT_TAGS      # photolib tags whose photos are documents: hidden, private (eva/profile.json)
 
 
 def documents(query="", person_ids=None, want=33):

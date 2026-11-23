@@ -185,5 +185,5 @@ Next:
 **Regression found and fixed.** The in-phrase speaker split (`stt_server.speaker_change`, written 19.11) had been put into the running container with `docker cp` only, never into the source or the image.
 - Recreating the container today lost it; the repo file had also been overwritten by an older copy.
 - Restored from the session transcripts (4 edits replayed onto the v3 source).
-- Now it is in station1/work/stt-docker/stt_server.py and image newalisa-stt:v4.
+- Now it is in services/stt/stt_server.py and image newalisa-stt:v4.
 - Never `docker cp` code into a container.

@@ -58,3 +58,6 @@ ui/spike/vendor*/sample.vrm
 
 # --- runtime state of the setup scripts ---
 scripts/state/
+
+# --- local deploy settings (hosts, keys) ---
+deploy/local.env

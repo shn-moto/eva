@@ -17,8 +17,10 @@
 # on the Station (listed by --diff as "only on the Station").
 set -euo pipefail
 
-STATION=${STATION:-root@192.168.1.20}
-KEY=${KEY:-station1/debian_ed25519}
+# hosts and keys: deploy/local.env (not in git, see local.env.example)
+[ -f deploy/local.env ] && { set -a; . deploy/local.env; set +a; }
+STATION=${STATION:?set STATION in deploy/local.env}
+KEY=${KEY:?set KEY in deploy/local.env}
 SSH=(ssh -i "$KEY" -o ConnectTimeout=10 "$STATION")
 PARTS=(app ui/spike)
 ROOTFS=os/rootfs/files

@@ -11,9 +11,12 @@
 # Models and data stay on the server (bind mounts), not in git.
 set -euo pipefail
 
-HOST=${HOST:-finances@192.168.1.107}
-KEY=${KEY:-$HOME/.ssh/finances_id}
-SSH=(ssh -i "$KEY" -o ConnectTimeout=10 "$HOST")
+# hosts and keys: deploy/local.env (not in git, see local.env.example)
+[ -f deploy/local.env ] && { set -a; . deploy/local.env; set +a; }
+HOST=${HOST:?set HOST in deploy/local.env}
+HUB_KEY=${HUB_KEY:?set HUB_KEY in deploy/local.env}
+HUB_KEY=${HUB_KEY/#\~/$HOME}
+SSH=(ssh -i "$HUB_KEY" -o ConnectTimeout=10 "$HOST")
 
 svc=${1:?service: stt | music | router}
 ref=${2:-origin/main}
@@ -24,14 +27,14 @@ short=$(git rev-parse --short "$sha")
 
 case "$svc" in
 stt)
-    src=station1/work/stt-docker; image=newalisa-stt; name=newalisa-stt; port=8901
+    src=services/stt; image=newalisa-stt; name=newalisa-stt; port=8901
     run="-p 8901:8901 -e STT_ENGINE=gigaam-rnnt -e GIGAAM_DIR=/models/giga3-rnnt -e STT_THREADS=8 \
 -e STT_LOG_DIR=/log -v /etc/localtime:/etc/localtime:ro \
 -v \$HOME/newalisa-stt-v3/models:/models:ro -v \$HOME/eva-data/stt-log:/log"
     cmd="uvicorn stt_server:app --host 0.0.0.0 --port 8901"
     health=/health ;;
 music)
-    src=station1/work/music-docker; image=newalisa-music; name=newalisa-music; port=8904
+    src=services/music; image=newalisa-music; name=newalisa-music; port=8904
     run="-p 8904:8904"; cmd=""; health=/health ;;
 router)
     # no source of ours: the prebuilt llama.cpp CUDA server + a model on the server

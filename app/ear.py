@@ -54,25 +54,25 @@ STT_URL = profile.service("stt")
 BRAIN_URL = os.environ.get("EVA_BRAIN_URL", "http://127.0.0.1:8081/utterance")
 UI_URL = "http://127.0.0.1:8080/api/event"    # the screen (and the LED ring): "I hear you"
 VAD_MODEL = "/opt/eva/models/silero_vad.onnx"
-GAIN = float(os.environ.get("EVA_REF_GAIN", "32"))      # the reference tap (PGA 0.5 dB)
+GAIN = profile.tune("ear.ref_gain", 32.0)      # the reference tap (PGA 0.5 dB)
 # the mics' PGA went 20 -> 36 dB (station-mics-init.sh, 2026-11-23): at 20 dB the
 # ADC's own noise was 3.5x the microphones' and ate ~10 dB of SNR. 16 dB less here
 # keeps the levels the VAD and the canceller were tuned on.
-MIC_GAIN = float(os.environ.get("EVA_MIC_GAIN", "5.07"))
-START_P, END_P = 0.5, 0.35        # speech probability thresholds
-END_SILENCE = 0.65                # s of non-speech that ends a phrase (0.5 cut phrases at a breath)
-TAIL_KEEP = 0.3                   # s of the trailing silence kept for STT
+MIC_GAIN = profile.tune("ear.mic_gain", 5.07)
+START_P, END_P = profile.tune("ear.start_p", 0.5), profile.tune("ear.end_p", 0.35)        # speech probability thresholds
+END_SILENCE = profile.tune("ear.end_silence", 0.65)                # s of non-speech that ends a phrase (0.5 cut phrases at a breath)
+TAIL_KEEP = profile.tune("ear.tail_keep", 0.3)                   # s of the trailing silence kept for STT
 # ...unless only a word or two was said: "Ева, <pause> кто такая Ольга" was cut
 # after "Ева" and the lone name came out as "ево" (test set 2026-11-19)
-SHORT_HEAD, END_SILENCE_SHORT = 0.9, 1.1
-MIN_SPEECH, MAX_SPEECH = 0.35, 15.0
-PREROLL = 20                      # chunks kept before the start (640 ms): a quiet "Ева" at the start was cut
-PLAYBACK_WINDOW = 1.5             # s: while she talks, recognise in windows this long
+SHORT_HEAD, END_SILENCE_SHORT = profile.tune("ear.short_head", 0.9), profile.tune("ear.end_silence_short", 1.1)
+MIN_SPEECH, MAX_SPEECH = profile.tune("ear.min_speech", 0.35), profile.tune("ear.max_speech", 15.0)
+PREROLL = profile.tune("ear.preroll_chunks", 20)                      # chunks kept before the start (640 ms): a quiet "Ева" at the start was cut
+PLAYBACK_WINDOW = profile.tune("ear.playback_window", 1.5)             # s: while she talks, recognise in windows this long
 OVERLAP = 19                      # chunks (~0.6 s) shared by consecutive windows: no word cut in half
 MUSIC_FLAG = "/run/eva/music"          # app/music.py holds it while music plays
 SPEAKING_FLAG = "/run/eva/speaking"   # the brain holds it while her voice plays
-ECHO_RESIDUAL = 0.1               # canceller left <10% of the energy: her own echo
-REF_ACTIVE = 5e-4                 # reference level (of full scale) = speakers playing
+ECHO_RESIDUAL = profile.tune("ear.echo_residual", 0.1)               # canceller left <10% of the energy: her own echo
+REF_ACTIVE = profile.tune("ear.ref_active", 5e-4)                 # reference level (of full scale) = speakers playing
 RECORD_FLAG = "/var/lib/eva/stt-record"   # exists: save phrases as a test set, do not answer
 RECORD_DIR = "/var/lib/eva/stt-samples"
 
@@ -234,7 +234,7 @@ def send_brain(item):
 _SPK = None
 _SPK_LOCK = threading.Lock()
 SPK_MODEL = "/opt/eva/models/campplus.onnx"
-SPK_SECONDS = 3.0                 # the first seconds are enough to know a voice
+SPK_SECONDS = profile.tune("ear.speaker_seconds", 3.0)                 # the first seconds are enough to know a voice
 
 
 def voice_embedding(audio):
@@ -400,8 +400,8 @@ def deliver(seg, meta, text, v, pcm, peak, hold=True):
 # likeliest change of voice (stt_server.speaker_change); taken when the two
 # parts are clearly different voices, or two different family voices.
 # Calibrated 2026-11-19: ~half of such phrases caught, ~2% false splits.
-SPLIT_MIN = 3.0
-SPLIT_SURE = 0.3                  # parts this unlike: two people (0 false splits of 25 single phrases)
+SPLIT_MIN = profile.tune("ear.split_min", 3.0)
+SPLIT_SURE = profile.tune("ear.split_sure", 0.3)                  # parts this unlike: two people (0 false splits of 25 single phrases)
 
 
 def split_ok(ch):

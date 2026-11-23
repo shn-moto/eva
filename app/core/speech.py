@@ -10,6 +10,7 @@ import threading
 import time
 
 import say
+from core import profile
 from core.util import log
 
 NOT_SPOKEN = re.compile("[\\U0001F000-\\U0001FAFF\\u2600-\\u27BF\\uFE0F\\u200D]+")
@@ -140,8 +141,8 @@ class Voice:
 
 
 VOLUME_FILE = "/var/lib/eva/volume"      # percent, kept over restarts
-VOL_DB = (-60.0, -15.0)                  # 0 % .. 100 % of the speakers' master (0.125 dB a step, 1023 = +24 dB)
-VOL_STEP = 0.5                           # % per click of the ring (4 was far too sensitive, 1 still a bit)
+VOL_DB = profile.tune("speech.volume_db", (-60.0, -15.0))                  # 0 % .. 100 % of the speakers' master (0.125 dB a step, 1023 = +24 dB)
+VOL_STEP = profile.tune("speech.volume_step", 0.5)                           # % per click of the ring (4 was far too sensitive, 1 still a bit)
 VOL = {"pct": None, "want": None, "show": False, "mixer": None}
 VOL_LOCK = threading.Condition()
 

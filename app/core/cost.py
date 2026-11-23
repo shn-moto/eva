@@ -11,9 +11,10 @@ import threading
 import time
 
 from core.util import log
+from core import profile
 
 SPEND_FILE = "/var/lib/eva/spend.json"
-DAILY_LIMIT = float(os.environ.get("EVA_DAILY_LIMIT", "3.0"))      # USD a day
+DAILY_LIMIT = profile.tune("cost.daily_limit", 3.0)      # USD a day
 PRICES = {   # model: (input, output, cache read)
     "claude-sonnet-5-5": (2.0, 10.0, 0.10),
     "claude-opus-5-5": (4.0, 20.0, 0.20),

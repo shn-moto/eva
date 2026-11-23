@@ -20,7 +20,7 @@ from core import profile
 from core.util import log
 
 URL = profile.service("router")
-TIMEOUT = 3.0
+TIMEOUT = profile.tune("router.timeout", 3.0)
 
 # intent -> what it needs in args. "claude": anything that needs thinking,
 # facts, memory, photos, money, people, conversation.

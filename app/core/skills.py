@@ -55,9 +55,15 @@ _context = {}
 
 
 def load():
-    """Import every package under app/skills that defines SKILL."""
+    """Import every package under app/skills that defines SKILL - the ones this
+    home has: profile.json "skills" lists them (absent = all). Another home
+    may have no photo archive, finances or power meter."""
+    from core import profile
     import skills as pkg
     for m in pkgutil.iter_modules(pkg.__path__):
+        if profile.SKILLS is not None and m.name not in profile.SKILLS:
+            log(f"skill {m.name}: off in the profile")
+            continue
         try:
             mod = importlib.import_module(f"skills.{m.name}")
         except Exception as e:  # a broken skill must not take Eva down

@@ -1,21 +1,101 @@
 {
   "_comment": "Example of eva/profile.json (app/core/profile.py). Copy to /opt/eva/eva/profile.json on the device and fill in your household. The names here are made up.",
   "household": {
-    "children": ["Лиза", "Соня"],
-    "name_stems": [["иван", "Иван"], ["ван", "Иван"], ["маш", "Маша"], ["мари", "Маша"],
-                   ["лиз", "Лиза"], ["елизавет", "Лиза"], ["сон", "Соня"], ["софи", "Соня"]],
-    "voice_call": {"Ivan": "Иван"},
-    "voice_person": {"Ivan": 1},
-    "voice_aliases": {"Ivan": ["ivan", "иван", "ваня", "папа"]},
-    "finance_users": {"ivan": "Иван", "masha": "Маша"}
+    "children": [
+      "Лиза",
+      "Соня"
+    ],
+    "name_stems": [
+      [
+        "иван",
+        "Иван"
+      ],
+      [
+        "ван",
+        "Иван"
+      ],
+      [
+        "маш",
+        "Маша"
+      ],
+      [
+        "мари",
+        "Маша"
+      ],
+      [
+        "лиз",
+        "Лиза"
+      ],
+      [
+        "елизавет",
+        "Лиза"
+      ],
+      [
+        "сон",
+        "Соня"
+      ],
+      [
+        "софи",
+        "Соня"
+      ]
+    ],
+    "voice_call": {
+      "Ivan": "Иван"
+    },
+    "voice_person": {
+      "Ivan": 1
+    },
+    "voice_aliases": {
+      "Ivan": [
+        "ivan",
+        "иван",
+        "ваня",
+        "папа"
+      ]
+    },
+    "finance_users": {
+      "ivan": "Иван",
+      "masha": "Маша"
+    },
+    "currency": "EUR",
+    "document_tags": []
   },
+  "skills": [
+    "screen",
+    "music",
+    "home",
+    "memory",
+    "family",
+    "photos",
+    "finance",
+    "power"
+  ],
   "speech": {
-    "stt_fixes": [["\\b(?:лис\\w*|лез\\w*)", "лиза"]],
-    "hotwords": ["ева", "лиза", "соня", "маша", "иван"]
+    "stt_fixes": [
+      [
+        "\\b(?:лис\\w*|лез\\w*)",
+        "лиза"
+      ]
+    ],
+    "hotwords": [
+      "ева",
+      "лиза",
+      "соня",
+      "маша",
+      "иван"
+    ]
   },
   "services": {
     "hub": "192.168.0.10",
     "_comment": "Every service defaults to http://{hub}:<port>. Override one: \"stt\": \"http://other-host:8901/stt\". Env EVA_<NAME>_URL wins over both.",
     "stt": "http://{hub}:8901/stt"
+  },
+  "tuning": {
+    "_comment": "Any value from the code, by module.name (see the profile.tune(...) calls). Only what differs from the defaults. Env EVA_<MODULE>_<NAME> wins.",
+    "ear.end_silence": 0.65,
+    "voices.threshold": 0.5,
+    "dialog.window": 10.0,
+    "cost.daily_limit": 3.0,
+    "llm.model": "claude-sonnet-5-5"
   }
 }

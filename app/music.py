@@ -1,5 +1,5 @@
 """The music player on the Station: YouTube Music streamed as MP3 by the music
-service on shn-linux (station1/work/music-docker), played by one mpg123 in
+service on shn-linux (services/music), played by one mpg123 in
 remote-control mode (-R) on the "eva" ALSA mixer (/etc/asound.conf), so her
 voice can sound over it. While she speaks or listens the music is turned down.
 
@@ -23,8 +23,8 @@ from core.util import log
 
 SERVICE = profile.service("music")
 DEVICE = "eva"
-DUCK = 0.2                     # the music's share of its volume while she talks or listens
-VOLUME_STEP = 5                # % of the speakers' master per «громче» / «тише»
+DUCK = profile.tune("music.duck", 0.2)                     # the music's share of its volume while she talks or listens
+VOLUME_STEP = profile.tune("music.volume_step", 5)                # % of the speakers' master per «громче» / «тише»
 
 
 MUSIC_FLAG = "/run/eva/music"     # ear.py: music plays -> listen in short windows over it

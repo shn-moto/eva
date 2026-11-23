@@ -23,17 +23,17 @@ PROFILES = os.path.join(DIR, "speakers.json")
 CLUSTERS = os.path.join(DIR, "speaker_clusters.json")
 AUTO_FILE = os.path.join(DIR, "speakers_auto.json")
 AUTO_MAX, AUTO_MIN_SEC, AUTO_MIN_SIM, AUTO_MIN_LEAD = 30, 2.0, 0.6, 0.2
-THRESHOLD = float(os.environ.get("EVA_SPK_THRESHOLD", "0.5"))
-ID_MARGIN = 0.1             # over the next known voice (profiles cross at up to 0.49)
-LOW_THRESHOLD, LOW_MARGIN = 0.42, 0.15   # a weaker match (another room) with a clear lead
-SHORT_SEC, SHORT_MIN = 1.5, 0.7     # a phrase shorter than this needs a strong match to be named
-CLAIM_MIN = 0.38           # «запомни мой голос, я Иван» from a voice this close to Иван: a refresh
-ENROLL_MATCH = 0.55         # an enrollment sample / a guest cluster like the introduction phrase
-OTHER_MAX = 0.5             # a sample this like another family voice is not taken
-CLUSTER_MATCH = 0.62
+THRESHOLD = profile.tune("voices.threshold", 0.5)
+ID_MARGIN = profile.tune("voices.margin", 0.1)             # over the next known voice (profiles cross at up to 0.49)
+LOW_THRESHOLD, LOW_MARGIN = profile.tune("voices.low_threshold", 0.42), profile.tune("voices.low_margin", 0.15)   # a weaker match (another room) with a clear lead
+SHORT_SEC, SHORT_MIN = profile.tune("voices.short_sec", 1.5), profile.tune("voices.short_min", 0.7)     # a phrase shorter than this needs a strong match to be named
+CLAIM_MIN = profile.tune("voices.claim_min", 0.38)           # «запомни мой голос, я Иван» from a voice this close to Иван: a refresh
+ENROLL_MATCH = profile.tune("voices.enroll_match", 0.55)         # an enrollment sample / a guest cluster like the introduction phrase
+OTHER_MAX = profile.tune("voices.other_max", 0.5)             # a sample this like another family voice is not taken
+CLUSTER_MATCH = profile.tune("voices.cluster_match", 0.62)
 CLUSTER_MAX_EMB = 10
 NEXT_GUEST = [0]            # the next guest number in this run (pruned numbers are not given again)
-CLUSTER_MIN_SEC = 1.2       # short shouts are not clustered
+CLUSTER_MIN_SEC = profile.tune("voices.cluster_min_sec", 1.2)       # short shouts are not clustered
 # profile names as stored -> how Eva calls them (the old profile is "Alex")
 CALL = profile.VOICE_CALL
 # voice profile -> person in the photolib family tree (one Иван for voice and Telegram)

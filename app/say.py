@@ -21,6 +21,7 @@ import urllib.request
 import wave
 
 import numpy as np
+from core import profile
 
 SECRETS = "/etc/eva/secrets.env"
 CACHE = "/var/cache/eva/tts"
@@ -76,7 +77,7 @@ def tts(text):
     return wav
 
 
-CACHE_MAX = 40 * 1024 * 1024      # bytes: every phrase she ever said was kept - 174 MB of a 2 GB root (2026-11-23)
+CACHE_MAX = profile.tune("say.tts_cache_bytes", 40 * 1024 * 1024)      # bytes: every phrase she ever said was kept - 174 MB of a 2 GB root (2026-11-23)
 
 
 def prune():

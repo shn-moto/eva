@@ -14,9 +14,10 @@ import time
 
 from core.speech import ui
 from core.util import log
+from core import profile
 
-PER_PAGE = 11                # 4 x 3 grid on the TV, the 12th place is the face in the corner
-IDLE_CLOSE = 180             # s without a word about the screen: back to the face
+PER_PAGE = profile.tune("screen.per_page", 11)                # 4 x 3 grid on the TV, the 12th place is the face in the corner
+IDLE_CLOSE = profile.tune("screen.idle_close", 180)             # s without a word about the screen: back to the face
 
 _lock = threading.Lock()
 state = {"p": None, "page": 0, "open": None, "touched": 0.0}
