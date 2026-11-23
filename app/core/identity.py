@@ -20,10 +20,23 @@ class Person:
     is_admin: bool = False
     permissions: set = field(default_factory=set)   # photolib sections
     channel: str = "voice"           # voice | telegram
+    telegram_id: str | None = None   # the account writing, when channel is telegram
 
     @property
     def known(self):
         return self.name is not None
+
+    def _remote_admin(self):
+        """Is this Telegram account an admin in photolib - asked of photolib now
+        (its user list, cached a few minutes), not taken from a list here."""
+        if self.channel != "telegram" or not self.telegram_id:
+            return False
+        try:
+            u = photolib.user_by_telegram(self.telegram_id)
+        except Exception as e:
+            log("identity: photolib:", e)
+            return False
+        return bool(u and u.get("is_admin"))
 
     def may(self, need):
         """Access check for a tool's `needs` (docs/ARCHITECTURE.md, Access policy)."""
@@ -34,7 +47,9 @@ class Person:
         if not self.known:
             return False                  # an unknown voice gets no personal data
         if need in REMOTE_LOCKED and self.channel != "voice":
-            return False                  # not even for the admin: a stolen account is the threat
+            # a stolen account is the threat; photolib admins' accounts are the exception for "private"
+            if not (need in REMOTE_ADMIN_OK and self._remote_admin()):
+                return False
         if need == "known" or self.is_admin:
             return True
         if need == "admin":
@@ -52,10 +67,13 @@ ADULTS_EXCLUDED = profile.CHILDREN          # eva/profile.json
 #   "control" - acting in the house: power switching (stove, sockets...), settings.
 # Skills mark such tools with needs="control" / "private".
 REMOTE_LOCKED = {"private", "control"}
+# ...except: "private" (money, documents) in Telegram for the accounts that are
+# admins in photolib (user, 2026-11-23). "control" stays voice-only for everybody.
+REMOTE_ADMIN_OK = set(profile.tune("identity.remote_admin_ok", ["private"]))
 GUEST = Person(None)
 
 
-def _from_users(person_id, name, profile, channel):
+def _from_users(person_id, name, profile, channel, telegram_id=None):
     perms, admin = set(), False
     try:
         for u in photolib.users():
@@ -64,7 +82,8 @@ def _from_users(person_id, name, profile, channel):
                 perms |= set(u.get("permissions") or [])
     except Exception as e:  # photolib away: name only, the most basic rights
         log("identity: photolib:", e)
-    return Person(name, person_id, profile, admin, perms, channel)
+    return Person(name, person_id, profile, admin, perms, channel,
+                  str(telegram_id) if telegram_id else None)
 
 
 def from_voice(label, known):
@@ -83,4 +102,4 @@ def from_telegram(user):
     pid = user.get("person_id")
     profile = next((k for k, v in voices.PERSON.items() if v == pid), None) or user.get("person_name")
     name = user.get("person_name") or user.get("display_name")
-    return _from_users(pid, name, profile, "telegram")
+    return _from_users(pid, name, profile, "telegram", user.get("telegram_id"))

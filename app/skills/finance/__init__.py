@@ -1,7 +1,8 @@
 """Skill "финансы": the family's bank statements in home-finances on shn-linux
 (a home-finances service, :8686) - reading only, through its API, so the
 categories and sums are the ones its portal shows. Money is private: adults,
-at home by voice only ("private" is locked in Telegram)."""
+at home by voice ("private" is locked in Telegram, except for the accounts
+that are admins in photolib - core/identity.py)."""
 import datetime
 import json
 import os
