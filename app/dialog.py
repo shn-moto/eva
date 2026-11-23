@@ -504,7 +504,7 @@ def on_phrase(item):
     # every phrase by its own voice: the dialog window is for the one she talks
     # with, not for whoever speaks next ("теперь можешь разговаривать" - Иван to
     # Лиза, unrecognised - she took as Лиза's and for her, 2026-11-19)
-    other = not same_speaker(person, item.get("voice"))
+    other = not same_speaker(person, item.get("voice"), item.get("doa"))
     if in_dialog and other:
         log(f"dialog window: another voice ({label}), not taken as the conversation")
         in_dialog = False
@@ -533,7 +533,7 @@ def on_phrase(item):
         memory.write("user", text, speaker=person.profile, dialog=in_dialog, addressed=addressed,
                      voice_sim=sim, dur=item.get("dur"))
     if addressed and r is not None and r["intent"] != "claude":
-        state.update(talker=person, talker_voice=item.get("voice"))
+        state.update(talker=person, talker_voice=item.get("voice"), talker_doa=item.get("doa"))
         WORK.put((text, person, r))
         return
     if addressed:
@@ -543,7 +543,7 @@ def on_phrase(item):
             # she gets told it is not her last talker (an unknown voice is not "probably the same")
             note = (f"[система: это другой голос, не {prev.name or 'тот, с кем ты говорила'}; "
                     f"тебя по имени не назвали - скорее всего, люди говорят между собой]")
-        state.update(talker=person, talker_voice=item.get("voice"))
+        state.update(talker=person, talker_voice=item.get("voice"), talker_doa=item.get("doa"))
         WORK.put((text, person, None, note))
     else:
         log(f"not for Eva: {text!r}")
@@ -553,22 +553,47 @@ def on_phrase(item):
 SAME_VOICE = profile.tune("dialog.same_voice", 0.5)             # CAM++ similarity of two phrases of one person
 
 
-def same_speaker(person, voice):
+# Direction (ear -> stt_server /doa: delays of 21 mic pairs). Measured 2026-11-23
+# on 5 places in the room: phrases from one place differ by 0.06-0.39 (mean abs,
+# samples), different places by 0.37-0.61; a phrase finds its own place 66/71.
+# So it tells places apart, not two people standing on the same side.
+DIR_SAME = profile.tune("dialog.direction_same", 0.25)
+DIR_OTHER = profile.tune("dialog.direction_other", 0.45)
+
+
+def direction_gap(doa, prev_doa):
+    """Mean difference of two direction fingerprints, or None."""
+    if not doa or not prev_doa or len(doa.get("lags", [])) != len(prev_doa.get("lags", [])):
+        return None
+    return float(np.mean(np.abs(np.asarray(doa["lags"]) - np.asarray(prev_doa["lags"]))))
+
+
+def same_speaker(person, voice, doa=None):
     """Is this phrase by the person she talked with last? Known voices by
-    their name, the rest by the voice itself."""
+    their name; otherwise by the voice itself, and where the voice cannot tell,
+    by the direction it came from."""
     prev, pv = state.get("talker"), state.get("talker_voice")
     if prev is None:
         return True
     if person.known and prev.known:
         return person.name == prev.name
+    gap = direction_gap(doa, state.get("talker_doa"))
     if voice is None or pv is None:
-        return True                   # no voice to tell by: the benefit of the doubt
+        # no voice to tell by: the direction, else the benefit of the doubt
+        return gap is None or gap < DIR_OTHER
     # one of them unrecognised: by the voice itself. Recognition flickers in a
     # new room (Иван: "Иван", then a guest, then "Иван") and his answers in the
     # window were ignored as "another voice" (2026-11-19 evening); two phrases of
     # one person in one room are far closer to each other than to his profile
     a, b = np.asarray(voice, dtype=np.float32), np.asarray(pv, dtype=np.float32)
-    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9)) >= SAME_VOICE
+    sim = float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+    if gap is not None and abs(sim - SAME_VOICE) < 0.1:
+        # the voice is on the fence: the place decides
+        if gap <= DIR_SAME:
+            return True
+        if gap >= DIR_OTHER:
+            return False
+    return sim >= SAME_VOICE
 
 
 # while music plays: a short command without her name (as in the old assistant)

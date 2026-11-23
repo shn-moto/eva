@@ -18,6 +18,9 @@ NAMES = "/opt/eva/eva/names.json"
 # household phrases and would make them look addressed to Eva (= Claude calls)
 EVA_START = re.compile(r"^(?:ево|евро|ега|иво|ива|яро|е вот)\b\s*")
 EVA_GLUED = re.compile(r"^(?:ево|ега|яро)(стоп|хватит)")
+# "его" starts many household phrases, so only before a stop word it is her name
+# ("его хватит я сам разберусь", test set 2026-11-23)
+EVA_STOP = re.compile(r"^его\s+(стоп|хватит|подожди|погоди)\b")
 # the family's own names the recogniser always mangles: eva/profile.json speech.stt_fixes
 FIXES = [(re.compile(rx), name) for rx, name in profile.STT_FIXES]
 
@@ -32,6 +35,10 @@ def fix(text):
             m = EVA_GLUED.match(t)
             if m:
                 t = "ева " + m.group(1) + t[m.end():]
+            else:
+                m = EVA_STOP.match(t)
+                if m:
+                    t = "ева " + t[4:]
     for rx, name in FIXES:
         t = rx.sub(name, t)
     return t
