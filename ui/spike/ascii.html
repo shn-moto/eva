@@ -122,6 +122,12 @@
   .slidecap { position: absolute; left: 36px; right: 360px; bottom: 26px; font-size: 26px; color: #fff;
     text-shadow: 0 0 10px #000, 0 0 3px #000; line-height: 1.3; }
   .slidecap .t { font-size: 17px; color: #8fe9ff; text-transform: uppercase; letter-spacing: 2px; }
+  /* music under the slideshow: what plays, top right (it no longer stops the slideshow) */
+  .slidemusic { position: absolute; top: 22px; right: 28px; max-width: 55%; font-size: 22px; color: #fff;
+    text-shadow: 0 0 10px #000, 0 0 3px #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: none; }
+  .slidemusic.on { display: block; }
+  .slidemusic em { font-style: normal; color: #8fe9ff; }
   /* the chat column can be hidden: the face takes the whole width */
   #wrap.nochat #chat { display: none; }
   #wrap.nochat:not(.show) #status { right: 3%; }
@@ -567,10 +573,21 @@ function showSlide(v) {
   let box = vbody.querySelector(".slides");
   if (!box) {
     box = el("div", "slides");
-    box.append(img(""), img(""), el("div", "slidecap"));
+    box.append(img(""), img(""), el("div", "slidecap"), el("div", "slidemusic"));
     vbody.replaceChildren(box);
   }
   const [a, b] = box.querySelectorAll("img"), cap = box.querySelector(".slidecap");
+  const mus = box.querySelector(".slidemusic");
+  if (v.music && v.music.title) {
+    mus.replaceChildren((v.music.paused ? "❚❚ " : "♫ ") + v.music.title);
+    if (v.music.artist) mus.append(el("em", "", " — " + v.music.artist));
+    mus.classList.add("on");
+  } else mus.classList.remove("on");
+  if (box.dataset.id === String(v.id)) {       // the same photo, only the music line changed
+    cap.replaceChildren(el("div", "t", v.title || ""), el("div", "", v.caption || ""));
+    return;
+  }
+  box.dataset.id = String(v.id);
   const cur = a.classList.contains("on") ? a : b.classList.contains("on") ? b : null;
   const nxt = cur === a ? b : a;
   nxt.onload = () => { nxt.classList.add("on"); if (cur && cur !== nxt) cur.classList.remove("on"); };

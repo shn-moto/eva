@@ -47,15 +47,26 @@ def _items():
 
 
 def _back():
-    """Nothing shown on top: the music player if music plays, else the face."""
+    """Nothing shown on top: the slideshow if it runs, the music player if
+    music plays, else the face."""
     import music
+    import slideshow
+    if slideshow.reshow():
+        return
     ev = music.PLAYER.view_event()
     ui(ev or {"type": "view", "kind": "close"})
 
 
+def back():
+    """For the slideshow when it stops: the player or the face."""
+    _back()
+
+
 def music_closed():
-    """The music stopped: the face comes back (unless pictures are shown)."""
-    if state["p"] is None:
+    """The music stopped: the face comes back (unless pictures or the
+    slideshow are shown - the slideshow just loses its track line)."""
+    import slideshow
+    if state["p"] is None and not slideshow.reshow():
         ui({"type": "view", "kind": "close"})
 
 
@@ -107,9 +118,11 @@ def describe():
     if p is None:
         import music
         import slideshow
+        shown = slideshow.describe()
         if music.PLAYER.active():
-            return "На экране плеер. " + music.PLAYER.describe()
-        return slideshow.describe() or "На экране только твоё лицо."
+            # the slideshow runs over music too: both, the photo first
+            return (shown + " " if shown else "На экране плеер. ") + music.PLAYER.describe()
+        return shown or "На экране только твоё лицо."
     items = _items()
     if state["open"] is not None:
         return f"Открыто фото {state['open'] + 1} из {len(items)}."

@@ -77,21 +77,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
 def start_slideshow():
     """Family photos on the TV when nobody needs her (app/slideshow.py)."""
     import time
-    seen = {"music": time.time()}        # a fresh start counts as activity: no slideshow right away
+    started = time.time()                # a fresh start counts as activity: no slideshow right away
 
     def busy():
         return bool(dialog.music_down()) or dialog.PENDING["text"] is not None
 
     def last_activity():
-        if music.PLAYER.active():
-            seen["music"] = time.time()
+        # music is not activity: the slideshow runs over it and names the track
         return max(dialog.state["last_spoke"], dialog.state.get("asked_at", 0.0), screen.state["touched"],
-                   dialog.VOICE.busy_until, seen["music"])
+                   dialog.VOICE.busy_until, started)
 
     def screen_free():
-        return screen.state["p"] is None and not music.PLAYER.active()
+        return screen.state["p"] is None
 
-    threading.Thread(target=slideshow.run, args=(busy, last_activity, screen_free), daemon=True).start()
+    threading.Thread(target=slideshow.run, args=(busy, last_activity, screen_free, screen.back),
+                     daemon=True).start()
 
 
 if __name__ == "__main__":

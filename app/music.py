@@ -276,9 +276,13 @@ class Player:
                          for x in self.queue[self.index + 1:self.index + 6]]}
 
     def view(self):
-        """The player on the TV - unless a picture view is open over it."""
+        """The player on the TV - unless a picture view is open over it, or the
+        slideshow runs (then only its line about the track changes)."""
         from core import screen
+        import slideshow
         if screen.state["p"] is None:
+            if slideshow.reshow():
+                return
             ev = self.view_event()
             if ev:
                 ui(ev)

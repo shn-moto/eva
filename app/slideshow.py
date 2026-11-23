@@ -255,10 +255,30 @@ def describe():
     return f"{lead} ({c['title']}): фото id {c['id']}, {_caption(c.get('date'))}{who}."
 
 
+def _music():
+    """The track playing, for a line on the slide: music no longer keeps the
+    slideshow away, the slide says what plays instead (Иван, 2026-11-23)."""
+    import music
+    t = music.PLAYER.now() if music.PLAYER.active() else None
+    if not t:
+        return None
+    return {"title": music.clean(t.get("title")), "artist": music.clean(t.get("artist")),
+            "paused": music.PLAYER.paused}
+
+
 def _show(item):
     state["current"] = item
     ui({"type": "view", "kind": "slide", "id": item["id"], "title": item["title"],
-        "caption": _caption(item.get("date"), ", ".join(item.get("people", [])))})
+        "caption": _caption(item.get("date"), ", ".join(item.get("people", []))), "music": _music()})
+
+
+def reshow():
+    """The same photo again with the music line as it is now (a new track, the
+    music stopped) - instead of the player covering the slideshow."""
+    if state["on"] and state["current"]:
+        _show(state["current"])
+        return True
+    return False
 
 
 def stop(why=""):
@@ -269,10 +289,12 @@ def stop(why=""):
     log(f"slideshow: stop ({why})")
 
 
-def run(busy, last_activity, screen_free):
+def run(busy, last_activity, screen_free, restore=None):
     """The loop (a thread of the brain). busy() - she is wanted right now;
-    last_activity() - time of the last conversation / screen / music;
-    screen_free() - nothing else on the TV."""
+    last_activity() - time of the last conversation / screen use;
+    screen_free() - no pictures of a tool on the TV (the music player does not
+    count); restore() - what the TV shows when the slideshow stops (the player
+    if music plays, else the face)."""
     if not ENABLED:
         log("slideshow: off in the profile")
         return
@@ -283,8 +305,8 @@ def run(busy, last_activity, screen_free):
             idle = not busy() and screen_free() and time.time() - last_activity() >= IDLE_AFTER
             if state["on"] and not idle:
                 stop("she is wanted" if busy() else "the screen is used")
-                if screen_free():                 # nothing else took the screen: the face comes back
-                    ui({"type": "view", "kind": "close"})
+                if screen_free():                 # nothing else took the screen: player or face again
+                    (restore or (lambda: ui({"type": "view", "kind": "close"})))()
                 continue
             if not idle:
                 continue
