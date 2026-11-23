@@ -3,9 +3,10 @@
 
     python bench.py MODEL LOG_DIR OUT_DIR [--threads 4]
 
-MODEL: gigaam-emo | emotion2vec | audeering-dim | ast-audioset
+MODEL: gigaam-emo | emotion2vec | audeering-dim | ast-audioset | panns-cnn14
 LOG_DIR: the STT log (<date>/<time>.wav + .json, mono 16 kHz; the 7-channel
-         "-raw7" recordings are skipped).
+         "-raw7" recordings are skipped), or ESC-50 (its class becomes the text;
+         env CLASSES=a,b,c takes only those classes). Other rates are resampled.
 Writes OUT_DIR/<model>.jsonl (one line per phrase) and OUT_DIR/<model>.meta.json
 (load time, peak memory, seconds per phrase, real-time factor).
 
@@ -35,15 +36,33 @@ def rss_mb():
 
 def read(path):
     with wave.open(path) as w:
-        if w.getnchannels() != 1 or w.getframerate() != 16000:
+        ch, rate = w.getnchannels(), w.getframerate()
+        if ch != 1:
             return None
-        a = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
-    return a.astype(np.float32) / 32768
+        a = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+    if rate != 16000:                   # public sets (ESC-50: 44.1 kHz)
+        import librosa
+        a = librosa.resample(a, orig_sr=rate, target_sr=16000)
+    return a
+
+
+def esc50_labels(log_dir):
+    """ESC-50 layout (<root>/audio/*.wav + <root>/meta/esc50.csv): file -> category."""
+    import csv
+    meta = os.path.join(log_dir, "meta", "esc50.csv")
+    if not os.path.exists(meta):
+        return {}
+    return {r["filename"]: r["category"] for r in csv.DictReader(open(meta))}
 
 
 def phrases(log_dir):
+    labels = esc50_labels(log_dir)
+    only = set(filter(None, os.environ.get("CLASSES", "").split(",")))
     for wav in sorted(glob.glob(os.path.join(log_dir, "**", "*.wav"), recursive=True)):
         if "-raw" in os.path.basename(wav):
+            continue
+        cls = labels.get(os.path.basename(wav))
+        if only and cls not in only:
             continue
         audio = read(wav)
         if audio is None or len(audio) < 8000:     # < 0.5 s: nothing to judge
@@ -53,6 +72,8 @@ def phrases(log_dir):
             info = json.load(open(wav[:-4] + ".json", encoding="utf-8"))
         except (OSError, ValueError):
             pass
+        if cls:
+            info["text"] = "[" + cls + "]"
         yield wav, audio, info
 
 
@@ -130,8 +151,23 @@ def ast_audioset():
     return run
 
 
+def panns_cnn14():
+    """PANNs CNN14 (AudioSet, 32 kHz): a CNN, its time grows with the clip, unlike AST."""
+    import librosa
+    from panns_inference import AudioTagging, labels
+    m = AudioTagging(checkpoint_path=None, device="cpu")
+
+    def run(path, audio):
+        x = librosa.resample(audio, orig_sr=16000, target_sr=32000)[None, :]
+        p, _ = m.inference(x)
+        r = dict(zip(labels, p[0].tolist()))
+        top = sorted(r.items(), key=lambda kv: -kv[1])[:3]
+        return {"top": [[k, round(v, 3)] for k, v in top], "events": {k: round(r.get(k, 0.0), 3) for k in EVENTS}}
+    return run
+
+
 MODELS = {"gigaam-emo": gigaam_emo, "emotion2vec": emotion2vec, "audeering-dim": audeering_dim,
-          "ast-audioset": ast_audioset}
+          "ast-audioset": ast_audioset, "panns-cnn14": panns_cnn14}
 
 
 def main():

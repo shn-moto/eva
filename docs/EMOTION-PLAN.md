@@ -110,6 +110,44 @@ What it says:
 
 Leaning: GigaAM-Emo for speech emotion (Russian, made sense on the clear cases), audeering arousal as the second axis if memory allows, a CNN AudioSet model for events. Decide after the positive clips.
 
+## Stage 1, second measurement: ESC-50 (2026-11-23)
+
+Data: 15 classes of ESC-50 (CC BY-NC), 40 clips × 5 s each = 600 clips:
+- crying_baby, laughing;
+- 13 sounds of a home: breathing, coughing, sneezing, snoring, cat, dog, knock, footsteps, clapping, keyboard, vacuum, glass breaking, siren.
+
+Plus PANNs CNN14 (AudioSet, 80M) on the STT log.
+
+**PANNs CNN14** - clips with a crying / laughter / scream score above the threshold:
+
+| Class | cry > 0.3 | cry > 0.1 | laugh > 0.3 | scream > 0.3 |
+|---|---|---|---|---|
+| crying_baby (40) | **30** | **38** | 3 | 1 |
+| laughing (40) | 1 | 1 | **12** | 2 |
+| 13 other classes (520) | 0 | 0 | 0 | 0 |
+| our speech, STT log (248) | 0 | 0 | 0 | 0 |
+
+- No false alarm at all: not on the home sounds, not on our speech (the highest cry score on speech: 0).
+- Laughter is weaker (12/40), the threshold for it should be lower and backed by repetition.
+- 0.16 s per phrase (RTF 0.08), 1.2 GB, 0.26 s per 5 s clip. 23x faster than AST.
+
+**The speech-emotion models on non-speech sounds:**
+- GigaAM-Emo: crying baby = "positive" 33/40, dog and glass = "angry", cough = "positive". Meaningless.
+- emotion2vec: closer on voice sounds (crying = sad 32/40, laughing = happy 40/40), but random on the rest (vacuum = sad, siren = fearful).
+- audeering arousal: high for every non-speech sound (0.6-0.84 median against 0.32 for our speech), so it cannot tell crying from a vacuum cleaner.
+
+**Decision for stage 2 (log only):**
+1. **PANNs CNN14 on everything**: every phrase plus the clips from the loudness trigger. It decides what the sound is: speech, crying, laughter, scream, music, TV.
+2. **Speech emotion only where PANNs says speech** and the phrase is ≥ 2 s. GigaAM-Emo (Russian) as the main one; emotion2vec stays the alternative (lighter, better on voice sounds, weaker on Russian - to compare on the week's log).
+3. Memory: PANNs 1.2 GB + GigaAM-Emo 2.4 GB ≈ 3.6 GB of ~5 GB free on the hub. Separate container `voice-events` on the CPU.
+
+**Still not measured:**
+- screaming and shouting (ESC-50 has none);
+- the crying of an older child (ESC-50 is infants);
+- cartoons and the TV as a source of false alarms.
+
+The week of logging (stage 2) answers these on real data; staged clips can speed it up.
+
 ## Open questions
 
 - Which children's states matter most: crying, screaming, fighting, fear? Should a child's "angry" speech without crying trigger too?
