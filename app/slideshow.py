@@ -34,6 +34,7 @@ BIRTHDAY_DAYS = profile.tune("slideshow.birthday_days", 3)   # birthdays within 
 MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа",
           "сентября", "октября", "ноября", "декабря")
 WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
+SEASONS = ("зима", "весна", "лето", "осень")      # by (month % 12) // 3
 
 state = {"on": False, "list": [], "i": 0, "day": None, "current": None}
 _lock = threading.Lock()
@@ -91,7 +92,9 @@ def themes(today, birthdays):
         {"role": "system", "content": "Ты подбираешь темы для показа семейных фото на телевизоре в течение дня. "
                                       "Ответ - JSON."},
         {"role": "user", "content": (
-            f"Сегодня {today.day} {MONTHS[today.month - 1]} {today.year}, {WEEKDAYS[today.weekday()]}. "
+            f"Сегодня {today.day} {MONTHS[today.month - 1]} {today.year}, {WEEKDAYS[today.weekday()]}, "
+            # the season said outright: from the date alone it gave «Лето в доме» in late November (2026-11-23)
+            f"сейчас {SEASONS[(today.month % 12) // 3]} - темы под это время года, не другое. "
             + (f"Скоро дни рождения: {', '.join(birthdays)}. " if birthdays else "")
             + f"Предложи {THEMES} разные темы фото, которые приятно вспомнить именно сегодня: время года, "
               "погода этого сезона, праздники рядом с этой датой, занятия, которые подходят этому дню. "
