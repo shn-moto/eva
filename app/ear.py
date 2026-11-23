@@ -40,6 +40,9 @@ CHUNK = 512                       # 32 ms, Silero's frame
 #   word 4: hi ADC3 R tap (speaker amplifier = the canceller's reference)   lo ADC3 L mic
 MIC_SLOTS = ((1, "h"), (1, "l"), (2, "h"), (2, "l"), (3, "h"), (3, "l"), (4, "l"))
 REF_SLOT = (4, "h")
+# indexes into MIC_SLOTS that are mixed for listening: the high halves of words
+# 1-3, the three mics that always worked (same polarity)
+HEAR_MICS = [0, 2, 4]
 
 
 def unpack(raw):
@@ -565,7 +568,11 @@ def main():
         mics, ref = unpack(raw)
         # both signals through the same filters, without gaps: the canceller
         # needs the reference history continuous to model the echo path
-        y = hp_mic(mics.mean(axis=1) * MIC_GAIN)
+        # what is heard: the mics in HEAR_MICS only. All 7 averaged made her deaf
+        # (2026-11-23): some capsules have the opposite polarity (pair correlation
+        # down to -0.38) and the sum cancelled the voice - VAD max 0.36 while
+        # talking. All 7 still go to the direction (raw7 -> /doa).
+        y = hp_mic(mics[:, HEAR_MICS].mean(axis=1) * MIC_GAIN)
         x = hp_ref(ref * GAIN)
         ref_on = float(np.sqrt(np.mean(x * x))) > REF_ACTIVE * GAIN
         now = time.time()
