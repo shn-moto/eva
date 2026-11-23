@@ -109,20 +109,35 @@ def _tool_round(final, msgs, person, on_show, trace=None, record=None):
         record.append({"role": "user", "content": [dict(r, content=_kept(r.get("content", ""))) for r in results]})
 
 
+def _cut(text):
+    """A long result shortened for the history, and said so. Without the mark she
+    read her own cut result on the next turn, decided she had answered without
+    the data and "confessed" to a guess she never made (2026-11-23, sensors;
+    the same with a photo search on 2026-11-19)."""
+    if len(text) <= KEEP_RESULT:
+        return text
+    return (text[:KEEP_RESULT] + f" …[в истории сокращено: {KEEP_RESULT} из {len(text)} символов. "
+            "Когда ты отвечала, результат был у тебя целиком - твой ответ на нём основан. "
+            "Нужны подробности, которых здесь нет, - запроси снова]")
+
+
 def _kept(content):
-    """A tool result as the history keeps it: text, cut; a picture she looked at
-    as a small copy (~50 tokens; the full one would be sent again with every phrase)."""
+    """A tool result as the history keeps it: text, cut (and marked as cut); a
+    picture she looked at as a small copy (~50 tokens; the full one would be sent
+    again with every phrase)."""
     if isinstance(content, list):
         out = []
         for b in content:
             if b.get("type") == "text":
-                out.append({"type": "text", "text": b["text"][:KEEP_RESULT]})
+                out.append({"type": "text", "text": _cut(b["text"])})
             elif b.get("type") == "image":
                 small = skills.HISTORY_IMAGES.pop(b["source"].get("data", ""), None)
                 if small:
                     out.append({"type": "image", "source": dict(b["source"], data=small)})
+                else:
+                    out.append({"type": "text", "text": "[картинка: ты её видела целиком, в истории не хранится]"})
         return out or "…"
-    return str(content)[:KEEP_RESULT]
+    return _cut(str(content))
 
 
 def prepare(history, person):
