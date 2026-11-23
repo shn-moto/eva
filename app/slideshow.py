@@ -2,9 +2,9 @@
 
 First "on this day" - the same date in earlier years (photolib
 /memories/on-this-day), oldest year first; then what fits the day: the photos
-of whoever has a birthday soon, and a few themes of the day (season, holidays)
-that the local model on the hub picks once a day - no Claude, no cost. Then it
-goes round again.
+of whoever has a birthday soon, and ~20 themes of the day (season, holidays)
+that the local model on the hub picks once a day - no Claude, no cost; then the
+whole archive newest first (photolib /memories/feed), endless.
 
 Starts after IDLE_AFTER without a conversation, a picture on the screen or
 music; stops at once when she is called, talks, shows something or plays music.
@@ -28,9 +28,10 @@ ENABLED = profile.tune("slideshow.enabled", True)
 IDLE_AFTER = profile.tune("slideshow.idle_after", 300.0)     # s without a conversation / screen / music
 SECONDS = profile.tune("slideshow.seconds", 12.0)            # one photo
 PER_YEAR = profile.tune("slideshow.per_year", 4)             # "on this day": photos per year
-THEMES = profile.tune("slideshow.themes", 3)                 # themes of the day from the local model
-PER_THEME = profile.tune("slideshow.per_theme", 8)
+THEMES = profile.tune("slideshow.themes", 20)                # themes of the day from the local model
+PER_THEME = profile.tune("slideshow.per_theme", 16)          # 20 x 16 x 12 s: over an hour before the archive
 BIRTHDAY_DAYS = profile.tune("slideshow.birthday_days", 3)   # birthdays within this many days get their photos
+FEED_GAP = profile.tune("slideshow.feed_gap_min", 30)        # min between archive photos (bursts thinned)
 # never on the TV: photos with these tags (photolib's system tags are out anyway),
 # and - with REQUIRE_GPS - photos without real coordinates: none, 0,0 or the
 # poles are junk in this archive (screens, scans, downloads)
@@ -43,7 +44,7 @@ MONTHS = ("января", "февраля", "марта", "апреля", "ма�
 WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
 SEASONS = ("зима", "весна", "лето", "осень")      # by (month % 12) // 3
 
-state = {"on": False, "list": [], "i": 0, "day": None, "current": None}
+state = {"on": False, "playlist": None, "current": None}
 _lock = threading.Lock()
 
 
@@ -115,22 +116,23 @@ def birthday_photos(today):
     return out
 
 
-def themes(today, birthdays):
+def themes(today):
     """Themes of the day from the local model (the router's server): season,
-    holidays near this date. -> [{"title", "query"}]"""
+    holidays near this date, things people do now. No names: a theme is found
+    by what is in the picture (CLIP), so a theme named after one child's
+    birthday showed another child's birthday (2026-11-23). -> [{"title", "query"}]"""
     body = {"messages": [
-        {"role": "system", "content": "Ты подбираешь темы для показа семейных фото на телевизоре в течение дня. "
+        {"role": "system", "content": "Ты подбираешь темы для показа семейных фото на телевизоре весь день. "
                                       "Ответ - JSON."},
         {"role": "user", "content": (
             f"Сегодня {today.day} {MONTHS[today.month - 1]} {today.year}, {WEEKDAYS[today.weekday()]}, "
             # the season said outright: from the date alone it gave «Лето в доме» in late November (2026-11-23)
             f"сейчас {SEASONS[(today.month % 12) // 3]} - темы под это время года, не другое. "
-            + (f"Скоро дни рождения: {', '.join(birthdays)}. " if birthdays else "")
-            + f"Предложи {THEMES} разные темы фото, которые приятно вспомнить именно сегодня: время года, "
-              "погода этого сезона, праздники рядом с этой датой, занятия, которые подходят этому дню. "
-              "title - коротко по-русски (2-4 слова), query - описание кадра по-английски для поиска "
-              "CLIP (5-10 слов, что видно на фото).")}],
-        "temperature": 0.7, "max_tokens": 300,
+            f"Предложи {THEMES} разных тем фото, которые приятно вспомнить сегодня: погода и природа "
+            "этого сезона, праздники рядом с этой датой, прогулки, поездки, еда, игры, дом, спорт - чтобы "
+            "темы не повторяли друг друга. Без имён людей. title - коротко по-русски (2-4 слова), "
+            "query - что видно на фото, по-английски для поиска CLIP (5-10 слов).")}],
+        "temperature": 0.8, "max_tokens": 1500,
         "response_format": {"type": "json_object", "schema": {
             "type": "object", "required": ["themes"],
             "properties": {"themes": {"type": "array", "items": {
@@ -138,9 +140,15 @@ def themes(today, birthdays):
                 "properties": {"title": {"type": "string"}, "query": {"type": "string"}}}}}}}}
     req = urllib.request.Request(profile.service("router"), data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=60) as r:
         out = json.loads(json.loads(r.read())["choices"][0]["message"]["content"]).get("themes", [])
-    return [t for t in out if t.get("title") and t.get("query")][:THEMES]
+    seen, keep = set(), []
+    for t in out:
+        key = (t.get("title") or "").strip().lower()
+        if key and t.get("query") and key not in seen:
+            seen.add(key)
+            keep.append(t)
+    return keep[:THEMES]
 
 
 def theme_photos(theme):
@@ -148,35 +156,89 @@ def theme_photos(theme):
     good = fit([p["image_id"] for p in photos])
     photos = [p for p in photos if p["image_id"] in good]
     random.shuffle(photos)
-    return [{"id": p["image_id"], "date": p.get("photo_date"), "people": [], "title": theme["title"]}
-            for p in photolib.spread(photos, PER_THEME)]
-
-
-def build(today):
-    """The day's playlist; whatever part fails is left out."""
-    items, seen = [], set()
-    try:
-        bdays = birthday_photos(today)
-    except Exception as e:
-        log("slideshow: birthdays:", e)
-        bdays = []
-    parts = [("on this day", lambda: on_this_day(today)), ("birthdays", lambda: bdays)]
-    try:
-        names = sorted({i["title"].split(":")[0] for i in bdays})
-        for t in themes(today, names):
-            parts.append((f"theme {t['title']!r} ({t['query']})", lambda t=t: theme_photos(t)))
-    except Exception as e:
-        log("slideshow: themes:", e)
-    for name, make in parts:
+    out = []
+    for p in photolib.spread(photos, PER_THEME):
+        # who is really on this photo (faces), not who the theme was about
         try:
-            got = [i for i in make() if i["id"] not in seen]
+            people = photolib.photo_people(p["image_id"])
+        except Exception:
+            people = []
+        out.append({"id": p["image_id"], "date": p.get("photo_date"), "people": people, "title": theme["title"]})
+    return out
+
+
+class Playlist:
+    """The day's slideshow, filled as it goes (no waiting before the first
+    photo): on this day -> birthdays -> the themes of the day -> the archive
+    newest first, endless (the day's selections lasted 9 minutes, there are
+    100k photos, 2026-11-23)."""
+
+    AHEAD = 20                     # photos kept ready
+
+    def __init__(self, today):
+        self.today, self.items, self.i, self.seen = today, [], 0, set()
+        self.filling, self.feed_before = False, None
+        self.sources = self._sources()
+
+    def _sources(self):
+        yield "on this day", lambda: on_this_day(self.today)
+        yield "birthdays", lambda: birthday_photos(self.today)
+        try:
+            ts = themes(self.today)
         except Exception as e:
-            log(f"slideshow: {name}: {e}")
-            continue
-        seen.update(i["id"] for i in got)
-        items += got
-        log(f"slideshow: {name}: {len(got)} photos")
-    return items
+            log("slideshow: themes:", e)
+            ts = []
+        log(f"slideshow: {len(ts)} themes: {', '.join(t['title'] for t in ts)}")
+        for t in ts:
+            yield f"theme {t['title']!r} ({t['query']})", (lambda t=t: theme_photos(t))
+        while True:
+            yield "archive", self._feed
+
+    def _feed(self):
+        q = {"limit": 60, "min_gap": FEED_GAP, "exclude_tags": ",".join(EXCLUDE_TAGS),
+             "require_gps": str(REQUIRE_GPS).lower()}
+        if self.feed_before:
+            q["before"] = self.feed_before
+        d = photolib._get("/memories/feed?" + urllib.parse.urlencode(q))
+        photos = d.get("photos", [])
+        if not photos:                 # past the oldest photo: from the newest again
+            self.feed_before, self.seen = None, set()
+            return []
+        last = datetime.datetime.fromisoformat(photos[-1]["photo_date"][:19])
+        # the next page starts a gap before the last photo: no burst across pages
+        self.feed_before = (last - datetime.timedelta(minutes=FEED_GAP)).isoformat()
+        return [{"id": p["image_id"], "date": p["photo_date"], "people": p.get("people", []),
+                 "title": "Из архива"} for p in photos]
+
+    def _fill(self):
+        try:
+            while len(self.items) - self.i < self.AHEAD:
+                name, make = next(self.sources)
+                try:
+                    got = [x for x in make() if x["id"] not in self.seen]
+                except Exception as e:
+                    log(f"slideshow: {name}: {e}")
+                    time.sleep(5)
+                    continue
+                self.seen.update(x["id"] for x in got)
+                self.items += got
+                if name != "archive":
+                    log(f"slideshow: {name}: {len(got)} photos")
+        finally:
+            self.filling = False
+
+    def ensure(self):
+        if len(self.items) - self.i < self.AHEAD and not self.filling:
+            self.filling = True
+            threading.Thread(target=self._fill, daemon=True).start()
+
+    def next(self):
+        self.ensure()
+        if self.i >= len(self.items):
+            return None                # still filling
+        item = self.items[self.i]
+        self.i += 1
+        return item
 
 
 # -------------------------------------------------------------- the screen --
@@ -227,20 +289,20 @@ def run(busy, last_activity, screen_free):
             if not idle:
                 continue
             today = datetime.date.today()
-            if state["day"] != today or not state["list"]:
-                state.update(list=build(today), i=0, day=today)
-                if not state["list"]:
-                    state["day"] = today            # nothing for today: do not rebuild every second
-                    continue
+            pl = state.get("playlist")
+            if pl is None or pl.today != today:
+                pl = state["playlist"] = Playlist(today)
+            pl.ensure()
+            if time.time() - shown_at < SECONDS:
+                continue
+            item = pl.next()
+            if item is None:
+                continue                          # the first photos are still being found
             if not state["on"]:
                 state["on"] = True
-                log(f"slideshow: start ({len(state['list'])} photos)")
-                shown_at = 0.0
-            if time.time() - shown_at >= SECONDS:
-                item = state["list"][state["i"] % len(state["list"])]
-                state["i"] += 1
-                _show(item)
-                shown_at = time.time()
+                log("slideshow: start")
+            _show(item)
+            shown_at = time.time()
         except Exception as e:
             log("slideshow:", e)
             time.sleep(30)
