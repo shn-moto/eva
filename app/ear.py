@@ -614,6 +614,11 @@ def main():
         # music plays: the same short windows as over her voice, so «Ева…» and
         # «стоп» are caught over it (the reference does not always see the music)
         play_now = ref_on or now < playing_until or os.path.exists(SPEAKING_FLAG) or os.path.exists(MUSIC_FLAG)
+        # HER voice (not music): what counts as her echo - the share of the phrase
+        # under it ("playback") drops it as an echo here and lets only a stop or her
+        # name through in the brain. Music counted too and every command said over
+        # it was thrown away as her echo (2026-11-23)
+        her_now = os.path.exists(SPEAKING_FLAG) or (now < playing_until and not os.path.exists(MUSIC_FLAG))
         # energy before / after the canceller: what it removed was Eva's own echo
         en_in, en_out = float(np.mean(y * y)), float(np.mean(e * e))
         # raw level of the microphones (before any processing): tells a deaf
@@ -627,7 +632,7 @@ def main():
         stats["speech"] += p > START_P
         stats["play"] += now < playing_until
         if not speaking:
-            pre.append((e, play_now, en_in, en_out, mics.astype(np.float32)))
+            pre.append((e, her_now, en_in, en_out, mics.astype(np.float32)))
             if p > START_P:
                 speaking, silence = True, 0.0
                 hearing(True)
@@ -643,7 +648,7 @@ def main():
                     ui("on")
         else:
             seg.append(e)
-            seg_ref.append((play_now, en_in, en_out))
+            seg_ref.append((her_now, en_in, en_out))
             seg_raw.append(mics.astype(np.float32))
             silence = silence + CHUNK / SR if p < END_P else 0.0
             dur = len(seg) * CHUNK / SR
@@ -651,8 +656,7 @@ def main():
             # music they cut every phrase into 1.5 s pieces recognised apart -
             # «педикюра на зрении ева ева что нави установи» (2026-11-23); the
             # VAD hardly reacts to music, so phrases end by silence there too.
-            her_voice = os.path.exists(SPEAKING_FLAG) or (now < playing_until and not os.path.exists(MUSIC_FLAG))
-            if her_voice and dur >= PLAYBACK_WINDOW and silence < END_SILENCE:
+            if her_now and dur >= PLAYBACK_WINDOW and silence < END_SILENCE:
                 # she is talking: her echo keeps the VAD on, so a "стоп" would be
                 # glued into one long phrase of her words. Short overlapping
                 # windows go to recognition instead, each on its own.
