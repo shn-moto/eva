@@ -415,7 +415,7 @@ def _listen_finish(why):
         else:
             WORK.put((CONTINUE, owner, None))
         return
-    if said_something and music_command(re.findall(r"\w+", text.lower()), {"fam_sim": 1.0}):
+    if said_something and music_command(re.findall(r"\w+", text.lower()), {}, addressed=True):
         return
     if said_something:
         log(f"after interruption ({why}): {text!r}")
@@ -535,6 +535,12 @@ def on_phrase(item):
     in_dialog = in_dialog or following
     called = began < state["called_until"]
     state["called_until"] = 0.0
+    if music.PLAYER.active() and not (maybe_named or called or in_dialog):
+        # over music only her name breaks in (Иван, 2026-11-23): no router, no
+        # Claude, no ducking for anything said without it
+        log(f"music plays, no name: {text!r}")
+        ui({"type": "hear", "state": "ignored", "text": text})
+        return
     # the local router first (shn-linux GPU): not for her / a simple command
     # done here / Claude. Without it (down): the old gate.
     last = history[-1]["content"] if history and history[-1]["role"] == "assistant" else None
@@ -735,8 +741,6 @@ def relay_send():
 MUSIC_CMD_ONCE = profile.tune("dialog.music_cmd_once", 2.5)          # s: the same music command again is the same command
 MUSIC_FILLER = {"пожалуйста", "музыку", "музыка", "песню", "песня", "трек", "эту", "это", "ну", "а", "давай",
                 "включи", "сделай", "немного", "чуть", "чуть-чуть", "по", "поставь", "на"}
-MUSIC_CMD_FAM = profile.tune("dialog.music_cmd_family", 0.4)           # a family-like voice: a word of the song itself is not a command
-MUSIC_CMD_GOING_ON = profile.tune("dialog.music_cmd_going_on", 20.0)   # s after a music command: the next short one needs no family voice
 
 
 def music_down():
@@ -748,10 +752,12 @@ def music_down():
             or time.time() < state["called_until"])
 
 
-def music_command(words, item):
-    """«стоп», «пауза», «дальше», «тише»… said while music plays (or is paused),
-    up to three words, not over her voice, by a family-like voice (the ear hears
-    the song too, in windows). True if it was one."""
+def music_command(words, item, addressed=False):
+    """«Ева, стоп / пауза / дальше / тише…» while music plays (or is paused),
+    up to three words besides her name, not over her voice. Only with her name
+    - in the phrase, or just called («Ева…» pause «тише»), or `addressed` (she
+    was interrupted by name): over music nothing else may break in (Иван,
+    2026-11-23: "интерраптить её должно только имя"). True if it was one."""
     if not music.PLAYER.active() or VOICE.speaking():
         return False
     # her name, "please", "музыку" and a repeated word are not the command:
@@ -764,11 +770,7 @@ def music_command(words, item):
         core.append(w)
     if not 1 <= len(core) <= 3:
         return False
-    # a second command right after the first is the same person going on, not a
-    # word of the song: «Ева, сделай тише» worked, the «сделай тише» after it
-    # (voice 0.35 like the family) was dropped (2026-11-23)
-    going_on = time.time() - state.get("music_cmd_at", 0.0) < MUSIC_CMD_GOING_ON
-    if not named and not going_on and (item.get("fam_sim") or 0) < MUSIC_CMD_FAM:
+    if not (named or addressed or time.time() < state["called_until"]):
         return False
     words = core
     for keys, action in MUSIC_WORDS:
