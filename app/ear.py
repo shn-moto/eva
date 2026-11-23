@@ -61,7 +61,7 @@ GAIN = profile.tune("ear.ref_gain", 32.0)      # the reference tap (PGA 0.5 dB)
 # the mics' PGA went 20 -> 36 dB (station-mics-init.sh, 2026-11-23): at 20 dB the
 # ADC's own noise was 3.5x the microphones' and ate ~10 dB of SNR. 16 dB less here
 # keeps the levels the VAD and the canceller were tuned on.
-MIC_GAIN = profile.tune("ear.mic_gain", 5.07)
+MIC_GAIN = profile.tune("ear.mic_gain", 32.0)   # with the mics' PGA at 20 dB (station-mics-init.sh)
 START_P, END_P = profile.tune("ear.start_p", 0.5), profile.tune("ear.end_p", 0.35)        # speech probability thresholds
 END_SILENCE = profile.tune("ear.end_silence", 0.65)                # s of non-speech that ends a phrase (0.5 cut phrases at a breath)
 TAIL_KEEP = profile.tune("ear.tail_keep", 0.3)                   # s of the trailing silence kept for STT
