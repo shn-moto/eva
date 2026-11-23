@@ -68,7 +68,8 @@
     "family",
     "photos",
     "finance",
-    "power"
+    "power",
+    "data"
   ],
   "speech": {
     "stt_fixes": [
@@ -106,5 +107,14 @@
       "aero"
     ],
     "slideshow.require_gps": true
-  }
+  },
+  "databases": [
+    {
+      "_comment": "Databases Eva reads with SQL (skill data). dsn = the key of the connection string in /etc/eva/secrets.env; give her a read-only role. needs: known | adult | admin.",
+      "name": "home",
+      "dsn": "HOME_DB_DSN",
+      "needs": "known",
+      "about": "smart home: devices and rooms, sensor history (temperature, humidity, motion), energy"
+    }
+  ]
 }

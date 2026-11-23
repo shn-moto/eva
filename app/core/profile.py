@@ -47,6 +47,8 @@ FINANCE_USERS = dict(_H.get("finance_users", {}))
 CURRENCY = _H.get("currency", "")
 SKILLS = set(_P["skills"]) if isinstance(_P.get("skills"), list) else None   # None: all skills in app/skills
 DOCUMENT_TAGS = tuple(_H.get("document_tags", []))
+# databases Eva may read (skill "data"): [{name, dsn: <secret key>, needs, about}]
+DATABASES = list(_P.get("databases", []))
 STT_FIXES = [tuple(x) for x in _S.get("stt_fixes", [])]
 HOTWORDS = list(_S.get("hotwords", []))
 HUB = os.environ.get("EVA_HUB", _SV.get("hub", "127.0.0.1"))
