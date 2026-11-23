@@ -1,7 +1,12 @@
-"""Skill "энергия": the Home Power Meter on shn-linux (D:/PRG/Pyton/Home Power
-Meter, :8484) - reading only. Its own API computes the energy (two methods per
-device type, Tuya-cloud verification, charger sessions), so Eva's numbers are
-the ones its dashboard shows; raw SQL over samples would not be.
+"""Skill "дом": the home app (Home Power Meter, service "power") - reading only.
+
+- Energy: power_devices / power_usage. The app's own API computes it (two methods
+  per device type, cloud verification, charger sessions), so Eva's numbers are
+  the ones its dashboard shows; raw SQL over samples would not be.
+- Everything else (sensors and their history, meter readings, automations):
+  home_api_index lists the app's GET /api endpoints from its OpenAPI spec and
+  home_api_get calls any of them. Eva explores instead of a fixed call per
+  question, and a new section of the app needs no change here.
 
 Switching sockets is a different tool (docs/ARCHITECTURE.md: needs adult and a
 confirmation) - not here yet."""
@@ -11,6 +16,7 @@ import os
 import urllib.parse
 
 from core import profile
+import urllib.error
 import urllib.request
 
 from core.skills import Skill, Tool
@@ -47,6 +53,99 @@ def devices(args, person):
     return head + "\nУстройства: " + "; ".join(f"{d['name']} ({d['kind']}, {d['room']})" for d in ds)
 
 
+_index = {"at": 0, "text": ""}
+INDEX_TTL = 600
+# Whole responses can be long (series of a day of samples): the model gets
+# this much and is told to narrow the request (period, start/end, view).
+API_MAX = profile.tune("power.api_max_chars", 14000)
+
+
+def _schema_type(p):
+    s = p.get("schema") or {}
+    t = s.get("type") or "/".join(x.get("type", "") for x in s.get("anyOf", []) if x.get("type") != "null")
+    d = f"={s['default']}" if "default" in s else ""
+    return f"{p['name']}:{t or 'any'}{d}"
+
+
+def api_index(args, person):
+    """The app's read-only API, from its own OpenAPI description - so a new
+    section of the app (sensors, meters, automations) is visible to Eva without
+    a change here."""
+    import time
+    if time.time() - _index["at"] > INDEX_TTL or not _index["text"]:
+        spec = _get("/openapi.json")
+        lines = []
+        for path, methods in spec.get("paths", {}).items():
+            g = methods.get("get")
+            if not g or not path.startswith("/api/"):
+                continue
+            params = ", ".join(_schema_type(p) for p in g.get("parameters", []))
+            doc = (g.get("description") or g.get("summary") or "").strip().split("\n")[0][:120]
+            lines.append(f"GET {path}" + (f" ({params})" if params else "") + (f" - {doc}" if doc else ""))
+        _index.update(at=time.time(), text="\n".join(lines))
+    return _index["text"]
+
+
+SERIES_POINTS = profile.tune("power.series_points", 96)
+
+
+def _is_series(x):
+    """A time series as the app sends it: [[epoch_ms, value], ...]."""
+    return (isinstance(x, list) and len(x) > 8 and all(isinstance(p, list) and len(p) == 2 for p in x[:3])
+            and isinstance(x[0][0], (int, float)) and x[0][0] > 1e12)
+
+
+def _when(ms):
+    return datetime.datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M")
+
+
+def _thin(series):
+    """Any long series -> at most SERIES_POINTS bucket means with local times,
+    plus min / max / last over all of it (the model reads trends, not 2880 samples)."""
+    pts = [p for p in series if p[1] is not None]
+    nums = [p for p in pts if isinstance(p[1], (int, float)) and not isinstance(p[1], bool)]
+    if not nums:                    # on/off and text states: keep the changes only
+        changes = [p for i, p in enumerate(pts) if i == 0 or p[1] != pts[i - 1][1]]
+        return {"changes": [[_when(t), v] for t, v in changes[-SERIES_POINTS:]], "points": len(pts)}
+    step = max(1, -(-len(nums) // SERIES_POINTS))
+    thin = []
+    for i in range(0, len(nums), step):
+        chunk = nums[i:i + step]
+        thin.append([_when(chunk[0][0]), round(sum(v for _, v in chunk) / len(chunk), 2)])
+    lo = min(nums, key=lambda p: p[1])
+    hi = max(nums, key=lambda p: p[1])
+    return {"min": [_when(lo[0]), round(lo[1], 2)], "max": [_when(hi[0]), round(hi[1], 2)],
+            "last": [_when(nums[-1][0]), round(nums[-1][1], 2)],
+            "points": len(nums), "every_min": round(step * (nums[-1][0] - nums[0][0]) / max(len(nums) - 1, 1) / 60000, 1),
+            "series": thin}
+
+
+def _compact(x):
+    if _is_series(x):
+        return _thin(x)
+    if isinstance(x, dict):
+        return {k: _compact(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_compact(v) for v in x]
+    return x
+
+
+def api_get(args, person):
+    path = args["path"].strip()
+    if not path.startswith("/api/") or ".." in path or "?" in path:
+        return "путь должен начинаться с /api/, параметры - в params"
+    params = {k: v for k, v in (args.get("params") or {}).items() if v not in (None, "")}
+    url = path + ("?" + urllib.parse.urlencode(params) if params else "")
+    try:
+        data = _get(url)
+    except urllib.error.HTTPError as e:
+        return f"HTTP {e.code}: {e.read()[:500].decode('utf-8', 'replace')}"
+    text = json.dumps(_compact(data), ensure_ascii=False, separators=(",", ":"))
+    if len(text) > API_MAX:
+        text = text[:API_MAX] + f" …[обрезано: всего {len(text)} символов - сузь запрос: период, start/end, view]"
+    return text
+
+
 def usage(args, person):
     """Energy of the named devices over a date range, in the app's own buckets
     (hours for a day, days for up to ~2 months, months beyond)."""
@@ -73,15 +172,43 @@ def usage(args, person):
 
 SKILL = Skill(
     name="power",
-    summary="энергопотребление дома: устройства, кВт·ч по месяцам/дням/часам, генерация",
-    prompt="""## Энергия (домашний счётчик)
+    summary="дом: электричество (устройства, кВт·ч, генерация) и датчики (температура, влажность, "
+            "движение, двери) с историей - всё, что пишет домашнее приложение",
+    prompt="""## Дом: электричество и датчики (домашнее приложение)
 
-power_devices - список устройств (розетки, автоматы, зарядки машин TESLA и HONDA,
-солнечная генерация) и сводка за месяц. power_usage - кВт·ч выбранных устройств
-за период: по часам за день, по дням за месяц-два, по месяцам за больший срок.
-Цифры считает само приложение счётчика - не пересчитывай их. Чтобы показать
-график, используй show_html.""",
+Домашнее приложение собирает всё: счётчики и розетки, зарядки машин, солнечную
+генерацию, датчики (температура, влажность, движение, двери, шлюз) с историей,
+показания счётчиков, автоматизации. Комнаты - у устройств в поле room.
+
+- power_devices / power_usage - готовое для электричества: список и кВт·ч за
+  период (цифры считает само приложение - не пересчитывай их).
+- Для всего остального - home_api_index (все разделы API с параметрами) и
+  home_api_get (запрос к любому из них, только чтение). Не знаешь, где лежит
+  ответ, - открой индекс и найди сам: «температура в детской» - сводка датчиков,
+  устройство с room «Детская»; история - его sensor-history за нужный период.
+- Смотри на свежесть: last_seen / last_seen_status. Старое значение называй
+  со временем («последнее, что пришло, 1 августа»), а не как текущее.
+Чтобы показать график, используй show_html.""",
     tools=[Tool(
+        name="home_api_index",
+        description="Все разделы (GET /api/...) домашнего приложения с параметрами: электричество, "
+                    "датчики и их история, показания счётчиков, автоматизации. Начни с него, если не "
+                    "знаешь, где лежат данные.",
+        schema={"type": "object", "additionalProperties": False, "properties": {}},
+        handler=api_index,
+        needs="known",
+    ), Tool(
+        name="home_api_get",
+        description="GET-запрос к домашнему приложению (только чтение). path - путь из home_api_index с "
+                    "подставленными {параметрами пути}, например /api/sensors/summary или "
+                    "/api/devices/<device_id>/sensor-history; params - параметры запроса "
+                    "(period, start, end, view...). Длинный ответ обрезается - тогда сузь период.",
+        schema={"type": "object", "additionalProperties": False, "required": ["path"],
+                "properties": {"path": {"type": "string"},
+                               "params": {"type": "object", "additionalProperties": {"type": "string"}}}},
+        handler=api_get,
+        needs="known",
+    ), Tool(
         name="power_devices",
         description="Список устройств домашнего счётчика электроэнергии и сводка за текущий месяц "
                     "(потреблено, сгенерировано, стоимость).",

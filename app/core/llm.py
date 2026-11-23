@@ -35,7 +35,8 @@ AGENT_EFFORT = profile.tune("llm.agent_effort", "medium")
 # (2026-11-21). Opus comes in after a tool that brings data to weigh; any tool
 # not listed here counts as such.
 LIGHT_TOOLS = profile.tune("llm.light_tools", {"music_play", "music_control", "screen", "panel", "avatar", "say_at_home", "send_message",
-               "eva_spend", "photo_indexing", "show_html", "show_feed"})
+               "eva_spend", "photo_indexing", "show_html", "show_feed",
+               "home_api_index", "home_api_get"})
 
 
 def _escalate(message, params):
