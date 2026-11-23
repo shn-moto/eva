@@ -85,6 +85,31 @@ Guards:
    - unknown adult -> camera event (stub).
 4. **Vision** (todo 2): the camera event becomes recording; video confirms who is in the room.
 
+## Stage 1, first measurement (2026-11-23)
+
+Tool: `tools/emotion-bench` (Docker, CPU only, 4 threads, one model per process).
+Data: one day of the STT log, 248 phrases, 507 s, calm everyday speech: no crying or screaming in it.
+
+| Model | Params | Peak RAM | s / phrase | p95 | RTF | Non-neutral on calm speech |
+|---|---|---|---|---|---|---|
+| GigaAM-Emo (Dusha, 4 classes) | ~240M | 2.4 GB | 0.64 | 0.94 | 0.31 | 27% (34 positive, 21 sad, 13 angry) |
+| emotion2vec_plus_base (9 classes) | ~90M | 1.9 GB | 0.42 | 0.70 | 0.21 | 31% (mostly surprised / sad) |
+| audeering msp-dim (arousal / valence) | ~300M | 1.4 GB | 0.59 | 1.04 | 0.29 | arousal p50 0.32, p95 0.55, max 0.79 |
+| AST AudioSet (527 classes) | ~87M | 0.8 GB | 3.62 | 3.69 | 1.77 | top-1 Speech 232/248; crying, screaming, shout, laughter all < 0.06 |
+
+What it says:
+- **Speed is fine** for the speech-emotion models (~0.5 s per phrase on 4 cores). **AST is too slow**: it pads every clip to 10 s, 3.6 s per phrase whatever its length. For sound events take a CNN instead (PANNs CNN14 or EfficientAT) and measure it.
+- **Memory is the limit**: the hub has ~5 GB free, so one speech-emotion model plus a small event model, not two speech-emotion models. An int8 / ONNX export can shrink them later.
+- **One phrase alone is not a signal**:
+  - Short phrases (one word, < 1.5 s) get confident nonsense: a name called softly scored "positive 1.00", "так" scored "angry 0.98".
+  - The two classifiers agree on the label rarely.
+  - The clear cases do agree: a sad rhyme read aloud was sad in both, laughter was positive / happy in both, a sharp refusal was angry in both with high arousal.
+  - So: only phrases ≥ 2 s, and repetition over time (the scenario rules already ask for ≥ 8 s within 30 s).
+- **AST missed the laughter phrase** (laughter 0.01): the phrase clips are cut by the speech VAD and high-passed, so non-speech sounds need their own trigger (the loudness trigger in "Where it runs"), not the phrase stream.
+- **Not measured yet: the positive cases.** Real crying, screaming and shouting, a child's voice in anger. They need clips: staged recordings in the room, cartoons on the TV, public sets (ESC-50 has crying baby / laughing).
+
+Leaning: GigaAM-Emo for speech emotion (Russian, made sense on the clear cases), audeering arousal as the second axis if memory allows, a CNN AudioSet model for events. Decide after the positive clips.
+
 ## Open questions
 
 - Which children's states matter most: crying, screaming, fighting, fear? Should a child's "angry" speech without crying trigger too?
