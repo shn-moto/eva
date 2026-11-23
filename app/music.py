@@ -30,6 +30,19 @@ VOLUME_STEP = profile.tune("music.volume_step", 5)                # % of the spe
 MUSIC_FLAG = "/run/eva/music"     # ear.py: music plays -> listen in short windows over it
 
 
+EARLY_END = 30                    # s: a longer track "ending" before this broke off - played once more
+
+
+def clean(text):
+    """A title for the TV and her voice: no emoji. The Station has DejaVu only;
+    emoji (🎧🔥 in YouTube titles) came out as boxes - "broken encoding" on the
+    screen (2026-11-23). Symbols DejaVu has (♫ ☺) stay."""
+    if not text:
+        return text
+    out = "".join(ch for ch in text if ord(ch) <= 0xFFFF and not 0xFE00 <= ord(ch) <= 0xFE0F and ch != "‍")
+    return " ".join(out.split())
+
+
 def _flag(on):
     try:
         if on:
@@ -95,8 +108,8 @@ class Player:
                 self.loading = False
                 self.started = time.time()
                 self.view()
-            elif line.startswith("@E"):
-                log(f"music: mpg123 {line}")
+            elif line.startswith(("@E", "@I", "@P")) and line != "@P 2":
+                log(f"music: mpg123 {line[:160]}")    # errors, stream info, state: why a track stopped
 
     def _apply_volume(self):
         v = self.volume * (DUCK if self.ducked else 1.0)
@@ -149,6 +162,15 @@ class Player:
     def _ended(self):
         with self.lock:
             if not self.playing:
+                return
+            # a track that "ended" in its first seconds broke off (a track stopped
+            # after 10 s and the screen went back to the face, 2026-11-23): once more
+            t = self.queue[self.index] if self.queue else {}
+            played = time.time() - self.started
+            if played < EARLY_END and (t.get("duration") or 0) > 60 and not t.get("retried"):
+                t["retried"] = True
+                log(f"music: {t.get('title')!r} ended after {played:.0f}s of {t.get('duration')}s - again")
+                self._load()
                 return
             if self.index + 1 < len(self.queue):
                 self.index += 1
@@ -241,13 +263,16 @@ class Player:
         t = self.now()
         if not t:
             return None
+        now = {k: t.get(k) for k in ("title", "artist", "album", "year", "duration", "thumb")}
+        for k in ("title", "artist", "album"):
+            now[k] = clean(now[k])
         return {"type": "view", "kind": "music",
-                "now": {k: t.get(k) for k in ("title", "artist", "album", "year", "duration", "thumb")},
+                "now": now,
                 "pos": 0 if self.loading else round(self.position(), 1), "at": int(time.time() * 1000),
                 "paused": self.paused, "loading": self.loading,
                 "volume": volume_get(), "bpm": t.get("bpm") or 0, "first": t.get("first") or 0,
                 "index": self.index + 1, "count": len(self.queue),
-                "next": [{"title": x.get("title"), "artist": x.get("artist"), "thumb": x.get("thumb")}
+                "next": [{"title": clean(x.get("title")), "artist": clean(x.get("artist")), "thumb": x.get("thumb")}
                          for x in self.queue[self.index + 1:self.index + 6]]}
 
     def view(self):

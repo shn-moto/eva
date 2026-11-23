@@ -275,15 +275,22 @@ def local(text, person, r):
         if intent == "ack":
             reply = "Пожалуйста!" if re.search(r"спасиб", text, re.I) else None
         elif intent == "music_play":
+            query = (r.get("query") or "").strip()
+            if not query:
+                # «Ева, включи музыку» - nothing to search for: the whole phrase went
+                # to the search and «Винтаж - Ева я любила тебя» played (2026-11-23).
+                # Claude knows what was played before and can choose or ask.
+                raise LookupError("no query")
             kind = r.get("kind") or "track"
-            found = music.search(r.get("query") or text, "album" if kind == "album" else "track",
+            found = music.search(query, "album" if kind == "album" else "track",
                                  {"track": 1, "selection": 8, "album": 1}.get(kind, 1))
             if not found:
-                reply = f"Не нашла ничего по запросу «{r.get('query') or text}»."
+                reply = f"Не нашла ничего по запросу «{query}»."
             else:
                 p.play(found)
                 t = found[0]
-                reply = f"Включаю {t.get('title')}" + (f", {t['artist']}" if t.get("artist") else "") + "."
+                reply = (f"Включаю {music.clean(t.get('title'))}"
+                         + (f", {music.clean(t['artist'])}" if t.get("artist") else "") + ".")
         elif intent == "music_stop":
             p.stop()
         elif intent in ("music_pause", "music_resume"):
