@@ -130,6 +130,8 @@ def _heard(day, linked):
                 continue                  # noise the STT made nothing of
             hh = fn[:6]
             fix = info.get("correct") or {}
+            if isinstance(fix, list):
+                fix = next((f for f in fix if not f.get("span")), fix[-1] if fix else {})
             out.append({"id": None, "t": f"{hh[:2]}:{hh[2:4]}:{hh[4:6]}", "day": day, "role": "heard",
                         "speaker": fix.get("speaker"), "text": fix.get("text") or info.get("text") or "",
                         "text_heard": info.get("text") if fix else None, "speaker_heard": None,
@@ -342,7 +344,7 @@ def speakers():
                                         " AND speaker <> '' GROUP BY 1 ORDER BY count(*) DESC")]
 
 
-def _mark_clip(base, text, speaker, heard_text):
+def _mark_clip(base, text, speaker, heard_text, frag=""):
     """The clip's json gets the right answer next to what the STT heard: a
     labelled sample for fine-tuning and testing the recognition. The clip is
     kept for good (copied out of the log, which drops old days)."""
@@ -357,8 +359,15 @@ def _mark_clip(base, text, speaker, heard_text):
             info = json.load(open(p, encoding="utf-8"))
         except (OSError, ValueError):
             info = {}
-        info["correct"] = {"text": text, "speaker": speaker, "heard": heard_text,
-                           "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
+        # a list: one clip may hold two phrases (split between two voices), each
+        # with its own span of the clip - a sample is the span's sound + its text
+        span = [float(x) for x in frag[3:].split(",")] if frag.startswith("#t=") else None
+        fixes = info.get("correct")
+        fixes = [fixes] if isinstance(fixes, dict) else list(fixes or [])
+        fixes = [f for f in fixes if f.get("span") != span]
+        fixes.append({"text": text, "speaker": speaker, "heard": heard_text, "span": span,
+                      "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")})
+        info["correct"] = fixes
         with open(p + ".tmp", "w", encoding="utf-8") as f:
             json.dump(info, f, ensure_ascii=False)
         os.replace(p + ".tmp", p)
@@ -390,8 +399,8 @@ async def correct(request: Request):
                           " corrected_at = now(), keep = keep OR audio IS NOT NULL WHERE id = %s",
                           (text, speaker, heard, heard_speaker, uid))
                 _forget(c, uid, drop=False)
-        base, _ = _clip(audio)
-        _mark_clip(base, text, speaker, heard)
+        base, frag = _clip(audio)
+        _mark_clip(base, text, speaker, heard, frag)
         return {"ok": True}
     base, _ = _clip(b.get("audio"))
     if not base:
