@@ -444,7 +444,32 @@ async def correct(request: Request):
         except (OSError, ValueError):
             pass
     _mark_clip(base, text, speaker, heard)
-    return {"ok": True}
+    out = {"ok": True}
+    if speaker:
+        # a heard-only clip (a voice she did not know) with its speaker named by a
+        # person is a phrase like any other: into the memory, shown in the log,
+        # and its print into that voice (2026-11-24)
+        uid = _to_memory(base, text, speaker, heard)
+        if uid:
+            out["id"] = uid
+            out["voice"] = _teach_voice(uid, speaker, None, base)
+    return out
+
+
+def _to_memory(base, text, speaker, heard):
+    """A heard-only clip -> a phrase in the memory (once). -> its id, or None."""
+    day, name = base.split("/")
+    ts = datetime.datetime.strptime(day + name[:6], "%Y-%m-%d%H%M%S").astimezone()
+    with db() as c:
+        if c.execute("SELECT 1 FROM utterances WHERE audio = %s OR audio LIKE %s",
+                     (base, base + "#%")).fetchone():
+            return None
+        uid = c.execute(
+            "INSERT INTO utterances (ts, role, text, speaker, dialog, woke, stt, audio, keep, text_heard, corrected_at)"
+            " VALUES (%s, 'user', %s, %s, false, false, 'gigaam', %s, true, %s, now()) RETURNING id",
+            (ts, text, speaker, base, heard)).fetchone()[0]
+    _copy_out(base)                       # kept: the STT log drops old days
+    return uid
 
 
 # ---- direction: the radar of a phrase, the room of a day -----------------------------------
