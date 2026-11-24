@@ -467,6 +467,30 @@ LOG_DIR = os.environ.get("STT_LOG_DIR", "")      # every phrase kept here (shn-l
 LOG_DAYS = int(os.environ.get("STT_LOG_DAYS", "30"))
 
 
+@app.post("/emb")
+async def emb(request: Request):
+    """{"audio": "<date>/<time>[#t=from[,to]]"} (a phrase's sound, as the memory
+    stores it) -> {"emb": the voice print, "dur"}: a speaker corrected on the admin
+    page goes into that person's voice profile (the brain, voices.sync)."""
+    b = await request.json()
+    path, _, span = str(b.get("audio", "")).partition("#t=")
+    full = os.path.realpath(os.path.join(LOG_DIR, path + ".wav"))
+    if not LOG_DIR or not full.startswith(os.path.realpath(LOG_DIR) + os.sep) or not os.path.exists(full):
+        return JSONResponse({"error": "no such clip"}, status_code=404)
+
+    def work():
+        with wave.open(full, "rb") as w:
+            a = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32) / 32768
+        if span:
+            p = [float(x) for x in span.split(",")]
+            a = a[int(p[0] * 16000): int(p[1] * 16000) if len(p) > 1 else None]
+        if len(a) < 8000:
+            return {"error": "too short"}
+        return {"emb": spk_emb(a).round(5).tolist(), "dur": round(len(a) / 16000, 2)}
+    out = await run_in_threadpool(work)
+    return JSONResponse(out, status_code=400 if "error" in out else 200)
+
+
 RAW_DAYS = int(os.environ.get("STT_RAW_DAYS", "7"))   # the 7 raw mics of every phrase: re-run new splitters on them
 
 

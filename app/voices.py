@@ -207,6 +207,40 @@ class Voices:
             _save(CLUSTERS, self.clusters)
             return g, 0.0, False
 
+    # --- a speaker corrected on the admin page is a sample of that voice ---
+    def _profile_for(self, name):
+        """The voice profile a corrected speaker name means: an existing one, or
+        a new one for a family member with no voice yet; None for guests etc."""
+        own = next((p for p in self.profiles if same_person(p, name)), None)
+        if own:
+            return own
+        family = {n for _, n in profile.NAME_STEMS} | profile.CHILDREN
+        return name if name in family else None
+
+    def add_corrected(self, name, embs, heard=()):
+        """Phrases taken for somebody in `heard` and `name`'s, says a person on
+        the admin page: they go into `name`'s voice the way «запомни мой голос»
+        does (_enroll: the samples, then the guest clusters of that voice), only
+        trusted - a person said whose they are. The copies auto-learning made of
+        them under the wrong voice go. A 3-year-old will not do «запомни мой
+        голос»: her voice is learnt from the phrases marked as hers (2026-11-24).
+        -> (profile, samples, merged clusters), or None for a guest."""
+        es = [np.asarray(e, dtype=np.float32) for e in embs]
+        es = [(e / (np.linalg.norm(e) + 1e-9)).round(6).tolist() for e in es]
+        with self.lock:
+            name = self._profile_for(name)
+            if not name or not es:
+                return None
+            for h in heard:
+                wrong = next((p for p in self.profiles if same_person(p, h)), h)
+                if wrong != name and self.auto.get(wrong):
+                    n = len(self.auto[wrong])
+                    self.auto[wrong] = [a for a in self.auto[wrong]
+                                        if max(float(np.dot(e, a)) for e in es) < 0.9]
+                    if len(self.auto[wrong]) != n:
+                        _save(AUTO_FILE, self.auto)
+            return self._enroll(name, es, trusted=True)
+
     # --- "Ева, запомни мой голос, я Маша" ---
     def start_enroll(self, name, seconds=60, first=None):
         """first: the embedding of the introduction phrase itself, the first sample."""
@@ -240,25 +274,89 @@ class Voices:
             self.enroll = {"name": None, "embs": [], "until": 0.0}
             if not name or not embs:
                 return name, 0, []
+            return self._enroll(name, embs)
+
+    def _enroll(self, name, embs, trusted=False):
+        """name's voice += samples (all of them when trusted, else those like the
+        first, the introduction phrase); guest clusters of that voice merge in.
+        Called with the lock held."""
+        if not trusted:
             first = np.asarray(embs[0], dtype=np.float32)
+
             def own(e):
                 return float(first @ np.asarray(e, dtype=np.float32))
             embs = [embs[0]] + [e for e in embs[1:] if own(e) >= ENROLL_MATCH
                                 and own(e) - self._near_other(e, name) >= ENROLL_LEAD]
-            self.profiles.setdefault(name, []).extend(embs)
-            mine = [np.asarray(e, dtype=np.float32) for e in embs]
-            moved = []
-            for g in list(self.clusters):
-                ce = self.clusters[g]["embs"]
-                avg = np.mean([max(float(m @ np.asarray(c, dtype=np.float32)) for m in mine) for c in ce])
-                if avg < ENROLL_MATCH:
+        have = self.profiles.setdefault(name, [])
+        new = [e for e in embs if not any(float(np.dot(e, p)) > 0.99 for p in have)]
+        have.extend(new)
+        mine = [np.asarray(e, dtype=np.float32) for e in embs]
+        moved = []
+        for g in list(self.clusters):
+            ce = self.clusters[g]["embs"]
+            avg = np.mean([max(float(m @ np.asarray(c, dtype=np.float32)) for m in mine) for c in ce])
+            if avg < ENROLL_MATCH:
+                continue
+            take = [c for c in ce if max(float(m @ np.asarray(c, dtype=np.float32)) for m in mine)
+                    - self._near_other(c, name) >= ENROLL_LEAD]
+            if trusted and not take:
+                continue            # a voice near hers, not hers: the cluster stays a guest
+            have.extend(take)
+            moved.append(g)
+            del self.clusters[g]
+        _save(PROFILES, self.profiles)
+        if moved:
+            _save(CLUSTERS, self.clusters)
+        return name, len(new), moved
+
+
+SYNC_STATE = os.path.join(DIR, "corrections_done.json")
+EMB_URL = profile.service("stt").rsplit("/", 1)[0] + "/emb"
+
+
+def corrections_sync(voices, dsn, every=120):
+    """Speakers corrected on the admin page (services/admin) -> voice profiles.
+    Runs forever in the brain; each corrected phrase is taken once (its id kept
+    in SYNC_STATE). Only a person's correction counts (corrected_at), not the
+    retagging by voice (speaker_heard without corrected_at)."""
+    import psycopg
+    import urllib.error
+    import urllib.request
+    try:
+        done = set(json.load(open(SYNC_STATE, encoding="utf-8")))
+    except (OSError, ValueError):
+        done = set()
+    while True:
+        try:
+            with psycopg.connect(dsn, connect_timeout=5) as c:
+                rows = c.execute(
+                    "SELECT id, speaker, speaker_heard, audio FROM utterances WHERE corrected_at IS NOT NULL"
+                    " AND audio IS NOT NULL AND speaker IS NOT NULL AND speaker_heard IS NOT NULL"
+                    " AND speaker <> speaker_heard ORDER BY corrected_at").fetchall()
+            batch = {}                       # name -> (embs, heard names, ids)
+            for uid, name, heard, audio in rows:
+                if uid in done:
                     continue
-                self.profiles[name].extend(
-                    c for c in ce if max(float(m @ np.asarray(c, dtype=np.float32)) for m in mine)
-                    - self._near_other(c, name) >= ENROLL_LEAD)
-                moved.append(g)
-                del self.clusters[g]
-            _save(PROFILES, self.profiles)
-            if moved:
-                _save(CLUSTERS, self.clusters)
-            return name, len(embs), moved
+                req = urllib.request.Request(EMB_URL, data=json.dumps({"audio": audio}).encode(),
+                                             headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req, timeout=30) as r:
+                        emb = json.loads(r.read())["emb"]
+                except urllib.error.HTTPError as e:   # the clip is gone or too short: nothing to learn
+                    log(f"voice from correction {uid}: {e.code}")
+                    done.add(uid)
+                    continue
+                b = batch.setdefault(name, ([], set(), []))
+                b[0].append(emb)
+                b[1].add(heard)
+                b[2].append(uid)
+            for name, (embs, heard, ids) in batch.items():
+                got = voices.add_corrected(name, embs, heard)
+                log(f"voice from corrections {ids}: {sorted(heard)} -> {name}: "
+                    + (f"{got[0]} +{got[1]} samples, merged {got[2]}" if got else "not a family voice"))
+                done.update(ids)
+            if batch:
+                _save(SYNC_STATE, sorted(done))
+        except Exception as e:      # the base or the hub away: next round
+            log(f"voice corrections sync: {e}")
+        time.sleep(every)
