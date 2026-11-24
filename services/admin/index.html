@@ -74,6 +74,20 @@ button.i.playing { color: var(--accent); }
 button.i.kept { color: var(--keep); }
 button.i.del:hover { color: var(--danger); }
 .empty { padding: 40px 20px; text-align: center; color: var(--faint); }
+.heardtxt { display: block; font-size: 12px; color: var(--faint); margin-top: 2px; }
+.heardtxt s { text-decoration-color: var(--faint); }
+.tag.fix { color: var(--accent); border-color: var(--accent); }
+.editor { display: grid; grid-template-columns: 1fr 170px auto; gap: 8px; align-items: start; padding: 8px 14px 10px 186px;
+          border-bottom: 1px solid var(--line); background: var(--accent-soft); }
+.editor textarea { width: 100%; min-height: 54px; resize: vertical; padding: 6px 9px; border: 1px solid var(--accent);
+                   border-radius: 7px; background: var(--panel); color: var(--ink); font: inherit; }
+.editor input { width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel);
+                color: var(--ink); font: inherit; }
+.editor .was { grid-column: 1 / -1; font-size: 12px; color: var(--mute); }
+.editor .btns { display: flex; gap: 6px; }
+.editor button { padding: 6px 12px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+                 font: inherit; cursor: pointer; }
+.editor button.save { background: var(--accent); border-color: var(--accent); color: #fff; }
 mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radius: 2px; }
 /* logs */
 #units { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -104,7 +118,8 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
 <header>
   <h1>Ева <span>· журнал</span></h1>
   <input id="q" type="search" placeholder="Поиск по всем фразам…" autocomplete="off">
-  <span class="hint">↑↓ фраза · пробел — слушать · K — оставить · Del — удалить</span>
+  <span class="hint">↑↓ фраза · пробел — слушать · E — исправить · K — оставить · Del — удалить</span>
+  <datalist id="speakers"></datalist>
 </header>
 <main>
   <section>
@@ -216,13 +231,17 @@ function render(keepSel) {
       if (r.dialog && r.stt !== "telegram") tags.push("в разговоре");
     }
     if (r.dur) tags.push(r.dur.toFixed(1) + " с");
+    const tagHtml = tags.map(t => `<span class="tag">${t}</span>`).join("") + (r.corrected ? `<span class="tag fix">исправлено</span>` : "");
+    const was = r.corrected && (r.text_heard || r.speaker_heard)
+      ? `<span class="heardtxt">распознано: ${r.speaker_heard ? esc(r.speaker_heard) + " — " : ""}<s>${hl(r.text_heard || "")}</s></span>` : "";
     const canPlay = r.has_audio, canKeep = r.role !== "assistant" && (r.id || r.audio);
     html += `<div class="row ${r.role}${r.keep ? " keep" : ""}" data-i="${i}">
       <span class="t">${r.t}</span>
       <span class="who" style="${r.role === "user" ? `color:${color(r.speaker)}` : ""}">${esc(who(r))}</span>
-      <span class="txt">${hl(r.text)}${tags.length ? `<span class="tags">${tags.map(t => `<span class="tag">${t}</span>`).join("")}</span>` : ""}</span>
+      <span class="txt">${hl(r.text)}${tagHtml ? `<span class="tags">${tagHtml}</span>` : ""}${was}</span>
       <span class="acts">
         <button class="i play" title="Слушать (пробел)" ${canPlay ? "" : "disabled"}>▶</button>
+        <button class="i edit" title="Исправить текст и кто говорит (E)" ${r.role === "assistant" ? "disabled" : ""}>✎</button>
         <button class="i keepb${r.keep ? " kept" : ""}" title="Оставить навсегда (K)" ${canKeep ? "" : "disabled"}>${r.keep ? "★" : "☆"}</button>
         <button class="i del" title="Удалить вместе со звуком (Del)" ${r.role === "assistant" && !r.id ? "disabled" : ""}>✕</button>
       </span></div>`;
@@ -262,6 +281,41 @@ async function toggleKeep(i) {
   r.keep = want; render(true); toast(want ? "Оставлено навсегда" : "Снова до конца срока лога");
   loadDays().then(markDay);
 }
+let SPEAKERS = [];
+function edit(i) {
+  const r = S.view[i]; if (!r || r.role === "assistant") return;
+  document.querySelector("#rows .editor")?.remove();
+  const row = document.querySelector(`#rows .row[data-i="${i}"]`); if (!row) return;
+  select(i, false);
+  const ed = document.createElement("div");
+  ed.className = "editor";
+  ed.innerHTML = `<textarea spellcheck="true"></textarea>
+    <input list="speakers" placeholder="кто говорит">
+    <div class="btns"><button class="save" title="Ctrl+Enter">Сохранить</button><button class="cancel" title="Esc">Отмена</button></div>
+    <div class="was">${r.text_heard ? `распознано: <s>${esc(r.text_heard)}</s>` : "Как правильно? Распознанный текст останется для анализа."}
+      ${r.has_audio ? " · пробел в поле не играет, ▶ в строке выше — играет" : ""}</div>`;
+  row.after(ed);
+  const ta = ed.querySelector("textarea"), who = ed.querySelector("input");
+  ta.value = r.text || ""; who.value = r.speaker || "";
+  ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+  const close = () => { ed.remove(); select(i, false); };
+  const save = async () => {
+    const text = ta.value.trim(); if (!text) { toast("Пусто — тогда лучше удалить"); return; }
+    try {
+      await api("/api/correct", r.id ? { id: r.id, text, speaker: who.value.trim() } : { audio: r.audio, text, speaker: who.value.trim() });
+    } catch (e) { toast("Не сохранилось: " + e.message); return; }
+    if (!r.corrected) { r.text_heard = r.text; if ((who.value.trim() || r.speaker) !== r.speaker) r.speaker_heard = r.speaker; }
+    r.text = text; r.speaker = who.value.trim() || r.speaker; r.corrected = true; if (r.has_audio) r.keep = true;
+    render(true); toast("Исправлено · звук оставлен для обучения");
+  };
+  ed.querySelector(".save").onclick = save;
+  ed.querySelector(".cancel").onclick = close;
+  ed.addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.preventDefault(); close(); }
+    else if (e.key === "Enter" && (e.ctrlKey || e.metaKey || e.target === who)) { e.preventDefault(); save(); }
+    e.stopPropagation();
+  });
+}
 async function del(i) {
   const r = S.view[i]; if (!r) return;
   const what = r.text ? `«${r.text.slice(0, 80)}»` : "эту запись";
@@ -277,13 +331,15 @@ $("#rows").addEventListener("click", e => {
   const i = +row.dataset.i;
   if (e.target.closest("button.play")) { select(i, false); play(i); return; }
   if (e.target.closest("button.keepb")) { toggleKeep(i); return; }
+  if (e.target.closest("button.edit")) { edit(i); return; }
   if (e.target.closest("button.del")) { del(i); return; }
   if (S.search && e.detail === 2) { const r = S.view[i]; location.hash = r.day; openDay(r.day).then(() => {
       const j = S.view.findIndex(x => x.id === r.id); if (j >= 0) select(j); }); return; }
   select(i, false);
 });
 document.addEventListener("keydown", e => {
-  if (e.target.matches("input")) { if (e.key === "Escape") e.target.blur(); return; }
+  if (e.target.matches("input, textarea")) { if (e.key === "Escape") e.target.blur(); return; }
+  if (e.code === "KeyE") { if (S.sel >= 0) { edit(S.sel); e.preventDefault(); } return; }
   if (e.key === "ArrowDown") { select(S.sel + 1); e.preventDefault(); }
   else if (e.key === "ArrowUp") { select(S.sel - 1); e.preventDefault(); }
   else if (e.key === " ") { if (S.sel >= 0) play(S.sel); e.preventDefault(); }
@@ -344,6 +400,7 @@ $("#onlykeep").addEventListener("change", () => render());
 $("#days").addEventListener("click", e => { const a = e.target.closest("a"); if (!a) return; e.preventDefault(); location.hash = a.dataset.d; openDay(a.dataset.d); });
 window.addEventListener("hashchange", () => { const d = location.hash.slice(1); if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d !== S.day) openDay(d); });
 (async () => {
+  api("/api/speakers").then(list => { SPEAKERS = list; $("#speakers").innerHTML = list.map(s => `<option value="${esc(s)}">`).join(""); }).catch(() => {});
   const days = await loadDays();
   const h = location.hash.slice(1);
   openDay(/^\d{4}-\d{2}-\d{2}$/.test(h) ? h : (days[0] ? days[0].day : new Date().toISOString().slice(0, 10)));

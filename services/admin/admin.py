@@ -9,6 +9,9 @@ service logs, search, keep / delete.
     GET  /api/units?d=           log units of a day with counts
     POST /api/keep   {id, keep}  keep the sound for good (copied out of the STT log, which drops old days)
     POST /api/delete {id}|{audio} a phrase with its sound (and out of the memory search), or a heard-only clip
+    POST /api/correct {id|audio, text, speaker}  the right text / speaker: the memory gets it, what was
+                                 heard stays (text_heard, speaker_heard) and goes into the clip's json
+    GET  /api/speakers           who the phrases are written to (for the speaker field)
     GET  /audio/<day>/<name>.wav the sound
     POST /api/backfill           link phrases written before the sound was stored to their STT-log clips
 
@@ -76,14 +79,15 @@ def _path(base, ext=".wav"):
 
 
 def _row(r):
-    (uid, ts, role, speaker, text, dialog, woke, stt, audio, keep) = r
+    (uid, ts, role, speaker, text, dialog, woke, stt, audio, keep, text_heard, speaker_heard, corrected_at) = r
     base, frag = _clip(audio)
     return {"id": uid, "t": _local(ts), "day": ts.astimezone().strftime("%Y-%m-%d"), "role": role,
             "speaker": speaker, "text": text, "dialog": dialog, "woke": woke, "stt": stt,
-            "audio": base, "frag": frag, "has_audio": bool(base and _path(base)), "keep": keep}
+            "audio": base, "frag": frag, "has_audio": bool(base and _path(base)), "keep": keep,
+            "text_heard": text_heard, "speaker_heard": speaker_heard, "corrected": corrected_at is not None}
 
 
-COLS = "id, ts, role, speaker, text, dialog, woke, stt, audio, keep"
+COLS = "id, ts, role, speaker, text, dialog, woke, stt, audio, keep, text_heard, speaker_heard, corrected_at"
 
 
 @app.get("/")
@@ -125,8 +129,11 @@ def _heard(day, linked):
             if not (info.get("text") or "").strip():
                 continue                  # noise the STT made nothing of
             hh = fn[:6]
+            fix = info.get("correct") or {}
             out.append({"id": None, "t": f"{hh[:2]}:{hh[2:4]}:{hh[4:6]}", "day": day, "role": "heard",
-                        "speaker": None, "text": info.get("text") or "", "audio": base, "frag": "",
+                        "speaker": fix.get("speaker"), "text": fix.get("text") or info.get("text") or "",
+                        "text_heard": info.get("text") if fix else None, "speaker_heard": None,
+                        "corrected": bool(fix), "audio": base, "frag": "",
                         "has_audio": os.path.exists(os.path.join(d, fn[:-5] + ".wav")),
                         "keep": root == KEEP_DIR, "dur": info.get("duration")})
     return out
@@ -151,8 +158,9 @@ def search(q: str, limit: int = 300):
     if len(q) < 2:
         return []
     with db() as c:
-        rows = c.execute(f"SELECT {COLS} FROM utterances WHERE text ILIKE %s ORDER BY ts DESC LIMIT %s",
-                         ("%" + q.replace("%", r"\%").replace("_", r"\_") + "%", min(limit, 1000))).fetchall()
+        like = "%" + q.replace("%", r"\%").replace("_", r"\_") + "%"
+        rows = c.execute(f"SELECT {COLS} FROM utterances WHERE text ILIKE %s OR text_heard ILIKE %s"
+                         " ORDER BY ts DESC LIMIT %s", (like, like, min(limit, 1000))).fetchall()
     return [_row(r) for r in rows]
 
 
@@ -254,12 +262,12 @@ async def keep(request: Request):
     return {"ok": True, "keep": want}
 
 
-def _forget(c, uid):
-    """Out of the memory search too: the segments built from this phrase are
-    rebuilt from the other phrases, with no correction and no embedding - the
-    indexer redoes both (services/indexer: NULL = to do)."""
+def _forget(c, uid, drop=True):
+    """The segments built from this phrase (the memory search) are rebuilt from
+    their phrases - without it (deleted) or with its new text (corrected) - with
+    no correction and no embedding: the indexer redoes both (NULL = to do)."""
     for sid, src in c.execute("SELECT id, src_ids FROM segments WHERE %s = ANY(src_ids)", (uid,)).fetchall():
-        rest = [i for i in src if i != uid]
+        rest = [i for i in src if i != uid or not drop]
         if not rest:
             c.execute("DELETE FROM segments WHERE id = %s", (sid,))
             continue
@@ -325,3 +333,75 @@ def backfill():
                 clips[day].remove(best)
                 linked += 1
     return {"checked": len(rows), "linked": linked}
+
+
+@app.get("/api/speakers")
+def speakers():
+    with db() as c:
+        return [s for (s,) in c.execute("SELECT speaker FROM utterances WHERE role = 'user' AND speaker IS NOT NULL"
+                                        " AND speaker <> '' GROUP BY 1 ORDER BY count(*) DESC")]
+
+
+def _mark_clip(base, text, speaker, heard_text):
+    """The clip's json gets the right answer next to what the STT heard: a
+    labelled sample for fine-tuning and testing the recognition. The clip is
+    kept for good (copied out of the log, which drops old days)."""
+    if not base:
+        return
+    _copy_out(base)
+    for root in (KEEP_DIR, LOG_DIR):
+        p = os.path.join(root, base + ".json")
+        if not os.path.exists(p):
+            continue
+        try:
+            info = json.load(open(p, encoding="utf-8"))
+        except (OSError, ValueError):
+            info = {}
+        info["correct"] = {"text": text, "speaker": speaker, "heard": heard_text,
+                           "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
+        with open(p + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False)
+        os.replace(p + ".tmp", p)
+
+
+@app.post("/api/correct")
+async def correct(request: Request):
+    b = await request.json()
+    text = (b.get("text") or "").strip()
+    speaker = (b.get("speaker") or "").strip() or None
+    if not text:
+        raise HTTPException(400, "empty text: delete the phrase instead")
+    if b.get("id"):
+        uid = int(b["id"])
+        with db() as c:
+            with c.transaction():
+                r = c.execute("SELECT text, speaker, text_heard, speaker_heard, audio FROM utterances WHERE id = %s",
+                              (uid,)).fetchone()
+                if not r:
+                    raise HTTPException(404)
+                old_text, old_speaker, heard, heard_speaker, audio = r
+                speaker = speaker or old_speaker
+                # what the STT heard is kept once: a second correction does not overwrite it
+                if heard is None:
+                    heard = old_text
+                if heard_speaker is None and speaker != old_speaker:
+                    heard_speaker = old_speaker
+                c.execute("UPDATE utterances SET text = %s, speaker = %s, text_heard = %s, speaker_heard = %s,"
+                          " corrected_at = now(), keep = keep OR audio IS NOT NULL WHERE id = %s",
+                          (text, speaker, heard, heard_speaker, uid))
+                _forget(c, uid, drop=False)
+        base, _ = _clip(audio)
+        _mark_clip(base, text, speaker, heard)
+        return {"ok": True}
+    base, _ = _clip(b.get("audio"))
+    if not base:
+        raise HTTPException(400)
+    p = _path(base, ".json")
+    heard = None
+    if p:
+        try:
+            heard = json.load(open(p, encoding="utf-8")).get("text")
+        except (OSError, ValueError):
+            pass
+    _mark_clip(base, text, speaker, heard)
+    return {"ok": True}
