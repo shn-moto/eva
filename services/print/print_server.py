@@ -119,6 +119,8 @@ def _pages_from_images(blobs, fit="fit", color=False):
 
 def _pdf_from_text(title, text):
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
+    nl = dict(new_x=XPos.LMARGIN, new_y=YPos.NEXT)     # every block ends at the start of the next line
     pdf = FPDF(format="A4", unit="mm")
     pdf.set_margins(18, 16, 18)
     pdf.set_auto_page_break(True, 16)
@@ -127,7 +129,7 @@ def _pdf_from_text(title, text):
     pdf.add_page()
     if title:
         pdf.set_font("dv", "B", 17)
-        pdf.multi_cell(0, 9, title.strip())
+        pdf.multi_cell(0, 9, title.strip(), **nl)
         pdf.ln(3)
     for raw in (text or "").splitlines():
         line = raw.rstrip()
@@ -137,16 +139,17 @@ def _pdf_from_text(title, text):
         if line.lstrip().startswith("# "):
             pdf.ln(2)
             pdf.set_font("dv", "B", 13)
-            pdf.multi_cell(0, 7, line.lstrip()[2:].strip())
+            pdf.multi_cell(0, 7, line.lstrip()[2:].strip(), **nl)
             continue
         pdf.set_font("dv", "", 12)
-        m = re.match(r"\s*(?:[-*•]|\d+[.)])\s+(.*)", line)
+        m = re.match(r"\s*(\d+[.)]|[-*•])\s+(.*)", line)
         if m:
-            bullet = "•" if not re.match(r"\s*\d", line) else re.match(r"\s*(\d+[.)])", line).group(1)
-            pdf.cell(7, 6.5, bullet)
-            pdf.multi_cell(0, 6.5, m.group(1))
+            bullet = "•" if m.group(1) in "-*•" else m.group(1)
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(8, 6.5, bullet, new_x=XPos.RIGHT, new_y=YPos.TOP)
+            pdf.multi_cell(0, 6.5, m.group(2), **nl)
         else:
-            pdf.multi_cell(0, 6.5, line)
+            pdf.multi_cell(0, 6.5, line, **nl)
         if pdf.page_no() > MAX_PAGES:
             break
     return bytes(pdf.output()), pdf.page_no()
