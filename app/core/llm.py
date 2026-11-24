@@ -36,7 +36,8 @@ AGENT_EFFORT = profile.tune("llm.agent_effort", "medium")
 # not listed here counts as such.
 LIGHT_TOOLS = profile.tune("llm.light_tools", {"music_play", "music_control", "screen", "panel", "avatar", "say_at_home", "send_message",
                "eva_spend", "photo_indexing", "show_html", "show_feed",
-               "home_api_index", "home_api_get"})
+               "home_api_index", "home_api_get",
+               "file_print", "print_photos", "print_text", "print_url", "printer_status", "print_cancel"})
 
 
 def _escalate(message, params):

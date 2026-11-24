@@ -2,7 +2,7 @@
 # Deploy Eva's services on shn-linux from git - a commit that is on origin.
 # Run from Git Bash in the repo root:
 #
-#   deploy/linux.sh stt|music|router|gpu-arbiter|admin [ref]      # default origin/main
+#   deploy/linux.sh stt|music|router|gpu-arbiter|admin|print [ref]      # default origin/main
 #
 # The source of the service is taken from the commit (git archive), built into
 # an image tagged with the commit, and the container is recreated with the run
@@ -18,7 +18,7 @@ HUB_KEY=${HUB_KEY:?set HUB_KEY in deploy/local.env}
 HUB_KEY=${HUB_KEY/#\~/$HOME}
 SSH=(ssh -i "$HUB_KEY" -o ConnectTimeout=10 "$HOST")
 
-svc=${1:?service: stt | music | router | gpu-arbiter | admin}
+svc=${1:?service: stt | music | router | gpu-arbiter | admin | print}
 ref=${2:-origin/main}
 git fetch -q origin
 sha=$(git rev-parse --verify "$ref^{commit}")
@@ -44,6 +44,12 @@ admin)
 -e PGTZ=\$(cat /etc/timezone) -v /etc/localtime:/etc/localtime:ro \
 -v \$HOME/eva-data/stt-log:/log -v \$HOME/eva-data/stt-keep:/keep"
     cmd=""; health=/api/days ;;
+print)
+    # files sent to Eva in Telegram (kept a week) + printing through the home's CUPS
+    # (cups_airprint, host network, its default queue)
+    src=services/print; image=eva-print; name=eva-print; port=8909
+    run="--network host -e CUPS_SERVER=127.0.0.1:631 -e PHOTOLIB_URL=http://127.0.0.1:8000 -v /etc/localtime:/etc/localtime:ro -v \$HOME/eva-data/print-inbox:/files"
+    cmd=""; health=/health ;;
 gpu-arbiter)
     # stops eva-router while photolib indexes (indexing gets the whole GPU), starts it after
     src=services/gpu-arbiter; image=eva-gpu-arbiter; name=eva-gpu-arbiter; port=8907

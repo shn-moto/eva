@@ -17,11 +17,14 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import photolib  # noqa: E402
+from core import profile  # noqa: E402
 from core.util import log, secrets  # noqa: E402
 
 OFFSET = "/var/lib/eva/telegram-offset"
 BRAIN = "http://127.0.0.1:8081/chat"
-API = f"https://api.telegram.org/bot{secrets()['TELEGRAM_BOT_TOKEN']}/"
+TOKEN = secrets()['TELEGRAM_BOT_TOKEN']
+API = f"https://api.telegram.org/bot{TOKEN}/"
+FILES = profile.service("print")         # files sent to her are kept on the hub (services/print), not here
 
 
 def call(method, http_timeout=60, **params):
@@ -106,13 +109,43 @@ def brain(text, uid):
     req = urllib.request.Request(BRAIN, data=json.dumps(
         {"text": text, "telegram_id": uid, "key": f"tg:{uid}"}, ensure_ascii=False).encode(),
         headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=90) as r:
+    with urllib.request.urlopen(req, timeout=180) as r:      # reading a PDF sent to her takes a while
         return json.loads(r.read())
 
 
-def handle(msg):
+def _attachment(msg):
+    """A photo or a file in the message -> (telegram file_id, name, mime), or None."""
+    if msg.get("photo"):
+        return msg["photo"][-1]["file_id"], "photo.jpg", "image/jpeg"     # the largest size
+    d = msg.get("document")
+    if d:
+        return d["file_id"], d.get("file_name") or "file", d.get("mime_type") or ""
+    return None
+
+
+def keep_file(att):
+    """Telegram -> the hub's inbox; -> the note she sees in the conversation."""
+    tg_id, name, mime = att
+    f = call("getFile", file_id=tg_id)
+    with urllib.request.urlopen(f"https://api.telegram.org/file/bot{TOKEN}/{f['file_path']}", timeout=120) as r:
+        data = r.read()
+    req = urllib.request.Request(FILES + "/files", data=data, headers={
+        "Content-Type": "application/octet-stream", "X-Name": urllib.parse.quote(name), "X-Mime": mime})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        meta = json.loads(r.read())
+    kind = {"pdf": "PDF", "image": "картинка"}.get(meta["kind"], meta.get("mime") or "файл")
+    pages = f", страниц {meta['pages']}" if meta["kind"] == "pdf" and meta.get("pages") else ""
+    return f"[прислан файл: «{meta['name']}», {kind}{pages}, file_id={meta['file_id']}]"
+
+
+def handle(msg, group=()):
+    """msg: a message; group: the rest of its album (photos sent together come
+    as separate messages - she answers once, with all of them)."""
     chat, user = msg["chat"]["id"], msg.get("from", {})
-    uid, text = str(user.get("id")), (msg.get("text") or "").strip()
+    uid = str(user.get("id"))
+    text = (msg.get("text") or msg.get("caption") or "").strip()
+    for m in group:
+        text = text or (m.get("caption") or "").strip()
     try:
         family = photolib.user_by_telegram(uid)
     except Exception as e:
@@ -123,8 +156,20 @@ def handle(msg):
         call("sendMessage", chat_id=chat, text="Привет! Я Ева, домашний помощник одной семьи. "
              "С незнакомыми я, к сожалению, не переписываюсь.")
         return
+    notes = []
+    for m in (msg,) + tuple(group):
+        att = _attachment(m)
+        if att:
+            try:
+                notes.append(keep_file(att))
+            except Exception as e:
+                log(f"file from {uid}: {e}")
+                call("sendMessage", chat_id=chat, text="Файл не смогла забрать (до 20 МБ), пришли ещё раз.")
+                return
+    if notes:
+        text = "\n".join(x for x in [text] + notes if x)
     if not text:
-        call("sendMessage", chat_id=chat, text="Пока я понимаю только текст.")
+        call("sendMessage", chat_id=chat, text="Пока я понимаю текст, фото и файлы.")
         return
     if text == "/start":
         text = "Привет! Это я, пишу тебе в Телеграме."
@@ -164,15 +209,27 @@ def main():
             log("poll error:", e)
             time.sleep(5)
             continue
+        # an album (several photos at once) comes as messages with one
+        # media_group_id: they go to her together, as one message
+        albums = {}
+        for u in ups:
+            g = (u.get("message") or {}).get("media_group_id")
+            if g:
+                albums.setdefault(g, []).append(u["message"])
         for u in ups:
             offset = u["update_id"] + 1
             with open(OFFSET, "w") as f:
                 f.write(str(offset))
-            if "message" in u:
-                try:
-                    handle(u["message"])
-                except Exception as e:
-                    log("handle error:", e)
+            m = u.get("message")
+            if not m:
+                continue
+            g = m.get("media_group_id")
+            if g and albums.get(g) and albums[g][0] is not m:
+                continue                      # handled with the first of its album
+            try:
+                handle(m, tuple(albums.get(g, [])[1:]) if g else ())
+            except Exception as e:
+                log("handle error:", e)
 
 
 if __name__ == "__main__":
