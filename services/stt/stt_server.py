@@ -18,7 +18,15 @@ import wave
 
 import numpy as np
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
+
+# The heavy work (recognition, direction, split) runs in worker threads: in the
+# event loop a 30 s phrase held every other request for 10 s and the next
+# phrase's /doa and /stt timed out on the Station (2026-11-24 13:01). One model
+# instance each, so their calls take turns.
+_rec_lock = threading.Lock()
+_spk_lock = threading.Lock()
 
 MODEL_NAME = os.environ.get("STT_MODEL", "small")
 COMPUTE = os.environ.get("STT_COMPUTE", "int8")
@@ -118,10 +126,11 @@ def spk_emb(a):
         _spk = sherpa_onnx.SpeakerEmbeddingExtractor(
             sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=SPK_MODEL, num_threads=4))
     a = a / (np.abs(a).max() + 1e-9) * 0.9
-    s = _spk.create_stream()
-    s.accept_waveform(16000, a.astype(np.float32))
-    s.input_finished()
-    e = np.array(_spk.compute(s), dtype=np.float32)
+    with _spk_lock:
+        s = _spk.create_stream()
+        s.accept_waveform(16000, a.astype(np.float32))
+        s.input_finished()
+        e = np.array(_spk.compute(s), dtype=np.float32)
     return e / (np.linalg.norm(e) + 1e-9)
 
 
@@ -299,15 +308,36 @@ def angle(X, pairs):
     return round(float(np.degrees(_AZ[k])), 1), round(float(score[k]), 3)
 
 
+def _unit_curves(S, n):
+    """GCC-PHAT curves (pairs x lags, unit, zero mean) from summed cross-spectra S (pairs x bins)."""
+    m = DOA_MAXLAG * DOA_UP
+    r = np.fft.irfft(S / (np.abs(S) + 1e-12), n * DOA_UP, axis=1)
+    r = np.concatenate([r[:, -m:], r[:, :m + 1]], axis=1)
+    r = r - r.mean(1, keepdims=True)
+    return r / (np.linalg.norm(r, axis=1, keepdims=True) + 1e-12)
+
+
 def dir_cut(fr, t0, t1):
-    """The cut in [t0, t1) where the place changes most: (distance, t) or (0, None)."""
+    """The cut in [t0, t1) where the place changes most: (distance, t) or (0, None).
+    The frames' cross-spectra are summed once (a running sum): each candidate
+    cut is then two differences, not a pass over all the frames (a 30 s phrase
+    took seconds)."""
     X, t, pairs = fr
+    n = (X.shape[1] - 1) * 2
+    I = [i for i, j in pairs]
+    J = [j for i, j in pairs]
+    C = X[:, :, I] * np.conj(X[:, :, J])                      # frames x bins x pairs
+    P = np.concatenate([np.zeros((1,) + C.shape[1:], C.dtype), np.cumsum(C, axis=0)])
+    a0 = int(np.searchsorted(t, t0, "left"))
+    a1 = int(np.searchsorted(t, t1, "left"))
     scores = []
     c = t0 + DIR_SIDE
     while c <= t1 - DIR_SIDE:
-        L, R = X[(t >= t0) & (t < c)], X[(t >= c) & (t < t1)]
-        if len(L) >= 8 and len(R) >= 8:
-            scores.append((c, 1.0 - float(np.mean((_curves(L, pairs) * _curves(R, pairs)).sum(1)))))
+        k = int(np.searchsorted(t, c, "left"))
+        if k - a0 >= 8 and a1 - k >= 8:
+            L = (P[k] - P[a0]).T                               # pairs x bins
+            R = (P[a1] - P[k]).T
+            scores.append((c, 1.0 - float(np.mean((_unit_curves(L, n) * _unit_curves(R, n)).sum(1)))))
         c += 0.25
     if not scores:
         return (0.0, None)
@@ -394,6 +424,10 @@ async def doa_route(request: Request):
     pid = request.headers.get("X-Phrase")
     if pid:
         _dir_put(pid, raw)
+    return await run_in_threadpool(_doa_work, raw)
+
+
+def _doa_work(raw):
     m = raw.astype(np.float32) / 32768.0
     m = m - m.mean(0)
     out = doa(m) or {}
@@ -493,28 +527,36 @@ async def stt(request: Request):
         return {"text": ""}
     split = request.query_params.get("split") == "1"
     pid = request.headers.get("X-Phrase")
+    record = bool(request.headers.get("X-Record"))
     if not ENGINE.startswith("gigaam"):
-        out = _stt(audio, split)
-        raw = None
-    else:
-        text, letters = decode(audio)
-        hit = await _dir_get(pid) if pid else None
-        raw = hit["raw"] if hit else None
-        out = {"text": text, "duration": round(len(audio) / 16000, 2)}
-        fr = None
-        if raw is not None:
-            m = raw.astype(np.float32) / 32768.0
-            m = m - m.mean(0)
-            if abs(len(m) - len(audio)) <= 0.2 * 16000:       # the mics and the mono are one stretch of sound
-                fr = in_words(frames(m), letters)
-            if fr is not None and len(fr[0]) >= 2:
-                out["doa"] = dir_summary(fr, len(audio) / 16000)
-        if split:
-            parts = split_phrase(audio, fr, letters)
-            if len(parts) > 1:
-                out["parts"] = parts
-    name = keep(audio, dict(out, record=True) if request.headers.get("X-Record") else out,
-                int(1000 * (time.time() - t)), raw)
+        out = await run_in_threadpool(_stt, audio, split)
+        return await run_in_threadpool(_finish, audio, out, None, record, t)
+    text, letters = await run_in_threadpool(decode, audio)
+    hit = await _dir_get(pid) if pid else None
+    raw = hit["raw"] if hit else None
+    out = await run_in_threadpool(_place_and_split, audio, text, letters, raw, split)
+    return await run_in_threadpool(_finish, audio, out, raw, record, t)
+
+
+def _place_and_split(audio, text, letters, raw, split):
+    out = {"text": text, "duration": round(len(audio) / 16000, 2)}
+    fr = None
+    if raw is not None:
+        m = raw.astype(np.float32) / 32768.0
+        m = m - m.mean(0)
+        if abs(len(m) - len(audio)) <= 0.2 * 16000:           # the mics and the mono are one stretch of sound
+            fr = in_words(frames(m), letters)
+        if fr is not None and len(fr[0]) >= 2:
+            out["doa"] = dir_summary(fr, len(audio) / 16000)
+    if split:
+        parts = split_phrase(audio, fr, letters)
+        if len(parts) > 1:
+            out["parts"] = parts
+    return out
+
+
+def _finish(audio, out, raw, record, t):
+    name = keep(audio, dict(out, record=True) if record else out, int(1000 * (time.time() - t)), raw)
     if name:
         out = dict(out, audio=name)
     if out.get("doa"):
@@ -525,9 +567,10 @@ async def stt(request: Request):
 def decode(audio):
     """The whole phrase once: its text and its letters with their times."""
     rec = get_recognizer()
-    s = rec.create_stream()
-    s.accept_waveform(16000, audio)
-    rec.decode_streams([s])
+    with _rec_lock:
+        s = rec.create_stream()
+        s.accept_waveform(16000, audio)
+        rec.decode_streams([s])
     r = s.result
     return r.text.strip(), list(zip(r.tokens, r.timestamps))
 
