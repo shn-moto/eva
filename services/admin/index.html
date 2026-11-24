@@ -338,9 +338,12 @@ function edit(i) {
   const close = () => { ed.remove(); select(i, false); };
   const save = async () => {
     const text = ta.value.trim(); if (!text) { toast("Пусто — тогда лучше удалить"); return; }
+    let res;
     try {
-      await api("/api/correct", r.id ? { id: r.id, text, speaker: who.value.trim() } : { audio: r.audio, text, speaker: who.value.trim() });
+      res = await api("/api/correct", r.id ? { id: r.id, text, speaker: who.value.trim() } : { audio: r.audio, text, speaker: who.value.trim() });
     } catch (e) { toast("Не сохранилось: " + e.message); return; }
+    // a heard-only clip given its speaker is now a phrase in the memory: a row like the others at once
+    if (!r.id && res && res.id) { r.id = res.id; r.role = "user"; r.text_heard = r.text_heard || r.text; r.corrected = false; }
     if (!r.corrected) { r.text_heard = r.text; if ((who.value.trim() || r.speaker) !== r.speaker) r.speaker_heard = r.speaker; }
     r.text = text; r.speaker = who.value.trim() || r.speaker; r.corrected = true; if (r.has_audio) r.keep = true;
     render(true); toast("Исправлено · звук оставлен для обучения");
