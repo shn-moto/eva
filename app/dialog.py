@@ -571,7 +571,7 @@ def on_phrase(item):
         # long-term memory keeps the voices it knows (as the old assistant did):
         # not children's chatter of unknown guests, not the TV
         memory.write("user", text, speaker=person.profile, dialog=in_dialog, addressed=addressed,
-                     voice_sim=sim, dur=item.get("dur"))
+                     voice_sim=sim, dur=item.get("dur"), audio=item.get("audio"), audio_span=item.get("audio_span"))
     if addressed and r is not None and r["intent"] != "claude":
         state.update(talker=person, talker_voice=item.get("voice"), talker_doa=item.get("doa"), asked_at=began)
         WORK.put((text, person, r))

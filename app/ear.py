@@ -384,6 +384,8 @@ def recognise(seg, meta):
         if emb.get("doa"):
             meta["doa"] = emb["doa"]
     meta["stt_ms"] = int(1000 * (time.time() - t))
+    if res.get("audio"):
+        meta["audio"] = res["audio"]      # the phrase's sound on the hub: stored with it in the memory
     ch = res.get("split")
     if ch and split_ok(ch):
         # two people in one phrase: each part is a phrase of its own, with its own voice
@@ -391,8 +393,9 @@ def recognise(seg, meta):
         log(f"split at {ch['t']}s: another voice (windows {ch['win']}, parts {ch['whole']}): "
             f"{ch['texts'][0]!r} | {ch['texts'][1]!r}")
         t_cut = meta["start"] + ch["t"]
-        parts = [(seg[:cut], dict(meta, end=t_cut, dur=round(ch["t"], 2), split=1)),
-                 (seg[cut:], dict(meta, start=t_cut, speech_start=t_cut, dur=round(meta["dur"] - ch["t"], 2), split=2))]
+        parts = [(seg[:cut], dict(meta, end=t_cut, dur=round(ch["t"], 2), split=1, audio_span=[0, ch["t"]])),
+                 (seg[cut:], dict(meta, start=t_cut, speech_start=t_cut, dur=round(meta["dur"] - ch["t"], 2), split=2,
+                                  audio_span=[ch["t"], None]))]
         for (s_, m_), text, e in zip(parts, ch["texts"], ch["embs"]):
             deliver(s_, m_, text, e, None, peak, hold=False)
         return

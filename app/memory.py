@@ -24,14 +24,20 @@ SEARCH_URL = profile.service("memory")
 _lock = threading.Lock()
 
 
-def write(role, text, speaker=None, dialog=False, addressed=False, stt="gigaam", voice_sim=None, dur=None):
+def write(role, text, speaker=None, dialog=False, addressed=False, stt="gigaam", voice_sim=None, dur=None,
+          audio=None, audio_span=None):
     """voice_sim / dur: how sure the speaker is - one short word was taken for
-    Маша when she was not at home (2026-11-20); who_heard weighs them."""
+    Маша when she was not at home (2026-11-20); who_heard weighs them.
+    audio: the phrase's sound kept on the hub ("<date>/<time>", STT log), with
+    audio_span [from, to] seconds when the phrase is a part of that clip."""
     rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "role": role, "text": text}
     if role == "user":
         rec.update(speaker=speaker, dialog=bool(dialog), woke=bool(addressed), stt=stt)
         if voice_sim is not None:
             rec.update(voice_sim=round(float(voice_sim), 3), dur=round(float(dur or 0), 1))
+        if audio:
+            rec["audio"] = audio + (f"#t={audio_span[0]:g},{audio_span[1]:g}" if audio_span and audio_span[1]
+                                    else f"#t={audio_span[0]:g}" if audio_span and audio_span[0] else "")
     try:
         os.makedirs(DIR, exist_ok=True)
         with _lock, open(os.path.join(DIR, time.strftime("%Y-%m-%d") + ".jsonl"), "a", encoding="utf-8") as f:
@@ -48,6 +54,10 @@ def shipper(dsn, log):
         try:
             if conn is None or conn.closed:
                 conn = psycopg.connect(dsn, autocommit=True, connect_timeout=5)
+                # utterances.audio / .keep (the admin page, services/admin) are added by
+                # the table's owner once - this role may not ALTER (2026-11-24):
+                #   ALTER TABLE utterances ADD COLUMN IF NOT EXISTS audio text;
+                #   ALTER TABLE utterances ADD COLUMN IF NOT EXISTS keep boolean NOT NULL DEFAULT false;
                 log("memory: connected to assistant_memory")
             try:
                 state = json.load(open(STATE, encoding="utf-8"))
@@ -76,10 +86,10 @@ def shipper(dsn, log):
                     except ValueError:
                         continue
                     conn.execute(
-                        "INSERT INTO utterances (ts, role, text, speaker, dialog, woke, stt)"
-                        " VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                        "INSERT INTO utterances (ts, role, text, speaker, dialog, woke, stt, audio)"
+                        " VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
                         (r.get("ts"), r.get("role"), r.get("text"), r.get("speaker"),
-                         r.get("dialog"), r.get("woke"), r.get("stt")))
+                         r.get("dialog"), r.get("woke"), r.get("stt"), r.get("audio")))
                 state[fn] = new_off
                 moved = True
             if moved:

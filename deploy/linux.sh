@@ -2,7 +2,7 @@
 # Deploy Eva's services on shn-linux from git - a commit that is on origin.
 # Run from Git Bash in the repo root:
 #
-#   deploy/linux.sh stt|music|router|gpu-arbiter [ref]      # default origin/main
+#   deploy/linux.sh stt|music|router|gpu-arbiter|admin [ref]      # default origin/main
 #
 # The source of the service is taken from the commit (git archive), built into
 # an image tagged with the commit, and the container is recreated with the run
@@ -18,7 +18,7 @@ HUB_KEY=${HUB_KEY:?set HUB_KEY in deploy/local.env}
 HUB_KEY=${HUB_KEY/#\~/$HOME}
 SSH=(ssh -i "$HUB_KEY" -o ConnectTimeout=10 "$HOST")
 
-svc=${1:?service: stt | music | router | gpu-arbiter}
+svc=${1:?service: stt | music | router | gpu-arbiter | admin}
 ref=${2:-origin/main}
 git fetch -q origin
 sha=$(git rev-parse --verify "$ref^{commit}")
@@ -36,6 +36,14 @@ stt)
 music)
     src=services/music; image=newalisa-music; name=newalisa-music; port=8904
     run="-p 8904:8904"; cmd=""; health=/health ;;
+admin)
+    # the admin page: phrases with their sound, logs, search, keep / delete (home network only).
+    # ~/eva-data/admin.env (not in git): ASSISTANT_PG_DSN=...
+    src=services/admin; image=eva-admin; name=eva-admin; port=8908
+    run="-p 8908:8908 --env-file \$HOME/eva-data/admin.env -e STT_LOG_DIR=/log -e KEEP_DIR=/keep \
+-e PGTZ=\$(cat /etc/timezone) -v /etc/localtime:/etc/localtime:ro \
+-v \$HOME/eva-data/stt-log:/log -v \$HOME/eva-data/stt-keep:/keep"
+    cmd=""; health=/api/days ;;
 gpu-arbiter)
     # stops eva-router while photolib indexes (indexing gets the whole GPU), starts it after
     src=services/gpu-arbiter; image=eva-gpu-arbiter; name=eva-gpu-arbiter; port=8907

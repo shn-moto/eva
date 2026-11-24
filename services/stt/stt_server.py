@@ -230,15 +230,17 @@ def health():
 
 
 LOG_DIR = os.environ.get("STT_LOG_DIR", "")      # every phrase kept here (shn-linux), not on the Station
-LOG_DAYS = int(os.environ.get("STT_LOG_DAYS", "14"))
+LOG_DAYS = int(os.environ.get("STT_LOG_DAYS", "30"))
 
 
 def keep(audio, out, ms):
     """The phrase as the model got it + what it heard: real home audio (music,
     children, two voices at once) for the next STT and front-end tests - the
-    2026-11-19 test set was recorded in a quiet room (2026-11-23)."""
+    2026-11-19 test set was recorded in a quiet room (2026-11-23).
+    -> its name "<date>/<time>" (the brain stores it with the phrase in the
+    memory, the admin page plays it), None if not kept."""
     if not LOG_DIR:
-        return
+        return None
     import json
     import shutil
     import time
@@ -258,10 +260,14 @@ def keep(audio, out, ms):
         info["ms"] = ms
         with open(os.path.join(d, name + ".json"), "w", encoding="utf-8") as f:
             json.dump(info, f, ensure_ascii=False)
+        # older days go; a phrase marked to keep on the admin page was copied
+        # out to the keep folder before that
         for old in sorted(os.listdir(LOG_DIR))[:-LOG_DAYS]:
             shutil.rmtree(os.path.join(LOG_DIR, old), ignore_errors=True)
+        return os.path.basename(d) + "/" + name
     except OSError as e:
         print("keep:", e, flush=True)
+        return None
 
 
 @app.post("/stt")
@@ -275,7 +281,9 @@ async def stt(request: Request):
     if len(audio) < 1600:
         return {"text": ""}
     out = _stt(audio, request.query_params.get("split") == "1")
-    keep(audio, dict(out, record=True) if request.headers.get("X-Record") else out, int(1000 * (time.time() - t)))
+    name = keep(audio, dict(out, record=True) if request.headers.get("X-Record") else out, int(1000 * (time.time() - t)))
+    if name:
+        out = dict(out, audio=name)
     return out
 
 

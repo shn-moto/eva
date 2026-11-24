@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ева · журнал</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --line: #e4e1da; --ink: #22211e; --mute: #7d7a72; --faint: #a9a59b;
+  --accent: #3b6ea8; --accent-soft: #e6eef7; --keep: #b07d12; --keep-soft: #fbf3df; --danger: #b3402e;
+  --her: #5d5a53; --heard: #9a968c; --sel: #eef3fa; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17181a; --panel: #1f2023; --line: #2e3034; --ink: #e6e3dc; --mute: #9b978e; --faint: #6d6a63;
+    --accent: #7fa8d8; --accent-soft: #233244; --keep: #d9a93c; --keep-soft: #3a3020; --danger: #e07a68;
+    --her: #b5b1a8; --heard: #7d7a72; --sel: #252c36;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, "Segoe UI", sans-serif;
+       display: grid; grid-template-rows: auto 1fr; }
+header { display: flex; align-items: center; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--line);
+         background: var(--panel); }
+header h1 { font-size: 15px; font-weight: 600; margin: 0; white-space: nowrap; }
+header h1 span { color: var(--mute); font-weight: 400; }
+#q { flex: 1; max-width: 640px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px;
+     background: var(--bg); color: var(--ink); font: inherit; }
+#q:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.hint { color: var(--faint); font-size: 12px; white-space: nowrap; }
+main { display: grid; grid-template-columns: 200px minmax(520px, 1fr) minmax(420px, 0.85fr); min-height: 0; }
+section { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+section:last-child { border-right: 0; }
+.bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line);
+       background: var(--panel); min-height: 42px; flex-wrap: wrap; }
+.bar .title { font-weight: 600; }
+.bar .sub { color: var(--mute); font-size: 12px; }
+.scroll { overflow-y: auto; flex: 1; min-height: 0; }
+/* days */
+#days a { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 14px; color: inherit;
+          text-decoration: none; border-left: 3px solid transparent; }
+#days a:hover { background: var(--sel); }
+#days a.on { background: var(--accent-soft); border-left-color: var(--accent); }
+#days .d { font-variant-numeric: tabular-nums; }
+#days .w { color: var(--mute); font-size: 12px; margin-left: 6px; }
+#days .n { color: var(--mute); font-size: 12px; font-variant-numeric: tabular-nums; }
+#days .n b { color: var(--keep); font-weight: 600; }
+#days .month { padding: 12px 14px 4px; color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+/* phrases */
+label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mute); font-size: 13px; cursor: pointer; user-select: none; }
+.row { display: grid; grid-template-columns: 70px 92px 1fr auto; gap: 10px; align-items: start; padding: 6px 14px;
+       border-bottom: 1px solid var(--line); cursor: default; }
+.row:hover { background: var(--sel); }
+.row.sel { background: var(--accent-soft); }
+.row .t { font-family: var(--mono); font-size: 12px; color: var(--mute); padding-top: 2px; }
+.row .who { font-size: 12px; font-weight: 600; padding-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .txt { word-break: break-word; }
+.row .tags { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: 1px; }
+.tag { font-size: 10.5px; padding: 0 5px; border-radius: 4px; background: var(--bg); color: var(--mute); border: 1px solid var(--line); }
+.row.assistant .who { color: var(--her); font-weight: 400; }
+.row.assistant .txt { color: var(--her); }
+.row.heard .who, .row.heard .txt { color: var(--heard); font-style: italic; font-weight: 400; }
+.row.keep { box-shadow: inset 3px 0 0 var(--keep); }
+.dayhead { padding: 10px 14px 4px; font-size: 12px; color: var(--mute); font-weight: 600; background: var(--bg);
+           position: sticky; top: 0; border-bottom: 1px solid var(--line); }
+.acts { display: flex; gap: 2px; opacity: .55; }
+.row:hover .acts, .row.sel .acts { opacity: 1; }
+button.i { width: 28px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--mute);
+           cursor: pointer; font-size: 14px; line-height: 26px; padding: 0; }
+button.i:hover { background: var(--line); color: var(--ink); }
+button.i:disabled { opacity: .25; cursor: default; background: transparent; }
+button.i.playing { color: var(--accent); }
+button.i.kept { color: var(--keep); }
+button.i.del:hover { color: var(--danger); }
+.empty { padding: 40px 20px; text-align: center; color: var(--faint); }
+mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radius: 2px; }
+/* logs */
+#units { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip { font-size: 11.5px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line); cursor: pointer;
+        color: var(--mute); background: transparent; user-select: none; }
+.chip.on { background: var(--accent-soft); color: var(--ink); border-color: var(--accent); }
+.chip i { font-style: normal; color: var(--faint); margin-left: 3px; }
+#lq { padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink);
+      font: inherit; font-size: 13px; width: 180px; }
+#logs { font-family: var(--mono); font-size: 12px; }
+#logs .l { display: grid; grid-template-columns: 62px 92px 1fr; gap: 8px; padding: 1px 14px; }
+#logs .l:hover { background: var(--sel); }
+#logs .l .lt { color: var(--faint); }
+#logs .l .lu { color: var(--mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#logs .l .lm { white-space: pre-wrap; word-break: break-word; }
+#logs .l.err .lm { color: var(--danger); }
+#logs .l.at { background: var(--keep-soft); }
+#logs .more { padding: 10px 14px; color: var(--accent); cursor: pointer; font-family: system-ui; font-size: 13px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: transparent; color: var(--mute); padding: 3px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.seg button.on { background: var(--accent-soft); color: var(--ink); }
+#toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+         padding: 8px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+#toast.show { opacity: .92; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ева <span>· журнал</span></h1>
+  <input id="q" type="search" placeholder="Поиск по всем фразам…" autocomplete="off">
+  <span class="hint">↑↓ фраза · пробел — слушать · K — оставить · Del — удалить</span>
+</header>
+<main>
+  <section>
+    <div class="bar"><span class="title">Дни</span></div>
+    <div class="scroll" id="days"></div>
+  </section>
+  <section>
+    <div class="bar">
+      <span class="title" id="dtitle">—</span><span class="sub" id="dsub"></span>
+      <span style="flex:1"></span>
+      <label class="tog"><input type="checkbox" id="heard"> всё услышанное</label>
+      <label class="tog"><input type="checkbox" id="onlykeep"> только оставленные</label>
+    </div>
+    <div class="scroll" id="rows"></div>
+  </section>
+  <section>
+    <div class="bar">
+      <span class="title">Логи</span>
+      <div class="seg"><button id="m-around" class="on">вокруг фразы</button><button id="m-day">весь день</button></div>
+      <span style="flex:1"></span>
+      <input id="lq" type="search" placeholder="фильтр…">
+    </div>
+    <div class="bar" style="min-height:0;padding-top:6px;padding-bottom:6px"><div id="units"></div></div>
+    <div class="scroll" id="logs"></div>
+  </section>
+</main>
+<audio id="player" preload="none"></audio>
+<div id="toast"></div>
+<script>
+const $ = s => document.querySelector(s);
+const WD = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+const MONTHS = ["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"];
+const S = { day: null, rows: [], sel: -1, search: "", units: new Set(), allUnits: [], logMode: "around", playing: null };
+const store = { get(k, d) { try { const v = localStorage.getItem("eva-admin-" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+                set(k, v) { try { localStorage.setItem("eva-admin-" + k, JSON.stringify(v)); } catch {} } };
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+  return r.json();
+}
+function toast(t) { const e = $("#toast"); e.textContent = t; e.classList.add("show"); clearTimeout(toast.h); toast.h = setTimeout(() => e.classList.remove("show"), 1800); }
+const esc = s => (s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function hl(text) {
+  const t = esc(text); if (!S.search) return t;
+  const q = S.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return t.replace(new RegExp(q, "gi"), m => `<mark>${m}</mark>`);
+}
+const colors = {};
+function who(r) {
+  if (r.role === "assistant") return "Ева";
+  if (r.role === "heard") return "услышано";
+  return r.speaker || "?";
+}
+function color(name) {
+  if (!name || name === "?") return "var(--mute)";
+  if (!colors[name]) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360; colors[name] = `hsl(${h} 45% 45%)`; }
+  return colors[name];
+}
+
+/* days */
+async function loadDays() {
+  const days = await api("/api/days");
+  let html = "", month = "";
+  for (const d of days) {
+    const dt = new Date(d.day + "T12:00");
+    const m = MONTHS[dt.getMonth()] + " " + dt.getFullYear();
+    if (m !== month) { html += `<div class="month">${m}</div>`; month = m; }
+    html += `<a href="#${d.day}" data-d="${d.day}"><span><span class="d">${dt.getDate()}</span><span class="w">${WD[dt.getDay()]}</span></span>`
+          + `<span class="n">${d.kept ? `<b>${d.kept}★</b> ` : ""}${d.n || "—"}</span></a>`;
+  }
+  $("#days").innerHTML = html;
+  return days;
+}
+function markDay() { document.querySelectorAll("#days a").forEach(a => a.classList.toggle("on", a.dataset.d === S.day && !S.search)); }
+
+/* phrases */
+async function openDay(d, keepSel) {
+  S.day = d; S.search = ""; $("#q").value = "";
+  markDay();
+  const dt = new Date(d + "T12:00");
+  $("#dtitle").textContent = dt.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" });
+  S.rows = await api(`/api/day?d=${d}&heard=${$("#heard").checked ? 1 : 0}`);
+  render(keepSel);
+  loadUnits();
+}
+async function doSearch(q) {
+  S.search = q.trim();
+  if (S.search.length < 2) { if (S.day) openDay(S.day); return; }
+  markDay();
+  $("#dtitle").textContent = "Поиск";
+  S.rows = await api(`/api/search?q=${encodeURIComponent(S.search)}`);
+  render();
+}
+function render(keepSel) {
+  const only = $("#onlykeep").checked;
+  const rows = only ? S.rows.filter(r => r.keep) : S.rows;
+  S.view = rows;
+  const users = rows.filter(r => r.role === "user").length, sound = rows.filter(r => r.has_audio).length;
+  $("#dsub").textContent = S.search ? `${rows.length} найдено` : `${users} фраз · ${sound} со звуком`;
+  if (!rows.length) { $("#rows").innerHTML = `<div class="empty">${S.search ? "Ничего не нашлось" : "За этот день записей нет"}</div>`; S.sel = -1; return; }
+  let html = "", lastDay = "";
+  rows.forEach((r, i) => {
+    if (S.search && r.day !== lastDay) { html += `<div class="dayhead">${new Date(r.day + "T12:00").toLocaleDateString("ru-RU", { weekday: "short", day: "numeric", month: "long", year: "numeric" })}</div>`; lastDay = r.day; }
+    const tags = [];
+    if (r.role === "user") {
+      if (r.stt === "telegram") tags.push("telegram");
+      else if (r.woke) tags.push("к Еве");
+      if (r.dialog && r.stt !== "telegram") tags.push("в разговоре");
+    }
+    if (r.dur) tags.push(r.dur.toFixed(1) + " с");
+    const canPlay = r.has_audio, canKeep = r.role !== "assistant" && (r.id || r.audio);
+    html += `<div class="row ${r.role}${r.keep ? " keep" : ""}" data-i="${i}">
+      <span class="t">${r.t}</span>
+      <span class="who" style="${r.role === "user" ? `color:${color(r.speaker)}` : ""}">${esc(who(r))}</span>
+      <span class="txt">${hl(r.text)}${tags.length ? `<span class="tags">${tags.map(t => `<span class="tag">${t}</span>`).join("")}</span>` : ""}</span>
+      <span class="acts">
+        <button class="i play" title="Слушать (пробел)" ${canPlay ? "" : "disabled"}>▶</button>
+        <button class="i keepb${r.keep ? " kept" : ""}" title="Оставить навсегда (K)" ${canKeep ? "" : "disabled"}>${r.keep ? "★" : "☆"}</button>
+        <button class="i del" title="Удалить вместе со звуком (Del)" ${r.role === "assistant" && !r.id ? "disabled" : ""}>✕</button>
+      </span></div>`;
+  });
+  $("#rows").innerHTML = html;
+  if (keepSel && S.sel >= 0 && S.sel < rows.length) select(S.sel, false); else S.sel = -1;
+}
+function select(i, scroll = true) {
+  const rows = document.querySelectorAll("#rows .row");
+  if (!rows.length) return;
+  i = Math.max(0, Math.min(rows.length - 1, i));
+  rows.forEach(r => r.classList.remove("sel"));
+  const el = rows[i]; el.classList.add("sel"); S.sel = i;
+  if (scroll) el.scrollIntoView({ block: "nearest" });
+  if (S.logMode === "around") loadLogs();
+}
+const cur = () => S.view && S.sel >= 0 ? S.view[S.sel] : null;
+
+function play(i) {
+  const r = S.view[i], p = $("#player");
+  document.querySelectorAll("button.play").forEach(b => { b.classList.remove("playing"); b.textContent = "▶"; });
+  if (!r || !r.has_audio) return;
+  if (S.playing === i && !p.paused) { p.pause(); S.playing = null; return; }
+  p.src = `/audio/${r.audio}.wav${r.frag || ""}`;
+  p.play().catch(e => toast("Не играет: " + e.message));
+  S.playing = i;
+  const b = document.querySelector(`#rows .row[data-i="${i}"] button.play`);
+  if (b) { b.classList.add("playing"); b.textContent = "❚❚"; }
+}
+$("#player").addEventListener("ended", () => { document.querySelectorAll("button.play").forEach(b => { b.classList.remove("playing"); b.textContent = "▶"; }); S.playing = null; });
+$("#player").addEventListener("pause", () => { if ($("#player").ended) return; document.querySelectorAll("button.play.playing").forEach(b => { b.classList.remove("playing"); b.textContent = "▶"; }); });
+
+async function toggleKeep(i) {
+  const r = S.view[i]; if (!r || r.role === "assistant") return;
+  const want = !r.keep;
+  await api("/api/keep", r.id ? { id: r.id, keep: want } : { audio: r.audio, keep: want });
+  r.keep = want; render(true); toast(want ? "Оставлено навсегда" : "Снова до конца срока лога");
+  loadDays().then(markDay);
+}
+async function del(i) {
+  const r = S.view[i]; if (!r) return;
+  const what = r.text ? `«${r.text.slice(0, 80)}»` : "эту запись";
+  if (!confirm(`Удалить ${what}${r.has_audio ? " вместе со звуком" : ""}? Это нельзя отменить.`)) return;
+  await api("/api/delete", r.id ? { id: r.id } : { audio: r.audio });
+  const k = S.rows.indexOf(r); if (k >= 0) S.rows.splice(k, 1);
+  render(true); toast("Удалено");
+  loadDays().then(markDay);
+}
+
+$("#rows").addEventListener("click", e => {
+  const row = e.target.closest(".row"); if (!row) return;
+  const i = +row.dataset.i;
+  if (e.target.closest("button.play")) { select(i, false); play(i); return; }
+  if (e.target.closest("button.keepb")) { toggleKeep(i); return; }
+  if (e.target.closest("button.del")) { del(i); return; }
+  if (S.search && e.detail === 2) { const r = S.view[i]; location.hash = r.day; openDay(r.day).then(() => {
+      const j = S.view.findIndex(x => x.id === r.id); if (j >= 0) select(j); }); return; }
+  select(i, false);
+});
+document.addEventListener("keydown", e => {
+  if (e.target.matches("input")) { if (e.key === "Escape") e.target.blur(); return; }
+  if (e.key === "ArrowDown") { select(S.sel + 1); e.preventDefault(); }
+  else if (e.key === "ArrowUp") { select(S.sel - 1); e.preventDefault(); }
+  else if (e.key === " ") { if (S.sel >= 0) play(S.sel); e.preventDefault(); }
+  else if (e.code === "KeyK") { if (S.sel >= 0) toggleKeep(S.sel); }      /* K or Л: the key, not the layout */
+  else if (e.key === "Delete") { if (S.sel >= 0) del(S.sel); }
+  else if (e.key === "/") { $("#q").focus(); e.preventDefault(); }
+});
+
+/* logs */
+async function loadUnits() {
+  if (!S.day) return;
+  S.allUnits = await api(`/api/units?d=${S.day}`);
+  // remembered: the units switched off (the noisy screen ones by default); a new unit shows
+  const off = new Set(store.get("units-off", S.allUnits.filter(u => u.noisy).map(u => u.unit)));
+  S.units = new Set(S.allUnits.map(u => u.unit).filter(u => !off.has(u)));
+  $("#units").innerHTML = S.allUnits.map(u => `<span class="chip${S.units.has(u.unit) ? " on" : ""}" data-u="${esc(u.unit)}">${esc(u.unit.replace(".service", ""))}<i>${u.n}</i></span>`).join("");
+  loadLogs();
+}
+$("#units").addEventListener("click", e => {
+  const c = e.target.closest(".chip"); if (!c) return;
+  const u = c.dataset.u;
+  if (e.altKey) { S.units = new Set([u]); } else if (S.units.has(u)) S.units.delete(u); else S.units.add(u);
+  document.querySelectorAll("#units .chip").forEach(x => x.classList.toggle("on", S.units.has(x.dataset.u)));
+  const off = new Set(store.get("units-off", []));
+  for (const x of S.allUnits) { if (S.units.has(x.unit)) off.delete(x.unit); else off.add(x.unit); }
+  store.set("units-off", [...off]);
+  loadLogs();
+});
+for (const m of ["around", "day"]) $("#m-" + m).addEventListener("click", () => {
+  S.logMode = m; $("#m-around").classList.toggle("on", m === "around"); $("#m-day").classList.toggle("on", m === "day"); loadLogs();
+});
+let lqT; $("#lq").addEventListener("input", () => { clearTimeout(lqT); lqT = setTimeout(loadLogs, 250); });
+async function loadLogs(before) {
+  const r = cur(), day = r ? r.day : S.day; if (!day) return;
+  const p = new URLSearchParams({ d: day, units: [...S.units].join(","), q: $("#lq").value });
+  if (S.logMode === "around") {
+    if (!r) { $("#logs").innerHTML = `<div class="empty">Выбери фразу — здесь будут логи ±3 минуты вокруг неё</div>`; return; }
+    p.set("around", r.t);
+  } else if (before) p.set("before_id", before);
+  const rows = await api("/api/logs?" + p);
+  const html = rows.map(l => {
+    const err = l.prio != null && l.prio <= 3 || /error|traceback|exception/i.test(l.msg);
+    const at = S.logMode === "around" && r && l.t === r.t;
+    return `<div class="l${err ? " err" : ""}${at ? " at" : ""}"><span class="lt">${l.t}</span><span class="lu">${esc(l.unit)}</span><span class="lm">${esc(l.msg)}</span></div>`;
+  }).join("");
+  const more = S.logMode === "day" && rows.length >= 400 ? `<div class="more" data-b="${rows[rows.length - 1].id}">ещё раньше…</div>` : "";
+  if (before) { document.querySelector("#logs .more")?.remove(); $("#logs").insertAdjacentHTML("beforeend", html + more); }
+  else { $("#logs").innerHTML = (html || `<div class="empty">Логов нет</div>`) + more;
+         const at = document.querySelector("#logs .l.at"); if (at) at.scrollIntoView({ block: "center" }); else $("#logs").scrollTop = 0; }
+}
+$("#logs").addEventListener("click", e => { const m = e.target.closest(".more"); if (m) loadLogs(+m.dataset.b); });
+
+/* wiring */
+let qT; $("#q").addEventListener("input", () => { clearTimeout(qT); qT = setTimeout(() => doSearch($("#q").value), 300); });
+$("#heard").checked = store.get("heard", false);
+$("#heard").addEventListener("change", () => { store.set("heard", $("#heard").checked); if (S.day && !S.search) openDay(S.day); });
+$("#onlykeep").addEventListener("change", () => render());
+$("#days").addEventListener("click", e => { const a = e.target.closest("a"); if (!a) return; e.preventDefault(); location.hash = a.dataset.d; openDay(a.dataset.d); });
+window.addEventListener("hashchange", () => { const d = location.hash.slice(1); if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d !== S.day) openDay(d); });
+(async () => {
+  const days = await loadDays();
+  const h = location.hash.slice(1);
+  openDay(/^\d{4}-\d{2}-\d{2}$/.test(h) ? h : (days[0] ? days[0].day : new Date().toISOString().slice(0, 10)));
+})().catch(e => { $("#rows").innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>
