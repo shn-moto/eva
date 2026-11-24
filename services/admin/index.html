@@ -420,11 +420,12 @@ $("#logs").addEventListener("click", e => { const m = e.target.closest(".more");
 let ROOM = { rotation: 0, mirror: false }, RMODE = "phrase", ROOMDAY = null;
 const R = 105;
 const scr = az => ((ROOM.mirror ? -az : az) + ROOM.rotation + 360) % 360;      // 0 = in front of the Station = up
-const xy = (az, r) => { const a = (scr(az) - 90) * Math.PI / 180; return [r * Math.cos(a), r * Math.sin(a)]; };
+const VIEW = 180;                                     // the picture turned: "in front of the Station" at the bottom
+const xy = (az, r) => { const a = (scr(az) + VIEW - 90) * Math.PI / 180; return [r * Math.cos(a), r * Math.sin(a)]; };
 function frame() {
   let s = `<circle class="ring" r="${R}"/><circle class="ring" r="${R * 0.66}"/><circle class="ring" r="${R * 0.33}"/>`;
   for (const [a, l] of [[0, "перед колонкой"], [90, "справа"], [180, "сзади"], [270, "слева"]]) {
-    const rad = (a - 90) * Math.PI / 180;
+    const rad = (a + VIEW - 90) * Math.PI / 180;
     s += `<line class="axis" x1="0" y1="0" x2="${R * Math.cos(rad)}" y2="${R * Math.sin(rad)}"/>`;
     const lx = (R + 9) * Math.cos(rad), ly = (R + 9) * Math.sin(rad);
     s += `<text class="lbl" x="${lx}" y="${ly + 3}" text-anchor="${a === 90 ? "start" : a === 270 ? "end" : "middle"}">${a === 0 || a === 180 ? l : ""}</text>`;
