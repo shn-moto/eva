@@ -1,5 +1,11 @@
 # The ear on the server: plan (2026-11-24)
 
+**Done 2026-11-24** - stage 1 ddb95d8, stage 2 fb17c2f..dcf0922, stage 3 8442f76,
+stage 4: the Station's voice files (backed up to the hub, `~/eva-data/station-voices-20261124.tgz`),
+CAM++ and sherpa-onnx removed from the Station. Open: the rule for believing a cut
+(direction cuts at `DIR_CUT` 0.05 split real phrases; to calibrate on the phrases a
+person marks), whispers below the VAD's start threshold.
+
 Goal: the Station only hears - microphones, echo cancelling, voice activity,
 fragments cut by pauses and length. Everything that decides something about
 the sound - text, direction, who speaks, where one person ends and another

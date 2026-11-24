@@ -30,7 +30,7 @@ photolib is the source of truth for people (decided with Иван, 2026-11-19).
 
 | Signal | Resolves to |
 |---|---|
-| voice profile (CAM++) | `voices.PERSON[profile]` → photolib `person_id` |
+| voice profile (CAM++, the hub's voice base: `services/stt/voices.py`) | `voices.PERSON[profile]` → photolib `person_id` |
 | Telegram account | photolib `app_user.telegram_id` → `person_id` |
 | unknown voice | guest (cluster `гость-N`), no `person_id` |
 
@@ -130,7 +130,7 @@ learn it; the skill's `SKILL.md` is a short digest for Eva.
 
 | Process | Role |
 |---|---|
-| `eva-ear` | microphones → phrases (+ voice embedding) |
+| `eva-ear` | microphones → echo cancelling → fragments cut by pauses and length → the hub (`services/stt/hear.py` decides text, direction, who, splits, sentences) → utterances back to the brain |
 | `eva-brain` | core + skills + voice output |
 | `eva-telegram` | Telegram channel |
 | `eva-ui-http` + `eva-ui` | screen: UI server (events, image proxy) + WPE |
