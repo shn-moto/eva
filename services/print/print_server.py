@@ -10,7 +10,8 @@ the home's CUPS (the cups_airprint container, host network) with `lp`.
     POST /print   {kind, ...}      -> {"job", "pages"}
          kind "file":   file_id [from /files], copies, pages ("1-3,5")
     An office file (odt, ods, odp, docx, xlsx, pptx, doc, xls, rtf...) is made a PDF
-    with LibreOffice when it comes in: she reads and prints that PDF.
+    when it comes in, by the host's own LibreOffice (convert_host.py, CONVERT_URL):
+    she reads and prints that PDF.
          kind "photos": photo_ids [photolib], copies, fit ("fit" | "fill"), color (false: grey)
          kind "text":   title, text (lines; "- " bullets, "# " headings)
          kind "url":    url of a PDF or a picture (a web page is not printed)
@@ -28,8 +29,8 @@ import os
 import re
 import subprocess
 import tempfile
-import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -186,22 +187,28 @@ def _pdf_pages(data):
 
 
 OFFICE = re.compile(r"\.(odt|ott|ods|ots|odp|otp|odg|fodt|fods|doc|docx|dot|dotx|xls|xlsx|xlsm|ppt|pptx|pps|ppsx|rtf|wpd)$", re.I)
-_lo_lock = threading.Lock()
+
+
+CONVERT = os.environ.get("CONVERT_URL", "http://127.0.0.1:8910/convert")
 
 
 def _to_pdf(data, name):
-    """An office file -> PDF bytes (LibreOffice headless, one at a time)."""
-    with tempfile.TemporaryDirectory() as d, _lo_lock:
-        m = OFFICE.search(name or "")
-        src = os.path.join(d, "in" + (m.group(0) if m else ".odt"))
-        with open(src, "wb") as f:
-            f.write(data)
-        code, out = _run("soffice", f"-env:UserInstallation=file://{d}/profile", "--headless", "--norestore",
-                         "--convert-to", "pdf", "--outdir", d, src, timeout=180)
-        pdf = os.path.join(d, "in.pdf")
-        if code != 0 or not os.path.exists(pdf):
-            raise HTTPException(400, f"не смогла перевести «{name}» в PDF: {out[-300:]}")
-        return open(pdf, "rb").read()
+    """An office file -> PDF bytes, by the host's own LibreOffice (convert_host.py).
+    No LibreOffice on the host (or the converter down): said so, nothing converted."""
+    req = urllib.request.Request(CONVERT, data=data, headers={
+        "Content-Type": "application/octet-stream", "X-Name": urllib.parse.quote(name or "file")})
+    try:
+        with urllib.request.urlopen(req, timeout=200) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read()).get("detail")
+        except Exception:
+            detail = str(e)
+        raise HTTPException(400, f"«{name}» в PDF не перевёлся: {detail}")
+    except OSError as e:
+        raise HTTPException(503, f"конвертер офисных файлов на хосте не отвечает ({e}) - "
+                                 "нужен LibreOffice на хосте и convert_host.py")
 
 
 def _kind(name, mime, data):

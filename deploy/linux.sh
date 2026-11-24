@@ -73,3 +73,9 @@ git archive "$sha" "$src" | "${SSH[@]}" "rm -rf ~/eva-src/$svc && mkdir -p ~/eva
 "${SSH[@]}" "cd ~/eva-src/$svc && echo $sha > DEPLOYED && docker build -q -t $image:$short -t $image:latest . >/dev/null \
 && docker rm -f $name >/dev/null 2>&1; docker run -d --name $name --restart unless-stopped $run $image:$short $cmd >/dev/null \
 && for i in \$(seq 60); do curl -sf localhost:$port$health >/dev/null && echo $name up at $short && exit 0; sleep 2; done; echo $name NOT up; docker logs --tail 20 $name; exit 1"
+
+if [ "$svc" = print ]; then
+    # office files -> PDF by the host's own LibreOffice: convert_host.py on the host's
+    # system Python, kept alive by the user's crontab (no sudo needed)
+    "${SSH[@]}" 'sh ~/eva-src/print/install_host.sh'
+fi
