@@ -160,6 +160,11 @@ def speaker_change(audio):
 DOA_N, DOA_HOP, DOA_UP = 512, 256, 8         # frame, hop, cross-correlation upsampling
 DOA_MAXLAG = 6                               # samples at 16 kHz: ~13 cm, more than the array spans
 DOA_BLOCK = 0.5
+# Speech band only: a canary's song (2-8 kHz, pure tones) took the angle of a
+# far voice 60-70 degrees to its own side - PHAT weighs every frequency alike.
+# Up to 3 kHz the far voice came back to its place; the test set's places keep
+# their angles (spread 1-4 degrees) (2026-11-24).
+DOA_FMAX = 3000
 
 
 def _gcc(X, pairs):
@@ -191,6 +196,7 @@ def doa(m):
     voiced = energy >= np.percentile(energy, 50)             # the louder half: the voice, not the room
     X = np.fft.rfft(F, axis=1)
     X[:, :int(200 * DOA_N / 16000)] = 0                      # below 200 Hz: hum and rumble
+    X[:, int(DOA_FMAX * DOA_N / 16000):] = 0                 # above the speech band: birds, clinks
     lags, peaks = _gcc(X[voiced], pairs)
     per = max(1, int(DOA_BLOCK * 16000 / DOA_HOP))
     blocks = []
@@ -244,6 +250,7 @@ def frames(m):
     voiced = energy >= np.percentile(energy, 50)
     X = np.fft.rfft(F, axis=1)
     X[:, :int(200 * DOA_N / 16000)] = 0
+    X[:, int(DOA_FMAX * DOA_N / 16000):] = 0
     return X[voiced], (starts[voiced] + DOA_N / 2) / 16000, pairs
 
 

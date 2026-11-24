@@ -81,6 +81,16 @@ def _path(base, ext=".wav"):
 def _row(r):
     (uid, ts, role, speaker, text, dialog, woke, stt, audio, keep, text_heard, speaker_heard, corrected_at) = r
     base, frag = _clip(audio)
+    # the parts of a split clip were written to the memory at one moment: each
+    # shows its own start (the clip's + its offset in it), not one time for all
+    off = 0.0
+    if frag.startswith("#t="):
+        try:
+            off = float(frag[3:].split(",")[0])
+        except ValueError:
+            pass
+    if off:
+        ts = ts + datetime.timedelta(seconds=off)
     return {"id": uid, "t": _local(ts), "day": ts.astimezone().strftime("%Y-%m-%d"), "role": role,
             "speaker": speaker, "text": text, "dialog": dialog, "woke": woke, "stt": stt,
             "audio": base, "frag": frag, "has_audio": bool(base and _path(base)), "keep": keep,
