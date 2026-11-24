@@ -215,7 +215,7 @@ def doa(m):
 # is moved to the nearest word start. End to end (split_live.py) at 0.25: 80 % / 10 %.
 GEOMETRY = os.environ.get("DOA_GEOMETRY", os.path.join(os.path.dirname(os.path.abspath(__file__)), "doa_geometry.json"))
 DIR_CUT = float(os.environ.get("DIR_CUT", "0.3"))
-SNAP = 0.7                                    # s: a cut moves to a word start this close
+SNAP = 1.2                                    # s: the cut moves to the longest word pause this close
 DIR_SIDE = 1.0                                # s of each side of a direction cut
 _geo = None
 
@@ -288,16 +288,26 @@ def angle(X, pairs):
 def dir_cut(fr, t0, t1):
     """The cut in [t0, t1) where the place changes most: (distance, t) or (0, None)."""
     X, t, pairs = fr
-    best = (0.0, None)
+    scores = []
     c = t0 + DIR_SIDE
     while c <= t1 - DIR_SIDE:
         L, R = X[(t >= t0) & (t < c)], X[(t >= c) & (t < t1)]
         if len(L) >= 8 and len(R) >= 8:
-            d = 1.0 - float(np.mean((_curves(L, pairs) * _curves(R, pairs)).sum(1)))
-            if d > best[0]:
-                best = (round(d, 3), round(c, 2))
+            scores.append((c, 1.0 - float(np.mean((_curves(L, pairs) * _curves(R, pairs)).sum(1)))))
         c += 0.25
-    return best
+    if not scores:
+        return (0.0, None)
+    k = max(range(len(scores)), key=lambda i: scores[i][1])
+    best = scores[k][1]
+    # the pause between two people is unvoiced: every cut inside it scores the
+    # same - the middle of that plateau, not its first point (the first was a
+    # word early on 11 of 16 test glues)
+    lo = hi = k
+    while lo > 0 and scores[lo - 1][1] >= 0.95 * best:
+        lo -= 1
+    while hi < len(scores) - 1 and scores[hi + 1][1] >= 0.95 * best:
+        hi += 1
+    return (round(best, 3), round((scores[lo][0] + scores[hi][0]) / 2, 2))
 
 
 def dir_summary(fr, length_s):
