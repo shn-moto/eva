@@ -229,7 +229,10 @@ def doa(m):
 # cut lands 0.34 s (median) from the true one (tools/split-bench/doa_split.py) and
 # is moved to the nearest word start. End to end (split_live.py) at 0.25: 80 % / 10 %.
 GEOMETRY = os.environ.get("DOA_GEOMETRY", os.path.join(os.path.dirname(os.path.abspath(__file__)), "doa_geometry.json"))
-DIR_CUT = float(os.environ.get("DIR_CUT", "0.3"))
+# With the speech band (DOA_FMAX) the distances shrank: one place <= 0.03, two
+# places p50 0.16 - >= 0.05 finds 91 % with no false cut (2026-11-24; 0.3 was
+# for the full band and stopped cutting at all).
+DIR_CUT = float(os.environ.get("DIR_CUT", "0.05"))
 SNAP = 1.2                                    # s: the cut moves to the longest word pause this close
 DIR_SIDE = 1.0                                # s of each side of a direction cut
 _geo = None
