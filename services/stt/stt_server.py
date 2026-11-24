@@ -324,6 +324,28 @@ def dir_cut(fr, t0, t1):
     return (round(best, 3), round((scores[lo][0] + scores[hi][0]) / 2, 2))
 
 
+def in_words(fr, letters, before=0.25, after=0.3):
+    """Only the frames inside the words (from the recognised letters' times): a
+    pause or the tail after the last word is the room - birds, the TV - and gave
+    the clip their direction (2026-11-24: a far voice in front, the clip "right"
+    after a canary sang on past the words)."""
+    if fr is None or not letters:
+        return fr
+    words = []
+    for k, (ch, ts) in enumerate(letters):
+        if ch.isspace():
+            continue
+        if k == 0 or letters[k - 1][0].isspace():
+            words.append([ts, ts])
+        else:
+            words[-1][1] = ts
+    X, t, pairs = fr
+    sel = np.zeros(len(t), dtype=bool)
+    for a, b in words:                      # the letters are emitted a little after their sound
+        sel |= (t >= a - before) & (t <= b + after)
+    return (X[sel], t[sel], pairs) if sel.sum() >= 8 else fr
+
+
 def dir_summary(fr, length_s):
     """For the clip's json and the admin's radar: the phrase's angle and one per 0.5 s."""
     X, t, pairs = fr
@@ -484,7 +506,7 @@ async def stt(request: Request):
             m = raw.astype(np.float32) / 32768.0
             m = m - m.mean(0)
             if abs(len(m) - len(audio)) <= 0.2 * 16000:       # the mics and the mono are one stretch of sound
-                fr = frames(m)
+                fr = in_words(frames(m), letters)
             if fr is not None and len(fr[0]) >= 2:
                 out["doa"] = dir_summary(fr, len(audio) / 16000)
         if split:

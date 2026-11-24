@@ -26,7 +26,12 @@ for mics in sorted(glob.glob(os.path.join(DAY, "*-mics.wav"))):
         m = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).reshape(-1, w.getnchannels())
     m = m.astype(np.float32) / 32768
     m = m - m.mean(0)
-    fr = S.frames(m)
+    letters = []
+    if os.path.exists(mics[:-len("-mics.wav")] + ".wav"):
+        with wave.open(mics[:-len("-mics.wav")] + ".wav") as w:
+            mono = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+        letters = S.decode(mono)[1]
+    fr = S.in_words(S.frames(m), letters)
     if fr is None or len(fr[0]) < 2:
         continue
     info = json.load(open(js, encoding="utf-8"))
