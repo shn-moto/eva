@@ -44,7 +44,9 @@ def read(path):
 
 
 stats = collections.Counter()
-for base, ph in list(clips.items())[:limit]:
+for base, ph in clips.items():
+    if stats["clips"] >= limit:
+        break
     mono_p, mics_p = os.path.join(LOG, base + ".wav"), os.path.join(LOG, base + "-mics.wav")
     if not (os.path.exists(mono_p) and os.path.exists(mics_p)):
         continue

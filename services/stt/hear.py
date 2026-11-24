@@ -9,11 +9,11 @@ utterances go back to the Station on an event stream, with the same fields
 the brain got from the Station's ear before, plus who said it.
 
 Ported from app/ear.py (recognise, deliver, accepted_parts, Joiner) with its
-numbers; one rule changed, measured: a voice cut is believed when each part
-prefers its own voice (bench 2026-11-24: 23 of 36 two-person glues kept
-instead of 18, false cuts on single-person phrases 2 of 46 as before).
+numbers. A rule tried for believing a voice cut - each part
+prefers its own voice - measured, and off (RELATIVE): see there.
 """
 import json
+import os
 import queue
 import re
 import threading
@@ -28,6 +28,12 @@ SPLIT_MIN = 3.0                   # s: shorter fragments are one speaker
 SPLIT_SURE = 0.3                  # parts this unlike: two people (0 false splits of 25 single phrases)
 ECHO_PLAYBACK, ECHO_RESIDUAL = 0.5, 0.1    # under her voice and the canceller left < 10 %: her echo
 REL_LEAD, REL_MIN = 0.05, 0.4     # a voice cut believed: each part prefers its own voice by this
+# Off: on the bench's clean glues it kept 23 of 36 cuts instead of 18, but on
+# the real log (replay 2026-11-24, 196 clips) it split 47 phrases the Station
+# kept whole - many wrong: sisters taken for two people, 0.4-1.5 s parts.
+# The move to the hub goes with the Station's rule; a better one only once it
+# is measured on the phrases a person marked.
+RELATIVE = os.environ.get("EVA_HEAR_RELATIVE") == "1"
 SHOW_PLAYBACK = 0.3               # heard over her voice / the music: not shown under the face
 
 
@@ -129,6 +135,8 @@ def cut_believed(left, right, whole):
     a, b = v.who(left), v.who(right)
     if a is not None and b is not None and a != b:
         return True
+    if not RELATIVE:
+        return False
     rl, rr = v.ranked(left), v.ranked(right)
     if not rl or not rr:
         return False

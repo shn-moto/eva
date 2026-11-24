@@ -69,10 +69,11 @@ state), the voice files in `/var/lib/eva/voices`.
 2. **Direction** from the 7 mics: per block, per word.
 3. **Split** inside the fragment, up to 3 parts: by direction (a change of
    place), by voice (a change of voice in one place) - the cut search as now,
-   but searched **inside the words only** (no leading/trailing silence: the
-   hard case's cut went into 1.9 s of silence before the first word), and the cut
-   **believed here**, with the profiles: the parts' best known voices differ and
-   each part prefers its own (the rule measured above). One decision, one place.
+   and the cut **believed here**, with the profiles: the parts' best known
+   voices differ and each part prefers its own (the rule measured above). One
+   decision, one place. (Searching the voice cut inside the words only - the
+   hard case's cut went into 1.9 s of silence before the first word - was
+   measured and dropped: 15 of 36 glues instead of 18.)
 4. **Who** each part is: voice print of the part (speech only) against the
    voice base; family name, guest cluster or unknown; Eva's own voice (her
    profile moves here too) -> echo verdict together with `playback`/`residual`.
