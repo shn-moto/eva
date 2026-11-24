@@ -218,13 +218,38 @@ class VoiceBase:
         if old:
             self._exec("DELETE FROM voice_prints WHERE id = ANY(%s)", ([i for i, _ in old if i],))
 
-    def identify(self, emb, dur):
-        """(label, similarity, known). label: profile name, or a guest cluster."""
+    def sims(self, emb):
+        """-> (similarity to her own voice, best similarity to a family voice):
+        the echo check (the family's honest prints, as the ear had them)."""
+        e = _unit(emb)
+        with self.lock:
+            fam = max((float(e @ np.asarray(p, dtype=np.float32)) for v in self.profiles.values() for p in v),
+                      default=0.0)
+        return round(self.self_sim(e), 3), round(fam, 3)
+
+    def who(self, emb):
+        """The family member this voice clearly is (best >= 0.5, 0.1 ahead), or None."""
+        best = self.ranked(emb)
+        if not best or best[0][0] < THRESHOLD or (len(best) > 1 and best[0][0] - best[1][0] < ID_MARGIN):
+            return None
+        return best[0][1]
+
+    def ranked(self, emb):
+        """[(similarity, profile)] best first, over the honest prints."""
+        e = _unit(emb)
+        with self.lock:
+            return sorted(((max(float(e @ np.asarray(p, dtype=np.float32)) for p in v), k)
+                           for k, v in self.profiles.items() if v), reverse=True)
+
+    def identify(self, emb, dur, learn=True):
+        """(label, similarity, known). label: profile name, or a guest cluster.
+        learn=False: only look (a replay, a test) - no learning, no guest
+        clusters, no enrollment sample."""
         emb = _unit(emb)
         with self.lock:
             voices = self._voices()
             name, sim = self._best(emb, voices.items())
-            learning = self.enroll["name"] if time.time() < self.enroll["until"] else None
+            learning = self.enroll["name"] if learn and time.time() < self.enroll["until"] else None
             if learning:
                 # a known voice of somebody else cutting in is not a sample of this
                 # one: it is closer to that voice than to the introduction phrase
@@ -243,12 +268,13 @@ class VoiceBase:
                 # THRESHOLD a bigger lead is enough (another room)
                 _, second = self._best(emb, ((k, v) for k, v in voices.items() if k != name))
                 if sim - second >= (ID_MARGIN if sim >= THRESHOLD else LOW_MARGIN):
-                    self._learn(name, emb, sim, second, dur)
+                    if learn:
+                        self._learn(name, emb, sim, second, dur)
                     return name, round(sim, 3), True
                 if sim >= THRESHOLD:
                     log(f"{name} {sim:.2f} vs next {second:.2f} - too close, not recognised")
                     return "unknown", round(sim, 3), False
-            if dur < CLUSTER_MIN_SEC:
+            if dur < CLUSTER_MIN_SEC or not learn:
                 return "unknown", round(sim, 3), False
             if time.time() - self.pruned > 6 * 3600:
                 self.prune()

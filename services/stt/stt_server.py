@@ -794,3 +794,55 @@ def warmup():
         get_recognizer()
     else:
         get_model()
+
+
+# --- the ear's decisions (services/stt/hear.py, docs/EAR-PLAN.md stage 2) ---
+import hear as _hear  # noqa: E402
+from fastapi.responses import StreamingResponse  # noqa: E402
+
+
+@app.post("/hear/fragment")
+async def hear_fragment(request: Request):
+    """A fragment cut by the Station (pauses, length): mono + raw mics + timeline.
+    Live: 202 at once, the utterances come on /hear/events. ?dry=1 (a replay):
+    no log, no learning, no Joiner - the utterances in the answer."""
+    a, mics, meta = _hear.parse(await request.body(), request.headers)
+    if request.query_params.get("dry") == "1":
+        h = _hear.Hearing("replay", dry=True)
+        await run_in_threadpool(h.fragment, a, mics, meta)
+        return JSONResponse({"events": h.out})
+    threading.Thread(target=_hear.STATION.fragment, args=(a, mics, meta), daemon=True).start()
+    return JSONResponse({"ok": True}, status_code=202)
+
+
+@app.post("/hear/start")
+async def hear_start(request: Request):
+    """{"t": when the voice began, "now"} (the Station's clock): a held piece waits for its rest."""
+    b = await request.json()
+    _hear.STATION.clock(b.get("now"))
+    _hear.STATION.started(float(b["t"]))
+    return {"ok": True}
+
+
+@app.post("/hear/config")
+async def hear_config(request: Request):
+    return _hear.config(await request.json())
+
+
+@app.get("/hear/events")
+async def hear_events():
+    """Server-sent events: {"type": "utterance", "item"} / {"type": "ui", "state", "text"}."""
+    q = _hear.EVENTS.subscribe()
+
+    async def gen():
+        try:
+            yield ": hello\n\n"
+            while True:
+                try:
+                    ev = await run_in_threadpool(q.get, True, 15)
+                    yield "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
+                except Exception:          # queue.Empty: a keepalive
+                    yield ": ping\n\n"
+        finally:
+            _hear.EVENTS.unsubscribe(q)
+    return StreamingResponse(gen(), media_type="text/event-stream")
