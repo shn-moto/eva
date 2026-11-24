@@ -92,7 +92,9 @@ COLS = "id, ts, role, speaker, text, dialog, woke, stt, audio, keep, text_heard,
 
 @app.get("/")
 def page():
-    return HTMLResponse(open(os.path.join(HERE, "index.html"), encoding="utf-8").read())
+    # no-cache: a new version of the page shows at once (the old one stayed after a deploy)
+    return HTMLResponse(open(os.path.join(HERE, "index.html"), encoding="utf-8").read(),
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/days")
