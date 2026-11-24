@@ -22,7 +22,8 @@ NOW_MIN = 10                     # heard within this many minutes = probably sti
 
 def _profile(name):
     """A family name as said («Маша», «Иван», «папа») -> its voice profile label, or None."""
-    for p in voices._load(voices.PROFILES):
+    import dialog
+    for p in dialog.VOICES.names():
         if voices.same_person(p, name) or name.lower().startswith(p.lower()[:4]):
             return p
     return None

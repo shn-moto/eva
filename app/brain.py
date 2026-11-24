@@ -23,7 +23,6 @@ import music  # noqa: E402
 import photolib  # noqa: E402
 import say  # noqa: E402
 import slideshow  # noqa: E402
-import voices  # noqa: E402
 from core import cost, identity, llm, screen, skills, speech  # noqa: E402
 from core.speech import ui  # noqa: E402
 from core.util import log, secrets  # noqa: E402
@@ -119,8 +118,6 @@ if __name__ == "__main__":
     dsn = secrets().get("ASSISTANT_PG_DSN")
     if dsn:
         threading.Thread(target=memory.shipper, args=(dsn, log), daemon=True).start()
-        # speakers corrected on the admin page teach the voice profiles
-        threading.Thread(target=voices.corrections_sync, args=(dialog.VOICES, dsn), daemon=True).start()
-    log(f"voices known: {dialog.VOICES.names()}, guests: {len(dialog.VOICES.clusters)}")
+    log(f"voices known: {dialog.VOICES.names()}, guests: {dialog.VOICES.guests()}")
     log(f"brain up: {llm.MODEL}, effort {llm.EFFORT}")
     http.server.ThreadingHTTPServer(("127.0.0.1", 8081), Handler).serve_forever()

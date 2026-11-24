@@ -467,28 +467,102 @@ LOG_DIR = os.environ.get("STT_LOG_DIR", "")      # every phrase kept here (shn-l
 LOG_DAYS = int(os.environ.get("STT_LOG_DAYS", "30"))
 
 
-@app.post("/emb")
-async def emb(request: Request):
-    """{"audio": "<date>/<time>[#t=from[,to]]"} (a phrase's sound, as the memory
-    stores it) -> {"emb": the voice print, "dur"}: a speaker corrected on the admin
-    page goes into that person's voice profile (the brain, voices.sync)."""
-    b = await request.json()
-    path, _, span = str(b.get("audio", "")).partition("#t=")
+def clip_emb(audio):
+    """"<date>/<time>[#t=from[,to]]" (a phrase's sound, as the memory stores it)
+    -> {"emb", "dur"} or {"error"}"""
+    path, _, span = str(audio or "").partition("#t=")
     full = os.path.realpath(os.path.join(LOG_DIR, path + ".wav"))
     if not LOG_DIR or not full.startswith(os.path.realpath(LOG_DIR) + os.sep) or not os.path.exists(full):
-        return JSONResponse({"error": "no such clip"}, status_code=404)
+        return {"error": "no such clip"}
+    with wave.open(full, "rb") as w:
+        a = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32) / 32768
+    if span:
+        p = [float(x) for x in span.split(",")]
+        a = a[int(p[0] * 16000): int(p[1] * 16000) if len(p) > 1 else None]
+    if len(a) < 8000:
+        return {"error": "too short"}
+    return {"emb": spk_emb(a).round(5).tolist(), "dur": round(len(a) / 16000, 2)}
 
-    def work():
-        with wave.open(full, "rb") as w:
-            a = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32) / 32768
-        if span:
-            p = [float(x) for x in span.split(",")]
-            a = a[int(p[0] * 16000): int(p[1] * 16000) if len(p) > 1 else None]
-        if len(a) < 8000:
-            return {"error": "too short"}
-        return {"emb": spk_emb(a).round(5).tolist(), "dur": round(len(a) / 16000, 2)}
-    out = await run_in_threadpool(work)
+
+@app.post("/emb")
+async def emb(request: Request):
+    """{"audio"} -> {"emb": the voice print of a logged clip, "dur"}"""
+    out = await run_in_threadpool(clip_emb, (await request.json()).get("audio"))
     return JSONResponse(out, status_code=400 if "error" in out else 200)
+
+
+# --- the voice base (services/stt/voices.py): who is speaking, decided here ---
+VOICE_DSN = os.environ.get("ASSISTANT_PG_DSN", "")
+VOICES = None
+if VOICE_DSN:
+    import voices as _voices_mod
+    VOICES = _voices_mod.VoiceBase(VOICE_DSN)
+
+    def _voices_load():
+        while True:
+            try:
+                VOICES.load()
+                return
+            except Exception as e:            # the base away at the start: try again
+                print("voices load:", e, flush=True)
+                time.sleep(15)
+    threading.Thread(target=_voices_load, daemon=True).start()
+
+
+def _vb():
+    if VOICES is None or not VOICES.loaded:
+        raise RuntimeError("voice base not ready")
+    return VOICES
+
+
+def _voice_call(fn):
+    async def run(request: Request):
+        b = await request.json() if request.method == "POST" else {}
+        try:
+            return JSONResponse(await run_in_threadpool(fn, _vb(), b))
+        except RuntimeError as e:
+            return JSONResponse({"error": str(e)}, status_code=503)
+    return run
+
+
+def _identify(v, b):
+    label, sim, known = v.identify(b["emb"], float(b.get("dur") or 0))
+    return {"label": label, "sim": sim, "known": known, "self": round(v.self_sim(b["emb"]), 3)}
+
+
+def _claim(v, b):
+    prof, sim = v.claim(b["emb"], b["name"], float(b.get("lead", _voices_mod.ID_MARGIN)))
+    return {"profile": prof, "sim": sim}
+
+
+def _enroll_start(v, b):
+    v.start_enroll(b["name"], b.get("first"), float(b.get("seconds", _voices_mod.ENROLL_SECONDS)))
+    return v.enrolling()
+
+
+def _enroll_finish(v, b):
+    name, n, moved = v.finish_enroll()
+    return {"name": name, "samples": n, "merged": moved}
+
+
+def _correct(v, b):
+    """A speaker changed on the admin page: that phrase's print into the voice."""
+    e = clip_emb(b.get("audio"))
+    if "error" in e:
+        return {"error": e["error"]}
+    got = v.add_corrected(b["speaker"], e["emb"], b.get("heard"), b.get("audio"), b.get("utterance_id"))
+    return {"profile": got[0], "samples": got[1], "merged": got[2]} if got else {"profile": None}
+
+
+for _path, _fn, _m in (("/voices/identify", _identify, "POST"), ("/voices/claim", _claim, "POST"),
+                       ("/voices/enroll", lambda v, b: v.enrolling(), "GET"),
+                       ("/voices/enroll/start", _enroll_start, "POST"),
+                       ("/voices/enroll/finish", _enroll_finish, "POST"),
+                       ("/voices/correct", _correct, "POST"),
+                       ("/voices/people", lambda v, b: v.set_people(b["people"]) or {"ok": True}, "POST"),
+                       ("/voices/names", lambda v, b: {"names": v.names(), "guests": len(v.clusters)}, "GET"),
+                       ("/voices/export", lambda v, b: v.export(), "GET")):
+    app.add_api_route(_path, _voice_call(_fn), methods=[_m])
 
 
 RAW_DAYS = int(os.environ.get("STT_RAW_DAYS", "7"))   # the 7 raw mics of every phrase: re-run new splitters on them

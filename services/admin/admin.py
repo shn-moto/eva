@@ -37,6 +37,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 DSN = os.environ["ASSISTANT_PG_DSN"]
 LOG_DIR = os.environ.get("STT_LOG_DIR", "/log")
 KEEP_DIR = os.environ.get("KEEP_DIR", "/keep")
+# the hub's voice base (services/stt/voices.py): a corrected speaker teaches it
+VOICES_URL = os.environ.get("VOICES_URL", "http://host.docker.internal:8901/voices")
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = re.compile(r"^\d{4}-\d{2}-\d{2}/\d{6}-\d{3}$")
 app = FastAPI()
@@ -385,6 +387,20 @@ def _mark_clip(base, text, speaker, heard_text, frag=""):
         os.replace(p + ".tmp", p)
 
 
+def _teach_voice(uid, speaker, heard, audio):
+    """The phrase's print into that person's voice, the way «запомни мой голос»
+    does - a person said whose voice it is. -> what the base did, or the error."""
+    import urllib.request
+    req = urllib.request.Request(VOICES_URL + "/correct", headers={"Content-Type": "application/json"},
+                                 data=json.dumps({"speaker": speaker, "heard": heard, "audio": audio,
+                                                  "utterance_id": uid}).encode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+    except Exception as e:      # the hub away: the correction stays, the voice is not taught
+        return {"error": str(e)}
+
+
 @app.post("/api/correct")
 async def correct(request: Request):
     b = await request.json()
@@ -413,7 +429,10 @@ async def correct(request: Request):
                 _forget(c, uid, drop=False)
         base, frag = _clip(audio)
         _mark_clip(base, text, speaker, heard, frag)
-        return {"ok": True}
+        out = {"ok": True}
+        if speaker and speaker != old_speaker and audio:
+            out["voice"] = _teach_voice(uid, speaker, heard_speaker or old_speaker, audio)
+        return out
     base, _ = _clip(b.get("audio"))
     if not base:
         raise HTTPException(400)

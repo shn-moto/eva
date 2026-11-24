@@ -830,7 +830,7 @@ def attention_watch():
 def introduction(text, item, label, sim, known, person):
     """"знакомство": learning a voice. True if the phrase was handled here."""
     if VOICES.enrolling():
-        n = len(VOICES.enroll["embs"])
+        n = VOICES.enroll_count()
         if n >= 3:
             name, cnt, moved = VOICES.finish_enroll()
             log(f"enrolled {name}: {cnt} samples, merged {moved}")

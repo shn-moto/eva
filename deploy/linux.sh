@@ -28,7 +28,8 @@ short=$(git rev-parse --short "$sha")
 case "$svc" in
 stt)
     src=services/stt; image=newalisa-stt; name=newalisa-stt; port=8901
-    run="-p 8901:8901 -e STT_ENGINE=gigaam-rnnt -e GIGAAM_DIR=/models/giga3-rnnt -e STT_THREADS=8 \
+    # ~/eva-data/admin.env: ASSISTANT_PG_DSN - the voice base (services/stt/voices.py)
+    run="-p 8901:8901 --env-file \$HOME/eva-data/admin.env -e STT_ENGINE=gigaam-rnnt -e GIGAAM_DIR=/models/giga3-rnnt -e STT_THREADS=8 \
 -e STT_LOG_DIR=/log -v /etc/localtime:/etc/localtime:ro \
 -v \$HOME/newalisa-stt-v3/models:/models:ro -v \$HOME/eva-data/stt-log:/log"
     cmd="uvicorn stt_server:app --host 0.0.0.0 --port 8901"
@@ -40,7 +41,7 @@ admin)
     # the admin page: phrases with their sound, logs, search, keep / delete (home network only).
     # ~/eva-data/admin.env (not in git): ASSISTANT_PG_DSN=...
     src=services/admin; image=eva-admin; name=eva-admin; port=8908
-    run="-p 8908:8908 --env-file \$HOME/eva-data/admin.env -e STT_LOG_DIR=/log -e KEEP_DIR=/keep \
+    run="-p 8908:8908 --add-host=host.docker.internal:host-gateway --env-file \$HOME/eva-data/admin.env -e STT_LOG_DIR=/log -e KEEP_DIR=/keep \
 -e PGTZ=\$(cat /etc/timezone) -v /etc/localtime:/etc/localtime:ro \
 -v \$HOME/eva-data/stt-log:/log -v \$HOME/eva-data/stt-keep:/keep"
     cmd=""; health=/api/days ;;

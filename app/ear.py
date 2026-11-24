@@ -296,7 +296,7 @@ def voice_embedding(audio):
 
 
 SELF_PROFILE = "/var/lib/eva/voices/eva-self.json"   # her own voice (xAI "eve"), from her TTS cache
-SPEAKERS = "/var/lib/eva/voices/speakers.json"      # the family's voices (written by the brain)
+VOICES_EXPORT = STT_URL.rsplit("/", 1)[0] + "/voices/export"   # the family's voices (the hub's voice base)
 TTS_CACHE = "/var/cache/eva/tts"
 _voices = {"self": [], "family": [], "named": {}, "loaded": 0.0}
 
@@ -330,11 +330,13 @@ def voice_sims(emb):
     """-> (similarity to her own voice, best similarity to a family voice)"""
     if time.time() - _voices["loaded"] > 300:
         try:
-            fam = json.load(open(SPEAKERS))
+            # the family's voices from the hub's voice base (services/stt/voices.py)
+            with urllib.request.urlopen(VOICES_EXPORT, timeout=5) as r:
+                fam = json.loads(r.read())["profiles"]
             _voices["named"] = {k: [np.asarray(e, dtype=np.float32) / (np.linalg.norm(e) + 1e-9) for e in v]
                                 for k, v in fam.items()}
             _voices["family"] = [e for v in _voices["named"].values() for e in v]
-        except (OSError, ValueError):
+        except (OSError, ValueError, KeyError):
             pass
         _voices["loaded"] = time.time()
     e = np.asarray(emb, dtype=np.float32)
