@@ -535,16 +535,25 @@ def split_phrase(audio, fr, letters):
     search(0.0, end)
     if not cuts:
         return []
-    # to the nearest word start: a cut 0.3-0.6 s off would give a word's first
-    # letters to the other side (the letters' times are when the model emits
-    # them - a little after the sound - so 0.1 s earlier)
-    starts = [ts for k, (ch, ts) in enumerate(letters)
-              if not ch.isspace() and (k == 0 or letters[k - 1][0].isspace())]
+    # to the longest pause between two words near the cut: where one person
+    # stopped and the other began. The nearest word start was not it - it jumped
+    # into the first person's sentence (0.8 s early on 2 of 12 test glues). The
+    # letters' times are when the model emits them, a little after the sound.
+    words = []                                                # (first letter, last letter) times
+    for k, (ch, ts) in enumerate(letters):
+        if ch.isspace():
+            continue
+        if k == 0 or letters[k - 1][0].isspace():
+            words.append([ts, ts])
+        else:
+            words[-1][1] = ts
     for c in cuts:
-        near = [w for w in starts if abs(w - c["t"]) <= SNAP and w > 0.3]
-        if near:
-            w = min(near, key=lambda w: abs(w - c["t"]))
-            c["raw_t"], c["t"] = c["t"], round(max(0.0, w - 0.1), 2)
+        gaps = [(words[k + 1][0] - words[k][1], k) for k in range(len(words) - 1)
+                if abs(words[k + 1][0] - c["t"]) <= SNAP]
+        if gaps:
+            g, k = max(gaps)
+            nxt = words[k + 1][0]
+            c["raw_t"], c["t"] = c["t"], round(min(max(words[k][1] + 0.05, nxt - 0.25), nxt - 0.01), 2)
     cuts.sort(key=lambda c: c["t"])
     cuts = [c for k, c in enumerate(cuts) if k == 0 or c["t"] - cuts[k - 1]["t"] >= 0.5]
     bounds = [0.0] + [c["t"] for c in cuts] + [end]
