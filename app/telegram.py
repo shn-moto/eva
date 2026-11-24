@@ -133,8 +133,8 @@ def keep_file(att):
         "Content-Type": "application/octet-stream", "X-Name": urllib.parse.quote(name), "X-Mime": mime})
     with urllib.request.urlopen(req, timeout=60) as r:
         meta = json.loads(r.read())
-    kind = {"pdf": "PDF", "image": "картинка"}.get(meta["kind"], meta.get("mime") or "файл")
-    pages = f", страниц {meta['pages']}" if meta["kind"] == "pdf" and meta.get("pages") else ""
+    kind = {"pdf": "PDF", "image": "картинка", "office": "документ"}.get(meta["kind"], meta.get("mime") or "файл")
+    pages = f", страниц {meta['pages']}" if meta["kind"] in ("pdf", "office") and meta.get("pages") else ""
     return f"[прислан файл: «{meta['name']}», {kind}{pages}, file_id={meta['file_id']}]"
 
 

@@ -9,6 +9,8 @@ the home's CUPS (the cups_airprint container, host network) with `lp`.
                                    (a file sent to Eva in Telegram; kept FILES_DAYS)
     POST /print   {kind, ...}      -> {"job", "pages"}
          kind "file":   file_id [from /files], copies, pages ("1-3,5")
+    An office file (odt, ods, odp, docx, xlsx, pptx, doc, xls, rtf...) is made a PDF
+    with LibreOffice when it comes in: she reads and prints that PDF.
          kind "photos": photo_ids [photolib], copies, fit ("fit" | "fill"), color (false: grey)
          kind "text":   title, text (lines; "- " bullets, "# " headings)
          kind "url":    url of a PDF or a picture (a web page is not printed)
@@ -26,6 +28,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -182,9 +185,32 @@ def _pdf_pages(data):
         return None
 
 
+OFFICE = re.compile(r"\.(odt|ott|ods|ots|odp|otp|odg|fodt|fods|doc|docx|dot|dotx|xls|xlsx|xlsm|ppt|pptx|pps|ppsx|rtf|wpd)$", re.I)
+_lo_lock = threading.Lock()
+
+
+def _to_pdf(data, name):
+    """An office file -> PDF bytes (LibreOffice headless, one at a time)."""
+    with tempfile.TemporaryDirectory() as d, _lo_lock:
+        m = OFFICE.search(name or "")
+        src = os.path.join(d, "in" + (m.group(0) if m else ".odt"))
+        with open(src, "wb") as f:
+            f.write(data)
+        code, out = _run("soffice", f"-env:UserInstallation=file://{d}/profile", "--headless", "--norestore",
+                         "--convert-to", "pdf", "--outdir", d, src, timeout=180)
+        pdf = os.path.join(d, "in.pdf")
+        if code != 0 or not os.path.exists(pdf):
+            raise HTTPException(400, f"не смогла перевести «{name}» в PDF: {out[-300:]}")
+        return open(pdf, "rb").read()
+
+
 def _kind(name, mime, data):
     if data[:5] == b"%PDF-" or mime == "application/pdf":
         return "pdf"
+    if OFFICE.search(name or "") or "opendocument" in (mime or "") or "officedocument" in (mime or "") \
+            or mime in ("application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint",
+                        "application/rtf", "text/rtf"):
+        return "office"
     if (mime or "").startswith("image/") or re.search(r"\.(jpe?g|png|webp|heic|bmp|gif|tiff?)$", name or "", re.I):
         return "image"
     return "other"
@@ -208,6 +234,15 @@ async def files(request: Request):
         f.write(data)
     meta = {"name": name, "mime": mime, "kind": kind, "size": len(data),
             "pages": _pdf_pages(data) if kind == "pdf" else (1 if kind == "image" else None)}
+    if kind == "office":
+        # converted now, while she gets the note: she reads and prints the PDF
+        try:
+            pdf = await run_in_threadpool(_to_pdf, data, name)
+            with open(os.path.join(FILES, fid + ".pdf"), "wb") as f:
+                f.write(pdf)
+            meta.update(pdf=True, pages=_pdf_pages(pdf))
+        except HTTPException as e:
+            meta.update(pdf=False, error=str(e.detail)[:300])
     with open(os.path.join(FILES, fid + ".json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False)
     return dict(meta, file_id=fid)
@@ -220,6 +255,8 @@ def _file(fid):
     if not os.path.exists(p):
         raise HTTPException(404, "файла уже нет (хранятся неделю) - пусть пришлют ещё раз")
     meta = json.load(open(p + ".json", encoding="utf-8"))
+    if meta.get("kind") == "office" and os.path.exists(p + ".pdf"):
+        return open(p + ".pdf", "rb").read(), meta          # an office file: its PDF
     return open(p, "rb").read(), meta
 
 
@@ -259,13 +296,13 @@ def _print(b):
         title = title or (b.get("url") or "")[-60:]
     elif kind == "file":
         data, meta = _file(b.get("file_id"))
-        if meta["kind"] == "pdf":
+        if meta["kind"] == "pdf" or (meta["kind"] == "office" and meta.get("pdf")):
             pdf, pages = data, meta.get("pages")
         elif meta["kind"] == "image":
             pdf, pages = _pages_from_images([data], b.get("fit") or "fit", bool(b.get("color")))
         else:
-            raise HTTPException(400, f"«{meta['name']}» - не PDF и не картинка: такое не печатаю, "
-                                     "пусть пришлют PDF")
+            raise HTTPException(400, f"«{meta['name']}» - не PDF, не картинка и не офисный документ: "
+                                     "такое не печатаю, пусть пришлют PDF")
         title = title or meta["name"]
     else:
         raise HTTPException(400, "kind: photos | text | url | file")
@@ -299,7 +336,34 @@ def file_meta(fid: str):
 @app.get("/files/{fid}/raw")
 def file_raw(fid: str):
     data, meta = _file(fid)
-    return Response(content=data, media_type=meta.get("mime") or "application/octet-stream")
+    mime = "application/pdf" if meta.get("kind") == "office" and meta.get("pdf") else meta.get("mime")
+    return Response(content=data, media_type=mime or "application/octet-stream")
+
+
+@app.on_event("startup")
+def convert_waiting():
+    """Office files that came before LibreOffice was here (kind "other") or whose
+    conversion failed: made PDFs now, so nobody has to send them again."""
+    if not os.path.isdir(FILES):
+        return
+    for fn in os.listdir(FILES):
+        if not fn.endswith(".json"):
+            continue
+        p = os.path.join(FILES, fn)
+        try:
+            meta = json.load(open(p, encoding="utf-8"))
+            fid = fn[:-5]
+            if meta.get("pdf") or not (OFFICE.search(meta.get("name", "")) or meta.get("kind") == "office"):
+                continue
+            pdf = _to_pdf(open(os.path.join(FILES, fid), "rb").read(), meta["name"])
+            with open(os.path.join(FILES, fid + ".pdf"), "wb") as f:
+                f.write(pdf)
+            meta.update(kind="office", pdf=True, pages=_pdf_pages(pdf))
+            meta.pop("error", None)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False)
+        except Exception as e:
+            print("convert", fn, e, flush=True)
 
 
 @app.get("/files/{fid}/jpeg")

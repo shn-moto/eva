@@ -50,18 +50,22 @@ def view(args, person):
             return Result("", blocks=[
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}},
                 {"type": "text", "text": f"Файл «{meta['name']}» (file_id {fid})."}])
-        if meta["kind"] == "pdf":
+        if meta["kind"] == "office" and not meta.get("pdf"):
+            return f"«{meta['name']}» не открылся: {meta.get('error') or 'документ не перевёлся в PDF'}."
+        if meta["kind"] in ("pdf", "office"):
             if meta["size"] > 20 * 1024 * 1024:
                 return f"«{meta['name']}» - PDF больше 20 МБ, открыть не могу; напечатать - могу."
             pdf = _req(f"/files/{fid}/raw", timeout=90)
             return Result("", blocks=[
                 {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
                                                 "data": base64.b64encode(pdf).decode("ascii")}},
-                {"type": "text", "text": f"Файл «{meta['name']}» (file_id {fid}), страниц: {meta.get('pages') or '?'}."}])
+                {"type": "text", "text": f"Файл «{meta['name']}» (file_id {fid}), страниц: {meta.get('pages') or '?'}"
+                                         + (" - офисный документ, показан как PDF." if meta["kind"] == "office" else ".")}])
         if (meta.get("mime") or "").startswith("text/") or meta["name"].lower().endswith((".txt", ".csv", ".md")):
             text = _req(f"/files/{fid}/raw").decode("utf-8", "replace")
             return f"Файл «{meta['name']}»:\n{text[:20000]}"
-        return f"«{meta['name']}» ({meta.get('mime') or 'неизвестный тип'}) открыть не умею: только картинки, PDF и текст."
+        return (f"«{meta['name']}» ({meta.get('mime') or 'неизвестный тип'}) открыть не умею: картинки, PDF, "
+                "офисные документы (odt, ods, odp, docx, xlsx, pptx, doc, rtf...) и текст.")
     except Exception as e:
         return _err(e)
 
@@ -119,7 +123,8 @@ SKILL = Skill(
     summary="присланные в Телеграм файлы и фото (посмотреть, разобрать) и печать на домашнем принтере",
     prompt="""## Присланные файлы и печать
 
-Что присылают тебе в Телеграме (фото, картинки, PDF, другие файлы), лежит у тебя
+Что присылают тебе в Телеграме (фото, картинки, PDF, офисные документы - odt, ods,
+docx, xlsx и др., другие файлы), лежит у тебя
 под file_id - в переписке это пометка «[прислан файл: …, file_id=…]».
 - file_view - посмотреть: картинку видишь, PDF читаешь. Спрашивают про присланное
   («что это за растение», «что тут написано», «посчитай по чеку») - сначала
@@ -142,7 +147,7 @@ SKILL = Skill(
         handler=view, needs="known",
     ), Tool(
         name="file_print",
-        description="Напечатать присланный файл (PDF или картинку) на домашнем принтере.",
+        description="Напечатать присланный файл (PDF, картинку, офисный документ) на домашнем принтере.",
         schema={"type": "object", "additionalProperties": False, "required": ["file_id"],
                 "properties": {"file_id": {"type": "string"}, "copies": _COPIES, "pages": _PAGES,
                                "fit": {"type": "string", "enum": ["fit", "fill"],
