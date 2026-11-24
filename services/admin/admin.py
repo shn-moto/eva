@@ -446,6 +446,16 @@ async def set_settings(request: Request):
         s["rotation"] = float(b["rotation"]) % 360
     if "mirror" in b:
         s["mirror"] = bool(b["mirror"])
+    # places learned from labelled phrases: from other rooms the sound comes in
+    # through doors and walls, so its angle is not the room's on a plan - but it
+    # repeats (2026-11-24: the bedroom 36, the closet 78, the toilet 82 degrees)
+    if "place" in b:
+        pl = b["place"]
+        places = [x for x in s.get("places", []) if not (pl.get("remove") and x["name"] == pl["name"])]
+        if not pl.get("remove"):
+            places.append({"name": str(pl["name"])[:40], "az": float(pl["az"]) % 360,
+                           "audio": pl.get("audio"), "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")})
+        s["places"] = places
     os.makedirs(KEEP_DIR, exist_ok=True)
     with open(SETTINGS + ".tmp", "w", encoding="utf-8") as f:
         json.dump(s, f)

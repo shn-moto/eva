@@ -429,7 +429,25 @@ function frame() {
     const lx = (R + 9) * Math.cos(rad), ly = (R + 9) * Math.sin(rad);
     s += `<text class="lbl" x="${lx}" y="${ly + 3}" text-anchor="${a === 90 ? "start" : a === 270 ? "end" : "middle"}">${a === 0 || a === 180 ? l : ""}</text>`;
   }
+  // places learned from labelled phrases: a tick and a name on the ring
+  for (const p of placeMeans()) {
+    const [x1, y1] = xy(p.az, R - 5), [x2, y2] = xy(p.az, R + 5), [tx, ty] = xy(p.az, R - 14);
+    s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--keep)" stroke-width="2"/>
+          <text class="lbl" x="${tx}" y="${ty + 3}" text-anchor="middle" style="fill:var(--keep)">${esc(p.name)}</text>`;
+  }
   return s + `<rect class="station" x="-7" y="-7" width="14" height="14" rx="3"/>`;
+}
+const PLACE_TOL = 12;                                 // degrees: one place's phrases spread 2-9
+const adiff = (a, b) => Math.abs(((a - b + 540) % 360) - 180);
+function placeMeans() {                              // one mean angle per place name
+  const by = {};
+  for (const p of ROOM.places || []) (by[p.name] ||= []).push(p.az * Math.PI / 180);
+  return Object.entries(by).map(([name, a]) => ({ name, n: a.length,
+    az: (Math.atan2(a.reduce((s, x) => s + Math.sin(x), 0), a.reduce((s, x) => s + Math.cos(x), 0)) * 180 / Math.PI + 360) % 360 }));
+}
+function guess(az) {
+  if (az == null) return [];
+  return placeMeans().map(p => ({ ...p, d: adiff(p.az, az) })).filter(p => p.d <= PLACE_TOL).sort((a, b) => a.d - b.d);
 }
 function timeColor(f) { return `hsl(${210 - 190 * f} 70% 50%)`; }     /* start blue -> end orange */
 async function radarPhrase() {
@@ -458,10 +476,21 @@ async function radarPhrase() {
   }
   svg.innerHTML = s;
   const partTxt = parts.length > 1 ? parts.map((p, k) => `<div>${k + 1}) ${p.from}–${p.to} с${p.az != null ? ` · <b>${Math.round(scr(p.az))}°</b>` : ""}${p.cut ? ` · разрез: ${p.cut.by === "direction" ? "место" : "голос"} ${p.cut.d ?? p.cut.whole ?? ""}` : ""} — ${esc(p.text)}</div>`).join("") : "";
-  info.innerHTML = `<div>угол фразы <b>${c.doa.az != null ? Math.round(scr(c.doa.az)) + "°" : "—"}</b> · сила ${c.doa.strength ?? "—"} · ${dur} с</div>
+  const g = guess(c.doa.az);
+  const where = g.length ? g.map(p => `<b>${esc(p.name)}</b>`).join(" или ") : "не знаю — отметь место";
+  info.innerHTML = `<div>откуда: ${where}</div>
+    <div>угол фразы <b>${c.doa.az != null ? Math.round(scr(c.doa.az)) + "°" : "—"}</b> · сила ${c.doa.strength ?? "—"} · ${dur} с</div>
     <div class="legend"><span><i style="background:${timeColor(0)}"></i>начало</span><span><i style="background:${timeColor(1)}"></i>конец</span><span><i style="background:var(--danger)"></i>разрез</span></div>
     ${partTxt || `<div>не резалась${c.split ? " (старый разрез по голосу)" : ""}</div>`}
-    <div><button id="calib" title="Повернуть комнату так, чтобы эта фраза была «перед колонкой»">Это сказано перед колонкой</button><button id="mirror">${ROOM.mirror ? "Зеркально ✓" : "Зеркально"}</button></div>`;
+    <div><button id="place" title="Запомнить: фразы с этого угла — из этого места">Отметить место…</button><button id="calib" title="Повернуть комнату так, чтобы эта фраза была «перед колонкой»">Это сказано перед колонкой</button><button id="mirror">${ROOM.mirror ? "Зеркально ✓" : "Зеркально"}</button></div>`;
+  $("#place").onclick = async () => {
+    if (c.doa.az == null) return;
+    const names = placeMeans().map(p => p.name).join(", ");
+    const name = prompt(`Откуда сказана эта фраза?${names ? "\nУже есть: " + names : ""}`, g[0]?.name || "");
+    if (!name || !name.trim()) return;
+    ROOM = await api("/api/settings", { place: { name: name.trim(), az: c.doa.az, audio: r.audio } });
+    toast(`Запомнила: ${name.trim()}`); radar();
+  };
   $("#calib").onclick = async () => {
     if (c.doa.az == null) return;
     const raw = ROOM.mirror ? -c.doa.az : c.doa.az;
@@ -480,7 +509,7 @@ async function radarDay() {
     const [x, y] = xy(p.az, jitter + 10);
     const isSel = sel && sel.audio === p.audio;
     s += `<circle class="dot" data-k="${k}" cx="${x}" cy="${y}" r="${isSel ? 6 : 4}" fill="${p.speaker ? color(p.speaker) : "var(--faint)"}"
-           opacity="${p.speaker ? .85 : .45}" ${isSel ? 'stroke="var(--ink)" stroke-width="2"' : ""}><title>${p.t} ${esc(p.speaker || "—")} · ${Math.round(scr(p.az))}°: ${esc((p.text || "").slice(0, 60))}</title></circle>`;
+           opacity="${p.speaker ? .85 : .45}" ${isSel ? 'stroke="var(--ink)" stroke-width="2"' : ""}><title>${p.t} ${esc(p.speaker || "—")} · ${Math.round(scr(p.az))}°${guess(p.az).length ? " · " + guess(p.az).map(x => x.name).join("/") : ""}: ${esc((p.text || "").slice(0, 60))}</title></circle>`;
   });
   $("#radar").innerHTML = s;
   const by = {};
