@@ -29,7 +29,14 @@ LOW_THRESHOLD, LOW_MARGIN = profile.tune("voices.low_threshold", 0.42), profile.
 SHORT_SEC, SHORT_MIN = profile.tune("voices.short_sec", 1.5), profile.tune("voices.short_min", 0.7)     # a phrase shorter than this needs a strong match to be named
 CLAIM_MIN = profile.tune("voices.claim_min", 0.38)           # «запомни мой голос, я Иван» from a voice this close to Иван: a refresh
 ENROLL_MATCH = profile.tune("voices.enroll_match", 0.55)         # an enrollment sample / a guest cluster like the introduction phrase
-OTHER_MAX = profile.tune("voices.other_max", 0.5)             # a sample this like another family voice is not taken
+# an enrollment sample must be closer to the introduction phrase than to anybody
+# else's profile by this much. Not an absolute "like another voice" cap (was 0.5):
+# sisters are 0.62-0.67 to each other, so Аврора's samples were all thrown away
+# as "Аэлита's" and she could not be enrolled (2026-11-24)
+ENROLL_LEAD = profile.tune("voices.enroll_lead", 0.05)
+# a known voice saying it is a family member with no voice yet is enrolled under
+# that name unless it is this sure to be the voice it was taken for
+ENROLL_KNOWN_MAX = profile.tune("voices.enroll_known_max", 0.75)
 CLUSTER_MATCH = profile.tune("voices.cluster_match", 0.62)
 CLUSTER_MAX_EMB = 10
 NEXT_GUEST = [0]            # the next guest number in this run (pruned numbers are not given again)
@@ -112,9 +119,11 @@ class Voices:
                     best, sim = name, s
         return best, sim
 
-    def claim(self, emb, name):
-        """Is an unrecognised voice saying «я <name>» likely that person in other
-        acoustics (another room)? Its best profile must be that one, clearly."""
+    def claim(self, emb, name, lead=ID_MARGIN):
+        """Is a voice saying «я <name>» likely that person? Its own profile must
+        lead the others by `lead`: clearly (ID_MARGIN) for an unrecognised voice
+        in other acoustics (another room); a negative lead - "not clearly somebody
+        else" - for close voices like sisters, which pass for each other."""
         e = np.asarray(emb, dtype=np.float32)
         e = e / (np.linalg.norm(e) + 1e-9)
         with self.lock:
@@ -123,7 +132,7 @@ class Voices:
                 return None, 0.0
             mine = self._best(e, ((k, v) for k, v in self.profiles.items() if k in own))
             other = self._best(e, ((k, v) for k, v in self.profiles.items() if k not in own))[1]
-        ok = mine[1] >= CLAIM_MIN and mine[1] - other >= ID_MARGIN
+        ok = mine[1] >= CLAIM_MIN and mine[1] - other >= lead
         return (mine[0] if ok else None), round(mine[1], 3)
 
     def _voices(self):
@@ -151,10 +160,12 @@ class Voices:
             name, sim = self._best(emb, voices.items())
             learning = self.enroll["name"] if time.time() < self.enroll["until"] else None
             if learning:
-                # a known voice of somebody else cutting in is not a sample of this one
-                if name is not None and sim >= THRESHOLD and not same_person(name, learning):
-                    pass
-                else:
+                # a known voice of somebody else cutting in is not a sample of this
+                # one: it is closer to that voice than to the introduction phrase
+                first = self.enroll["embs"][0] if self.enroll["embs"] else None
+                own = float(emb @ np.asarray(first, dtype=np.float32)) if first is not None else 0.0
+                if not (name is not None and sim >= THRESHOLD and not same_person(name, learning)
+                        and sim - own >= ENROLL_LEAD):
                     self.enroll["embs"].append(emb.tolist())
             if name is not None and dur < SHORT_SEC and not (sim >= SHORT_MIN and sim - self._best(
                     emb, ((k, v) for k, v in voices.items() if k != name))[1] >= LOW_MARGIN):
@@ -230,8 +241,10 @@ class Voices:
             if not name or not embs:
                 return name, 0, []
             first = np.asarray(embs[0], dtype=np.float32)
-            embs = [embs[0]] + [e for e in embs[1:] if float(first @ np.asarray(e, dtype=np.float32)) >= ENROLL_MATCH
-                                and self._near_other(e, name) < OTHER_MAX]
+            def own(e):
+                return float(first @ np.asarray(e, dtype=np.float32))
+            embs = [embs[0]] + [e for e in embs[1:] if own(e) >= ENROLL_MATCH
+                                and own(e) - self._near_other(e, name) >= ENROLL_LEAD]
             self.profiles.setdefault(name, []).extend(embs)
             mine = [np.asarray(e, dtype=np.float32) for e in embs]
             moved = []
@@ -240,7 +253,9 @@ class Voices:
                 avg = np.mean([max(float(m @ np.asarray(c, dtype=np.float32)) for m in mine) for c in ce])
                 if avg < ENROLL_MATCH:
                     continue
-                self.profiles[name].extend(c for c in ce if self._near_other(c, name) < OTHER_MAX)
+                self.profiles[name].extend(
+                    c for c in ce if max(float(m @ np.asarray(c, dtype=np.float32)) for m in mine)
+                    - self._near_other(c, name) >= ENROLL_LEAD)
                 moved.append(g)
                 del self.clusters[g]
             _save(PROFILES, self.profiles)

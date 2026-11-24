@@ -848,16 +848,33 @@ def introduction(text, item, label, sim, known, person):
         # name is the speaker's own ("я Лиза" came as "Аит", 2026-11-19)
         other = next((p for p in VOICES.names() if p != label and voices.same_person(p, name)), None) \
             or next((n for s, n in FAMILY if name.lower().startswith(s) and not voices.same_person(label, n)), None)
+        # close voices (sisters: 0.62-0.67 to each other) pass for each other, so
+        # «я Аврора» from a voice taken for Аэлита is refused only when it is
+        # clearly Аэлита's (2026-11-24)
+        mine = None
+        if other and not voices.same_person(label, name) and item.get("voice"):
+            if other in VOICES.names():
+                mine = VOICES.claim(item["voice"], other, lead=-voices.ID_MARGIN)[0]
+            elif sim < voices.ENROLL_KNOWN_MAX:
+                mine = other            # a family member with no voice yet
         if voices.same_person(label, name) or not other:
             # asked by the owner of the profile: refresh it with samples from today's microphones
             VOICES.start_enroll(label, first=item.get("voice"))
             log(f"refreshing voice {label} ({sim})")
             VOICE.say(f"Узнаю тебя, {person.name}. Скажи ещё пару фраз, я обновлю твой голос.")
+        elif mine:
+            VOICES.start_enroll(mine, first=item.get("voice"))
+            log(f"voice {label} ({sim}) says it is {name}: close voices, enrolling {mine}")
+            VOICE.say(f"Ой, вы с {voices.CALL.get(label, label)} звучите похоже. Привет, {voices.CALL.get(mine, mine)}! "
+                      f"Скажи ещё пару фраз, я запомню твой голос получше.")
         else:
             VOICE.say(f"Не-а, я тебя уже знаю: ты {person.name}!")
             log(f"introduction refused: {label} ({sim}) said to be {name}")
         return True
     profile, csim = VOICES.claim(item["voice"], name) if item.get("voice") else (None, 0.0)
+    if not profile and item.get("voice"):
+        # not recognised, and not clearly somebody else either (a sister's voice is as close)
+        profile, csim = VOICES.claim(item["voice"], name, lead=-voices.ID_MARGIN)
     if profile:
         # the owner in other acoustics (Иван, another room: 0.44-0.49 to his
         # profile, 0.25 to the others) - refresh, not "impostor" (2026-11-19)
