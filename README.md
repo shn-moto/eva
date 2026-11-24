@@ -32,10 +32,16 @@ git не попадает**: персона (`BOOTSTRAP.md`, `LEGEND.md`, `PRIVA
 deploy/station.sh --diff     # что изменится на Станции
 deploy/station.sh            # origin/main -> /opt/eva/{app,ui/spike}, перезапуск затронутых служб
 deploy/linux.sh stt          # сервис из коммита: сборка образа <имя>:<коммит> и пересоздание контейнера
-deploy/linux.sh music | router
+deploy/linux.sh music | router | gpu-arbiter | admin
 ```
 
 На Станции коммит записан в `/opt/eva/DEPLOYED`, на сервере — в `~/eva-src/<сервис>/DEPLOYED`.
+
+**Админка** (`services/admin`, порт 8908, только из домашней сети): фразы из памяти по дням со
+звуком (STT хранит клип фразы 30 дней, `STT_LOG_DAYS`), «оставить навсегда» (копия в
+`~/eva-data/stt-keep`), удаление вместе со звуком и из поиска по памяти, поиск по тексту, служебные
+логи вокруг фразы или за день. На сервере нужен `~/eva-data/admin.env` с `ASSISTANT_PG_DSN`, а в
+`utterances` — колонки `audio text` и `keep boolean` (их добавляет владелец таблицы, см. `app/memory.py`).
 Код в контейнеры через `docker cp` не кладём: он теряется при пересоздании.
 
 ---
