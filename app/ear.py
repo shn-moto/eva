@@ -209,12 +209,15 @@ class HighPass:
 DOA_URL = STT_URL.rsplit("/", 1)[0] + "/doa"
 
 
-def direction(raw7):
+def direction(raw7, pid=None):
     """Direction fingerprint of a phrase from its 7 raw mics (shn-linux):
-    {"lags": 21 pair delays, "peak", "blocks": per 0.5 s}, or None."""
+    {"lags": 21 pair delays, "peak", "blocks": per 0.5 s, "az": degrees}, or None.
+    pid: the phrase's id - its /stt then splits it by the direction too."""
     try:
         body = np.clip(raw7 * 32768, -32768, 32767).astype(np.int16).tobytes()
         hdr = {"Content-Type": "application/octet-stream", "X-Channels": str(raw7.shape[1])}
+        if pid:
+            hdr["X-Phrase"] = pid
         if os.path.exists(RECORD_FLAG):
             hdr["X-Keep"] = "1"            # recording a test set: the hub keeps the raw mics too
         req = urllib.request.Request(DOA_URL, data=body, headers=hdr)
@@ -225,9 +228,12 @@ def direction(raw7):
         return None
 
 
-def stt(pcm16, split=False):
-    """-> {"text", "split"?: {"t", "win", "whole", "embs", "texts"}} (stt_server.py)"""
+def stt(pcm16, split=False, pid=None):
+    """-> {"text", "audio", "doa"?: {"az"}, "parts"?: [{"from", "to", "text", "emb", "lags", "az", "cut"}]}
+    (stt_server.py)"""
     hdr = {"Content-Type": "application/octet-stream"}
+    if pid:
+        hdr["X-Phrase"] = pid
     if os.path.exists(RECORD_FLAG):
         hdr["X-Record"] = "1"              # the hub marks the phrase as a test-set recording
     req = urllib.request.Request(STT_URL + ("?split=1" if split else ""), data=pcm16.tobytes(), headers=hdr)
@@ -255,6 +261,7 @@ def ui(state, text=None):
 
 
 def send_brain(item):
+    item = {k: v for k, v in item.items() if not k.startswith("_")}     # "_mics": not for the brain
     req = urllib.request.Request(BRAIN_URL, data=json.dumps(item, ensure_ascii=False).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
@@ -355,24 +362,28 @@ def save_sample(pcm, seg, peak, meta):
 def recognise(seg, meta):
     """In a thread: STT (and, for a phrase, who said it) never hold up listening."""
     t = time.time()
-    if "held" in meta:                    # the rest of a held piece: glue only one voice
+    if "held" in meta:                    # the rest of a held piece: glue only one voice, from one place
         p0 = float(np.abs(seg).max()) or 1.0
-        seg, meta, _ = JOIN.glue(seg, meta, voice_embedding(seg / p0 * 0.9))
+        rest_dir = direction(meta["mics"]) if meta.get("mics") is not None else None
+        seg, meta, _ = JOIN.glue(seg, meta, voice_embedding(seg / p0 * 0.9), rest_dir)
     peak = float(np.abs(seg).max()) or 1.0
     norm = seg / peak * 0.9
     pcm = np.clip(norm * 32767, -32767, 32767).astype(np.int16)
     emb = {}
     raw7 = meta.pop("mics", None)
+    if raw7 is not None:
+        meta["_mics"] = raw7              # kept with a held piece: a glue needs both pieces' mics
+    pid = f"{meta.get('speech_start', meta['start']):.3f}-{os.getpid()}"
     th_doa = None
     if raw7 is not None and not meta.get("window"):
-        th_doa = threading.Thread(target=lambda: emb.update(doa=direction(raw7)), daemon=True)
+        th_doa = threading.Thread(target=lambda: emb.update(doa=direction(raw7, pid)), daemon=True)
         th_doa.start()
     # windows too: is it her own voice (echo) or somebody talking over her?
     th = threading.Thread(target=lambda: emb.update(v=voice_embedding(norm)), daemon=True)
     th.start()
     split = not meta.get("window") and meta["dur"] >= SPLIT_MIN and not os.path.exists(RECORD_FLAG)
     try:
-        res = stt(pcm, split=split)
+        res = stt(pcm, split=split, pid=pid if th_doa else None)
     except OSError as e:
         log("stt error:", e)
         if not meta.get("window"):
@@ -386,18 +397,22 @@ def recognise(seg, meta):
     meta["stt_ms"] = int(1000 * (time.time() - t))
     if res.get("audio"):
         meta["audio"] = res["audio"]      # the phrase's sound on the hub: stored with it in the memory
-    ch = res.get("split")
-    if ch and split_ok(ch):
-        # two people in one phrase: each part is a phrase of its own, with its own voice
-        cut = int(ch["t"] * SR)
-        log(f"split at {ch['t']}s: another voice (windows {ch['win']}, parts {ch['whole']}): "
-            f"{ch['texts'][0]!r} | {ch['texts'][1]!r}")
-        t_cut = meta["start"] + ch["t"]
-        parts = [(seg[:cut], dict(meta, end=t_cut, dur=round(ch["t"], 2), split=1, audio_span=[0, ch["t"]])),
-                 (seg[cut:], dict(meta, start=t_cut, speech_start=t_cut, dur=round(meta["dur"] - ch["t"], 2), split=2,
-                                  audio_span=[ch["t"], None]))]
-        for (s_, m_), text, e in zip(parts, ch["texts"], ch["embs"]):
-            deliver(s_, m_, text, e, None, peak, hold=False)
+    parts = accepted_parts(res.get("parts"))
+    if len(parts) > 1:
+        # two (or three) people in one phrase: each part is a phrase of its own,
+        # with its own voice and place; the text of each from the whole's words
+        log("split " + " | ".join(f"{p['from']}-{p['to']}s"
+                                   + (f" [{p['cut']['by']} {p['cut'].get('d', p['cut'].get('whole'))}]" if p.get("cut") else "")
+                                   + (f" {p['az']:.0f}°" if p.get("az") is not None else "") + f": {p['text']!r}"
+                                   for p in parts))
+        for k, p in enumerate(parts):
+            a, b = int(p["from"] * SR), int(p["to"] * SR)
+            m_ = dict(meta, start=meta["start"] + p["from"], speech_start=meta["start"] + p["from"],
+                      end=meta["start"] + p["to"], dur=round(p["to"] - p["from"], 2), split=k + 1,
+                      audio_span=[p["from"], p["to"] if k < len(parts) - 1 else None])
+            if p.get("lags"):
+                m_["doa"] = {"lags": p["lags"], "az": p.get("az"), "peak": (meta.get("doa") or {}).get("peak")}
+            deliver(seg[a:b], m_, p["text"], p["emb"], None, peak, hold=False)
         return
     deliver(seg, meta, res.get("text") or "", emb.get("v"), pcm, peak)
 
@@ -445,6 +460,29 @@ def split_ok(ch):
         return True
     a, b = (who(e) for e in ch["embs"])
     return a is not None and b is not None and a != b
+
+
+def accepted_parts(parts):
+    """The hub's parts with the cuts the ear believes: a change of place
+    (direction) always; a change of voice in one place as before - the two
+    parts very unlike, or two different family voices. A cut not believed
+    joins its two parts back (their text is in order, from the whole)."""
+    if not parts:
+        return []
+    out = [dict(parts[0])]
+    for p in parts[1:]:
+        cut = p.get("cut") or {}
+        ok = cut.get("by") == "direction" or (
+            cut.get("by") == "voice" and split_ok({"whole": cut.get("whole", 1.0), "embs": [out[-1]["emb"], p["emb"]]}))
+        if ok:
+            out.append(dict(p))
+        else:
+            prev = out[-1]
+            longer = prev if prev["to"] - prev["from"] >= p["to"] - p["from"] else p
+            prev.update(to=p["to"], text=(prev["text"] + " " + p["text"]).strip(), emb=longer["emb"])
+            prev.pop("lags", None)
+            prev.pop("az", None)
+    return out
 
 
 def who(emb):
@@ -542,21 +580,42 @@ class Joiner:
         meta["held"] = p
         return seg, meta
 
-    def glue(self, seg, meta, v):
-        """In recognise(), the voice of the rest known: one sentence of one voice
-        -> (seg, meta) glued; another voice -> the piece goes alone first."""
+    AZ_OTHER = profile.tune("ear.glue_az_other", 30.0)   # degrees apart: another place, not glued
+    AZ_SAME = profile.tune("ear.glue_az_same", 12.0)     # this close: the same place - a voice on the fence is glued
+    # one place on the 2026-11-23 test set: 2-9 degrees of spread (one 18)
+
+    def glue(self, seg, meta, v, rest_dir=None):
+        """In recognise(), the voice (and the place) of the rest known: one
+        sentence of one voice from one place -> (seg, meta) glued; another voice
+        or another place -> the piece goes alone first."""
         p = meta.pop("held")
         hv = p[1].get("voice")
         unit = lambda x: np.asarray(x, dtype=np.float32) / (np.linalg.norm(x) + 1e-9)
         sim = float(unit(hv) @ unit(v)) if hv is not None and v is not None else 0.0
-        if sim < self.SAME_VOICE:
-            log(f"not joined: another voice ({sim:.2f}) after {p[1]['text']!r}")
+        a1 = (p[1].get("doa") or {}).get("az")
+        a2 = (rest_dir or {}).get("az")
+        apart = abs((a1 - a2 + 180) % 360 - 180) if a1 is not None and a2 is not None else None
+        place = f", {apart:.0f}° apart" if apart is not None else ""
+        if apart is not None and apart >= self.AZ_OTHER:
+            log(f"not joined: another place{place} (voice {sim:.2f}) after {p[1]['text']!r}")
+            send_brain(p[1])
+            return seg, meta, False
+        same_place = apart is not None and apart <= self.AZ_SAME
+        if sim < self.SAME_VOICE and not (same_place and sim >= self.SAME_VOICE - 0.15):
+            log(f"not joined: another voice ({sim:.2f}{place}) after {p[1]['text']!r}")
             send_brain(p[1])
             return seg, meta, False
         gap = np.zeros(int(0.15 * SR), dtype=np.float32)
         m = dict(meta, start=p[1]["start"], speech_start=p[1]["speech_start"],
                  dur=round(p[1]["dur"] + meta["dur"], 2), joined=True)
-        log(f"joined with {p[1]['text']!r} (same voice {sim:.2f})")
+        # the glued sound's raw mics: both pieces' (the gap as silence), or none -
+        # the rest's alone would put the direction of half the phrase on all of it
+        pm, rm = p[1].get("_mics"), meta.get("mics")
+        if pm is not None and rm is not None and pm.shape[1] == rm.shape[1]:
+            m["mics"] = np.concatenate([pm, np.zeros((len(gap), pm.shape[1]), dtype=pm.dtype), rm])
+        else:
+            m.pop("mics", None)
+        log(f"joined with {p[1]['text']!r} (same voice {sim:.2f}{place})")
         return np.concatenate([p[0], gap, seg]), m, True
 
     def release(self):

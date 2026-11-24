@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir faster-whisper==1.2.1 sherpa-onnx==2.0.1 fastapi=
         "uvicorn[standard]==0.54.0" numpy==2.5.4
 
 WORKDIR /app
-COPY stt_server.py /app/stt_server.py
+COPY stt_server.py doa_geometry.json /app/
 
 ENV STT_MODEL=small STT_COMPUTE=int8 STT_THREADS=8
 EXPOSE 8901
