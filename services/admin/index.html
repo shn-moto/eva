@@ -232,7 +232,8 @@ async function openDay(d, keepSel) {
   markDay();
   const dt = new Date(d + "T12:00");
   $("#dtitle").textContent = dt.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" });
-  S.rows = await api(`/api/day?d=${d}&heard=${$("#heard").checked ? 1 : 0}`);
+  // newest at the top (the user's wish, 2026-11-24)
+  S.rows = (await api(`/api/day?d=${d}&heard=${$("#heard").checked ? 1 : 0}`)).reverse();
   render(keepSel);
   loadUnits();
   radar();
