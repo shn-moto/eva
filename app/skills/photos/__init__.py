@@ -199,8 +199,8 @@ def look(args, person):
     jpeg = photolib.image(image_id, size=0 if args.get("detail") else 800)
     m = photolib.meta(image_id)
     data = base64.b64encode(jpeg).decode("ascii")
-    try:      # the history keeps a 200 px copy: she remembers she really saw it
-        skills.HISTORY_IMAGES[data] = base64.b64encode(photolib.image(image_id, size=200)).decode("ascii")
+    try:      # the history keeps a 512 px copy: she remembers she really saw it
+        skills.HISTORY_IMAGES[data] = base64.b64encode(photolib.image(image_id, size=512)).decode("ascii")
     except OSError:
         pass
     return Result("", blocks=[

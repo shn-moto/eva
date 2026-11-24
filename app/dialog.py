@@ -72,6 +72,7 @@ history = []                  # [{"role", "content"}], text only
 REPLIES = {}                  # gen -> its history entry, to cut it down if she is stopped
 RESTORED = {"note": False}    # the first answer after a restore gets a note about it
 OWNER = {"person": identity.GUEST}   # whom she is answering now
+VOICE_SEEN = {}                      # profile -> ts of the newest Telegram line already shown (memory.recent)
 state = {"last_spoke": 0.0, "called_until": 0.0}
 HEARD = []                    # (time, foreign words) heard over her voice, last few seconds
 # After an interruption she is quiet and listens: everything heard now is his,
@@ -154,6 +155,11 @@ def answer(text, person, owner=None, note=None):
         content = f"[{now}] [{who or 'голос не узнан'}] {text}"
     if note:
         content += "\n" + note
+    if person.known:
+        # what this person and she said in Telegram meanwhile: from the common log in the base
+        tg, VOICE_SEEN[person.profile] = memory.recent(person.profile, "voice", VOICE_SEEN.get(person.profile), who)
+        if tg:
+            content += "\n" + tg
     import slideshow
     if screen.state["p"] is not None or music.PLAYER.active() or slideshow.describe():
         content += f"\n[экран: {screen.describe()}]"
@@ -257,7 +263,7 @@ def answer(text, person, owner=None, note=None):
     state["last_spoke"] = time.time()
     ui({"type": "chat", "who": "eva", "text": reply})
     if person.known:
-        memory.write("assistant", reply)
+        memory.write("assistant", reply, speaker=person.profile, stt="voice")
     u = r["final"].usage
     log(f"reply: first token {int(1000 * (r['first'] or 0))}ms, "
         f"cache read {u.cache_read_input_tokens} / written {u.cache_creation_input_tokens}, "

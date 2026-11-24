@@ -34,13 +34,18 @@ def save():
 
 
 CHATS = _load()       # key -> [{"role", "content"}]
+SEEN = {}             # key -> ts of the newest voice line already shown in this chat (memory.recent)
 
 
 def reply(text, person, key):
     """-> (answer text, [presentations] for the channel to render)"""
+    # what was said with this person by voice meanwhile: from the common log in the base
+    note = ""
+    if person.known:
+        note, SEEN[key] = memory.recent(person.profile, "telegram", SEEN.get(key), person.name)
     with LOCK:
         hist = CHATS.setdefault(key, [])
-        hist.append({"role": "user", "content": f"[{ru_now()}] [{person.name}] {text}"})
+        hist.append({"role": "user", "content": f"[{ru_now()}] [{person.name}] {text}" + ("\n" + note if note else "")})
         llm.trim(hist)
         msgs = list(hist)
     if person.known:
@@ -59,6 +64,6 @@ def reply(text, person, key):
         CHATS[key].extend(rounds)
     save()
     if person.known and out:
-        memory.write("assistant", out)
+        memory.write("assistant", out, speaker=person.profile, stt="telegram")
     log(f"chat {person.name}: {text[:60]!r} -> {out[:80]!r}")
     return out, shows

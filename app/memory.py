@@ -31,7 +31,14 @@ def write(role, text, speaker=None, dialog=False, addressed=False, stt="gigaam",
     audio: the phrase's sound kept on the hub ("<date>/<time>", STT log), with
     audio_span [from, to] seconds when the phrase is a part of that clip."""
     rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "role": role, "text": text}
-    if role == "user":
+    if speaker:
+        _activity[(speaker, "telegram" if stt == "telegram" else "voice")] = time.time()
+    if role == "assistant":
+        # whom she answered and where: the other channel finds her words by them
+        # (recent()) - without it "what she told Саша by voice" was not in the base
+        if speaker:
+            rec.update(speaker=speaker, stt=stt)
+    elif role == "user":
         rec.update(speaker=speaker, dialog=bool(dialog), woke=bool(addressed), stt=stt)
         if voice_sim is not None:
             rec.update(voice_sim=round(float(voice_sim), 3), dur=round(float(dur or 0), 1))
@@ -120,3 +127,61 @@ def search(query, limit=6):
     if not hits:
         return "Ничего похожего в памяти не нашлось."
     return "\n".join(f"[{h.get('ts')}] {h.get('text')}" for h in hits)
+
+
+# ---- short-term memory across channels, from the base --------------------------------------
+# Voice and Telegram keep their own conversation (with the tool calls and their
+# results), but what was said with the same person in the other channel comes
+# from the common log in the base: she was asked by voice to look up tyre prices,
+# then sent the photos in Telegram, and there she knew nothing of it (2026-11-24).
+RECENT_HOURS = profile.tune("memory.recent_hours", 6)
+RECENT_CHARS = profile.tune("memory.recent_chars", 4000)
+_dsn = None
+_activity = {}          # (profile, channel) -> when something was last said there (write())
+
+
+def _channel(stt):
+    return "telegram" if stt == "telegram" else "voice"
+
+
+def recent(person_profile, channel, since=None, name=None, hours=RECENT_HOURS):
+    """What was said with this person in the OTHER channel since `since` (unix
+    time, else `hours` back): -> (lines as text, the newest ts) or ("", since).
+    Read from the base; when it is away - nothing, the answer still goes."""
+    global _dsn
+    if not person_profile:
+        return "", since
+    # the base is asked only when the other channel had something with this person
+    # since the last look (both channels live in this process), or the first time
+    # after a start: no round trip before every spoken answer
+    other_ch = "voice" if channel == "telegram" else "telegram"
+    last = _activity.get((person_profile, other_ch))
+    if since is not None and (last is None or last <= since):
+        return "", since
+    try:
+        import datetime
+        import psycopg
+        from core.util import secrets
+        _dsn = _dsn or secrets().get("ASSISTANT_PG_DSN")
+        if not _dsn:
+            return "", since
+        start = datetime.datetime.fromtimestamp(max(since or 0, time.time() - hours * 3600)).astimezone()
+        with psycopg.connect(_dsn, connect_timeout=3) as c:
+            rows = c.execute(
+                "SELECT ts, role, stt, text FROM utterances WHERE ts > %s AND speaker = %s"
+                " ORDER BY ts", (start, person_profile)).fetchall()
+    except Exception as e:
+        print("memory recent:", e, flush=True)
+        return "", since
+    other = [r for r in rows if _channel(r[2]) != channel and r[3]]
+    if not other:
+        return "", since
+    where = "в Телеграме" if channel == "voice" else "голосом"
+    lines = []
+    for ts, role, stt, text in other:
+        who = "Ева" if role == "assistant" else (name or person_profile)
+        lines.append(f"{ts.astimezone():%H:%M} {who}: {text.strip()}")
+    text = "\n".join(lines)
+    if len(text) > RECENT_CHARS:
+        text = "…" + text[-RECENT_CHARS:]
+    return f"[недавно {where} с этим же человеком (из общей памяти):\n{text}]", other[-1][0].timestamp()

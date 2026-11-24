@@ -44,7 +44,7 @@ def view(args, person):
             jpeg = _req(f"/files/{fid}/jpeg?size={1568 if args.get('detail') else 1024}")
             data = base64.b64encode(jpeg).decode("ascii")
             try:      # the history keeps a small copy: she remembers she saw it
-                skills.HISTORY_IMAGES[data] = base64.b64encode(_req(f"/files/{fid}/jpeg?size=200")).decode("ascii")
+                skills.HISTORY_IMAGES[data] = base64.b64encode(_req(f"/files/{fid}/jpeg?size=512")).decode("ascii")
             except Exception:
                 pass
             return Result("", blocks=[

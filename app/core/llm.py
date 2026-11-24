@@ -51,7 +51,10 @@ def _escalate(message, params):
     return dict(params, model=AGENT_MODEL, output_config={"effort": AGENT_EFFORT})
 
 
-KEEP_RESULT = profile.tune("llm.keep_result", 1500)                   # chars of a tool result kept in the conversation history (4000 was 60 % of it)
+# chars of a tool result kept in the conversation history. 1500 cut what she needed
+# later and she lost the thread (2026-11-24): with the 1-hour cache a bigger history
+# costs little - it is read at a tenth of the price, written again only when trimmed
+KEEP_RESULT = profile.tune("llm.keep_result", 8000)
 
 
 # The internet: Anthropic's server tools (run on their side, within the same
@@ -142,7 +145,7 @@ def _cut(text):
 
 def _kept(content):
     """A tool result as the history keeps it: text, cut (and marked as cut); a
-    picture she looked at as a small copy (~50 tokens; the full one would be sent
+    picture she looked at as a 512 px copy (~330 tokens; the full one would be sent
     again with every phrase)."""
     if isinstance(content, list):
         out = []
@@ -153,6 +156,10 @@ def _kept(content):
                 small = skills.HISTORY_IMAGES.pop(b["source"].get("data", ""), None)
                 if small:
                     out.append({"type": "image", "source": dict(b["source"], data=small)})
+                    # a 200 px copy made her take back what she had read on the full one
+                    # (a tyre size "not readable" a minute after she read it, 2026-11-24)
+                    out.append({"type": "text", "text": "[в истории - уменьшенная копия; отвечая, ты видела картинку "
+                                                        "целиком: что ты тогда на ней прочитала - верно]"})
                 else:
                     out.append({"type": "text", "text": "[картинка: ты её видела целиком, в истории не хранится]"})
         return out or "…"
@@ -188,7 +195,7 @@ def prepare(history, person):
 # How much of a conversation she keeps: by volume, not by time (Иван,
 # 2026-11-20) - a quiet day is remembered for days, a busy one for hours.
 # ~40k characters is ~15k tokens a request, read mostly from the cache.
-HISTORY_CHARS = profile.tune("llm.history_chars", 24000)   # 40000 was ~10k tokens a request
+HISTORY_CHARS = profile.tune("llm.history_chars", 120000)  # ~40k tokens; 24000 lost the thread within minutes
 TRIM_TO = profile.tune("llm.trim_to", 0.6)
 
 
