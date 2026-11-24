@@ -382,13 +382,23 @@ def recognise(seg, meta):
     th = threading.Thread(target=lambda: emb.update(v=voice_embedding(norm)), daemon=True)
     th.start()
     split = not meta.get("window") and meta["dur"] >= SPLIT_MIN and not os.path.exists(RECORD_FLAG)
-    try:
-        res = stt(pcm, split=split, pid=pid if th_doa else None)
-    except OSError as e:
-        log("stt error:", e)
-        if not meta.get("window"):
-            ui("none")
-        return
+    # the hub's STT restarting (a deploy) dropped a phrase said at that moment
+    # (2026-11-24 13:35): a phrase is tried again while it comes back (~25 s);
+    # a window over her voice is not worth waiting for
+    waits = [] if meta.get("window") else [2, 4, 8, 10]
+    while True:
+        try:
+            res = stt(pcm, split=split, pid=pid if th_doa else None)
+            break
+        except OSError as e:
+            if not waits:
+                log("stt error:", e)
+                if not meta.get("window"):
+                    ui("none")
+                return
+            w = waits.pop(0)
+            log(f"stt error: {e} - again in {w}s")
+            time.sleep(w)
     th.join(timeout=3)
     if th_doa:
         th_doa.join(timeout=2)
