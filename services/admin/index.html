@@ -430,8 +430,12 @@ function frame() {
     s += `<text class="lbl" x="${lx}" y="${ly + 3}" text-anchor="${a === 90 ? "start" : a === 270 ? "end" : "middle"}">${a === 0 || a === 180 ? l : ""}</text>`;
   }
   // places learned from labelled phrases: a tick and a name on the ring
-  for (const p of placeMeans()) {
-    const [x1, y1] = xy(p.az, R - 5), [x2, y2] = xy(p.az, R + 5), [tx, ty] = xy(p.az, R - 14);
+  const pm = placeMeans().sort((a, b) => a.az - b.az);
+  let lastAz = -999, depth = 0;
+  for (const p of pm) {
+    depth = adiff(p.az, lastAz) < 20 ? depth + 1 : 0;      // close places: their names one under another
+    lastAz = p.az;
+    const [x1, y1] = xy(p.az, R - 5), [x2, y2] = xy(p.az, R + 5), [tx, ty] = xy(p.az, R - 14 - depth * 12);
     s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--keep)" stroke-width="2"/>
           <text class="lbl" x="${tx}" y="${ty + 3}" text-anchor="middle" style="fill:var(--keep)">${esc(p.name)}</text>`;
   }
