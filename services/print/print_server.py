@@ -62,7 +62,7 @@ def health():
 
 @app.get("/printers")
 def printers():
-    code, out = _run("lpstat", "-l", "-p")
+    code, out = _run("lpstat", "-p")
     if code != 0 and "No destinations" in out:
         return {"printers": [], "jobs": [], "note": "в CUPS нет ни одного принтера"}
     found, cur = [], None
@@ -73,7 +73,7 @@ def printers():
                    "default": m.group(1) == PRINTER, "message": ""}
             found.append(cur)
         elif cur is not None and line[:1] in ("\t", " ") and line.strip():
-            # lpstat -l: the queue's details are the indented lines under it
+            # lpstat -p: a reason (paper out, paused...) is an indented line under the queue
             cur["message"] = (cur["message"] + " " + line.strip()).strip()[:300]
     _, d = _run("lpstat", "-d")                       # "system default destination: X"
     default = d.split(":")[-1].strip() if ":" in d else ""
