@@ -263,9 +263,13 @@ function render(keepSel) {
       if (r.dialog && r.stt !== "telegram") tags.push("в разговоре");
     }
     if (r.dur) tags.push(r.dur.toFixed(1) + " с");
-    const tagHtml = tags.map(t => `<span class="tag">${t}</span>`).join("") + (r.corrected ? `<span class="tag fix">исправлено</span>` : "");
+    // retagged by voice (a new voice print re-scored old phrases), not by a person: speaker_heard without corrected
+    const retag = !r.corrected && r.speaker_heard;
+    const tagHtml = tags.map(t => `<span class="tag">${t}</span>`).join("") + (r.corrected ? `<span class="tag fix">исправлено</span>`
+      : retag ? `<span class="tag">по голосу</span>` : "");
     const was = r.corrected && (r.text_heard || r.speaker_heard)
-      ? `<span class="heardtxt">распознано: ${r.speaker_heard ? esc(r.speaker_heard) + " — " : ""}<s>${hl(r.text_heard || "")}</s></span>` : "";
+      ? `<span class="heardtxt">распознано: ${r.speaker_heard ? esc(r.speaker_heard) + " — " : ""}<s>${hl(r.text_heard || "")}</s></span>`
+      : retag ? `<span class="heardtxt">распознано: ${esc(r.speaker_heard)}</span>` : "";
     const canPlay = r.has_audio, canKeep = r.role !== "assistant" && (r.id || r.audio);
     html += `<div class="row ${r.role}${r.keep ? " keep" : ""}" data-i="${i}">
       <span class="t">${r.t}</span>
