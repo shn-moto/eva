@@ -20,6 +20,7 @@ PRICES = {   # model: (input, output, cache read)
     "claude-opus-5-5": (4.0, 20.0, 0.20),
     "claude-haiku-5-5": (0.10, 0.50, 0.01),
 }
+WEB_SEARCH_USD = 0.01
 _lock = threading.Lock()
 
 
@@ -57,8 +58,12 @@ def price(model, usage):
     written = usage.cache_creation_input_tokens or 0
     if not (w1h or w5m):
         w5m = written                          # no breakdown: the cheaper TTL
-    return ((usage.input_tokens or 0) * pin + (usage.output_tokens or 0) * pout
-            + (usage.cache_read_input_tokens or 0) * pread + w5m * pin * 1.25 + w1h * pin * 2.0) / 1e6
+    tokens = ((usage.input_tokens or 0) * pin + (usage.output_tokens or 0) * pout
+              + (usage.cache_read_input_tokens or 0) * pread + w5m * pin * 1.25 + w1h * pin * 2.0) / 1e6
+    # web searches are billed on their own: $10 per 1000 (fetching a page costs its tokens only)
+    stu = getattr(usage, "server_tool_use", None)
+    searches = (getattr(stu, "web_search_requests", 0) or 0) if stu else 0
+    return tokens + searches * WEB_SEARCH_USD
 
 
 on_change = None      # set by the brain: the TV's status bar gets the new numbers

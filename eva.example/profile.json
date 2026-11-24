@@ -58,7 +58,14 @@
       "masha": "Маша"
     },
     "currency": "EUR",
-    "document_tags": []
+    "document_tags": [],
+    "location": {
+      "_comment": "Roughly where the home is: web search answers for this place (prices, shops, weather). All fields optional.",
+      "city": "Berlin",
+      "region": "Berlin",
+      "country": "DE",
+      "timezone": "Europe/Berlin"
+    }
   },
   "skills": [
     "screen",

@@ -53,8 +53,26 @@ def _escalate(message, params):
 KEEP_RESULT = profile.tune("llm.keep_result", 1500)                   # chars of a tool result kept in the conversation history (4000 was 60 % of it)
 
 
+# The internet: Anthropic's server tools (run on their side, within the same
+# answer). For the people she knows; a guest's question does not cost searches.
+# The place makes prices and shops local (profile household.location).
+WEB = profile.tune("llm.web", True)
+WEB_SEARCH_USES = profile.tune("llm.web_search_uses", 5)
+WEB_FETCH_USES = profile.tune("llm.web_fetch_uses", 3)
+
+
+def _web_tools(person):
+    if not WEB or not person.known:
+        return []
+    search = {"type": "web_search_20260209", "name": "web_search", "max_uses": WEB_SEARCH_USES}
+    if profile.LOCATION:
+        search["user_location"] = dict(profile.LOCATION, type="approximate")
+    return [search, {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": WEB_FETCH_USES,
+                     "max_content_tokens": profile.tune("llm.web_fetch_tokens", 8000)}]
+
+
 def _params(system, person, max_tokens, effort=None, model=None):
-    tools = skills.specs_for(person)
+    tools = skills.specs_for(person) + _web_tools(person)
     # Two cache breakpoints. (1) The system prompt (with the tools before it):
     # the same for an hour, read at a tenth of the price. With one breakpoint
     # at the very end only, every change at the start of the history missed
@@ -226,7 +244,7 @@ def stream(system, history, person, on_chunk, on_show=None, on_tool=None, max_to
         cost.check()
         with CLIENT.messages.stream(messages=msgs, **params) as s:
             for ev in s:
-                if ev.type == "content_block_start" and ev.content_block.type == "tool_use":
+                if ev.type == "content_block_start" and ev.content_block.type in ("tool_use", "server_tool_use"):
                     if on_tool:
                         on_tool(ev.content_block.name)
                     continue
@@ -245,6 +263,11 @@ def stream(system, history, person, on_chunk, on_show=None, on_tool=None, max_to
         log(f"cost {params['model'].replace('claude-', '')} ${usd:.4f}: read {final.usage.cache_read_input_tokens} "
             f"written {final.usage.cache_creation_input_tokens} in {final.usage.input_tokens} "
             f"out {final.usage.output_tokens}")
+        if final.stop_reason == "pause_turn":
+            # a long web search paused on the server's side: the same turn goes
+            # back as it is and the server goes on with it
+            msgs.append({"role": "assistant", "content": final.content})
+            continue
         if final.stop_reason != "tool_use":
             break
         _tool_round(final, msgs, person, on_show, trace, record)
@@ -272,6 +295,9 @@ def complete(system, history, person, on_show=None, max_tokens=2048, trace=None,
         part = final_text(r)
         if part:
             parts.append(part)
+        if r.stop_reason == "pause_turn":            # a web search goes on (see stream)
+            msgs.append({"role": "assistant", "content": r.content})
+            continue
         if r.stop_reason != "tool_use":
             break
         _tool_round(r, msgs, person, on_show, trace, record)

@@ -49,6 +49,9 @@ SKILLS = set(_P["skills"]) if isinstance(_P.get("skills"), list) else None   # N
 DOCUMENT_TAGS = tuple(_H.get("document_tags", []))
 # databases Eva may read (skill "data"): [{name, dsn: <secret key>, needs, about}]
 DATABASES = list(_P.get("databases", []))
+# where the home is, roughly: web search answers for this place (prices, shops,
+# weather) - {"city", "region", "country": "PL", "timezone": "Europe/Warsaw"}
+LOCATION = {k: v for k, v in dict(_H.get("location", {})).items() if v and not k.startswith("_")}
 STT_FIXES = [tuple(x) for x in _S.get("stt_fixes", [])]
 HOTWORDS = list(_S.get("hotwords", []))
 HUB = os.environ.get("EVA_HUB", _SV.get("hub", "127.0.0.1"))
