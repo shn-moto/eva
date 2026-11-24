@@ -249,9 +249,16 @@ def frames(m):
     energy = (F ** 2).sum((1, 2))
     voiced = energy >= np.percentile(energy, 50)
     X = np.fft.rfft(F, axis=1)
-    X[:, :int(200 * DOA_N / 16000)] = 0
-    X[:, int(DOA_FMAX * DOA_N / 16000):] = 0
-    return X[voiced], (starts[voiced] + DOA_N / 2) / 16000, pairs
+    # not a voice: frames where the band above speech is louder than speech -
+    # a canary singing on after the words pulled the clip's angle 80 degrees
+    # and cut the phrase in two (2026-11-24, 13:29)
+    P = (np.abs(X) ** 2).mean(2)
+    k200, kmax = int(200 * DOA_N / 16000), int(DOA_FMAX * DOA_N / 16000)
+    voice = P[:, k200:kmax].sum(1) >= P[:, kmax:].sum(1)
+    X[:, :k200] = 0
+    X[:, kmax:] = 0
+    keep = voiced & voice
+    return X[keep], (starts[keep] + DOA_N / 2) / 16000, pairs
 
 
 def _curves(X, pairs, unit=True):
