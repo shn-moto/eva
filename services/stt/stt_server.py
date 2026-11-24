@@ -210,10 +210,12 @@ def doa(m):
 # the room's orientation (where "in front" is) is set on the admin page.
 # A change of place inside a phrase: the GCC curves of all 21 pairs left vs right
 # of a cut (1 - mean cosine). On glued test phrases (one voice, 5 places):
-# >= 0.25 found 81 % of the changes with 5 % false cuts, >= 0.2 90 % / 8 %; the
-# cut lands 0.34 s (median) from the true one (tools/split-bench/doa_split.py).
+# >= 0.25 found 81 % of the changes with 5 % false cuts, >= 0.3 79 % / 1.7 %; the
+# cut lands 0.34 s (median) from the true one (tools/split-bench/doa_split.py) and
+# is moved to the nearest word start. End to end (split_live.py) at 0.25: 80 % / 10 %.
 GEOMETRY = os.environ.get("DOA_GEOMETRY", os.path.join(os.path.dirname(os.path.abspath(__file__)), "doa_geometry.json"))
-DIR_CUT = float(os.environ.get("DIR_CUT", "0.25"))
+DIR_CUT = float(os.environ.get("DIR_CUT", "0.3"))
+SNAP = 0.7                                    # s: a cut moves to a word start this close
 DIR_SIDE = 1.0                                # s of each side of a direction cut
 _geo = None
 
@@ -533,7 +535,18 @@ def split_phrase(audio, fr, letters):
     search(0.0, end)
     if not cuts:
         return []
+    # to the nearest word start: a cut 0.3-0.6 s off would give a word's first
+    # letters to the other side (the letters' times are when the model emits
+    # them - a little after the sound - so 0.1 s earlier)
+    starts = [ts for k, (ch, ts) in enumerate(letters)
+              if not ch.isspace() and (k == 0 or letters[k - 1][0].isspace())]
+    for c in cuts:
+        near = [w for w in starts if abs(w - c["t"]) <= SNAP and w > 0.3]
+        if near:
+            w = min(near, key=lambda w: abs(w - c["t"]))
+            c["raw_t"], c["t"] = c["t"], round(max(0.0, w - 0.1), 2)
     cuts.sort(key=lambda c: c["t"])
+    cuts = [c for k, c in enumerate(cuts) if k == 0 or c["t"] - cuts[k - 1]["t"] >= 0.5]
     bounds = [0.0] + [c["t"] for c in cuts] + [end]
     parts = []
     for k in range(len(bounds) - 1):

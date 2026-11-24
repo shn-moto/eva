@@ -414,3 +414,105 @@ async def correct(request: Request):
             pass
     _mark_clip(base, text, speaker, heard)
     return {"ok": True}
+
+
+# ---- direction: the radar of a phrase, the room of a day -----------------------------------
+# The STT keeps the direction with the clip (json "doa": {"az", "blocks": [[t, az,
+# strength]...]}, "parts": [{"from", "to", "az", "cut"}]). Angles are the array's;
+# where "in front of the Station" is (rotation) and the mirror are the room's,
+# set here once from a phrase said in front of it.
+SETTINGS = os.path.join(KEEP_DIR, "admin-settings.json")
+
+
+def _settings():
+    try:
+        return json.load(open(SETTINGS, encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"rotation": 0.0, "mirror": False}
+
+
+@app.get("/api/settings")
+def get_settings():
+    return _settings()
+
+
+@app.post("/api/settings")
+async def set_settings(request: Request):
+    b = await request.json()
+    s = _settings()
+    if "rotation" in b:
+        s["rotation"] = float(b["rotation"]) % 360
+    if "mirror" in b:
+        s["mirror"] = bool(b["mirror"])
+    os.makedirs(KEEP_DIR, exist_ok=True)
+    with open(SETTINGS + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(s, f)
+    os.replace(SETTINGS + ".tmp", SETTINGS)
+    return s
+
+
+def _info(base):
+    p = _path(base, ".json")
+    if not p:
+        return None
+    try:
+        return json.load(open(p, encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+@app.get("/api/clip")
+def clip(audio: str):
+    base, _ = _clip(audio)
+    if not base:
+        raise HTTPException(400)
+    info = _info(base)
+    if info is None:
+        raise HTTPException(404, "no clip json")
+    return {"duration": info.get("duration"), "text": info.get("text"), "doa": info.get("doa"),
+            "parts": info.get("parts"), "split": {k: v for k, v in (info.get("split") or {}).items() if k != "embs"} or None}
+
+
+@app.get("/api/room")
+def room(d: str):
+    """Every clip of the day with its angle (and its parts'), the speaker from the memory."""
+    datetime.date.fromisoformat(d)
+    with db() as c:
+        who = {}
+        for audio, speaker, text in c.execute(
+                "SELECT audio, speaker, text FROM utterances WHERE audio IS NOT NULL"
+                " AND (ts AT TIME ZONE current_setting('TimeZone'))::date = %s", (d,)):
+            base, frag = _clip(audio)
+            who[(base, frag)] = (speaker, text)
+    out = []
+    for root in (LOG_DIR, KEEP_DIR):
+        dd = os.path.join(root, d)
+        if not os.path.isdir(dd):
+            continue
+        for fn in sorted(os.listdir(dd)):
+            if not fn.endswith(".json") or fn == "admin-settings.json":
+                continue
+            base = f"{d}/{fn[:-5]}"
+            if any(x["audio"] == base for x in out):
+                continue
+            try:
+                info = json.load(open(os.path.join(dd, fn), encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            doa = info.get("doa") or {}
+            parts = info.get("parts") or []
+            hh = fn[:6]
+            t = f"{hh[:2]}:{hh[2:4]}:{hh[4:6]}"
+            if parts:
+                for k, p in enumerate(parts):
+                    frag = f"#t={p['from']:g}" + (f",{p['to']:g}" if k < len(parts) - 1 else "") if p["from"] else (
+                        f"#t=0,{p['to']:g}")
+                    sp, text = who.get((base, frag), who.get((base, ""), (None, p.get("text"))))
+                    if p.get("az") is not None:
+                        out.append({"audio": base, "t": t, "az": p["az"], "speaker": sp, "text": text or p.get("text"),
+                                    "part": k + 1})
+            elif doa.get("az") is not None:
+                sp, text = who.get((base, ""), (None, info.get("text")))
+                out.append({"audio": base, "t": t, "az": doa["az"], "strength": doa.get("strength"),
+                            "speaker": sp, "text": text})
+    return out

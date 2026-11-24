@@ -109,6 +109,23 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
 .seg button { border: 0; background: transparent; color: var(--mute); padding: 3px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
 .seg button.on { background: var(--accent-soft); color: var(--ink); }
+#radarbox { display: grid; grid-template-columns: 250px 1fr; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line);
+            background: var(--panel); align-items: start; }
+#radar { width: 250px; height: 250px; }
+#radar .ring { fill: none; stroke: var(--line); }
+#radar .axis { stroke: var(--line); stroke-dasharray: 2 3; }
+#radar .lbl { fill: var(--faint); font-size: 10px; font-family: system-ui; }
+#radar .station { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; }
+#radar .dot { cursor: pointer; }
+#radar .dot:hover { stroke: var(--ink); stroke-width: 2; }
+#radarinfo { font-size: 12.5px; color: var(--mute); line-height: 1.6; }
+#radarinfo b { color: var(--ink); font-weight: 600; }
+#radarinfo .legend span { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }
+#radarinfo .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+#radarinfo button { margin-top: 6px; margin-right: 6px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line);
+                    background: var(--bg); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+#radarinfo button:hover { border-color: var(--accent); }
+.az { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-left: 6px; }
 #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
          padding: 8px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
 #toast.show { opacity: .92; }
@@ -136,6 +153,11 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
     <div class="scroll" id="rows"></div>
   </section>
   <section>
+    <div class="bar">
+      <span class="title">Направление</span>
+      <div class="seg"><button id="r-phrase" class="on">фраза</button><button id="r-day">весь день</button></div>
+    </div>
+    <div id="radarbox"><svg id="radar" viewBox="-125 -125 250 250"></svg><div id="radarinfo"></div></div>
     <div class="bar">
       <span class="title">Логи</span>
       <div class="seg"><button id="m-around" class="on">вокруг фразы</button><button id="m-day">весь день</button></div>
@@ -205,6 +227,7 @@ async function openDay(d, keepSel) {
   S.rows = await api(`/api/day?d=${d}&heard=${$("#heard").checked ? 1 : 0}`);
   render(keepSel);
   loadUnits();
+  radar();
 }
 async function doSearch(q) {
   S.search = q.trim();
@@ -257,6 +280,7 @@ function select(i, scroll = true) {
   const el = rows[i]; el.classList.add("sel"); S.sel = i;
   if (scroll) el.scrollIntoView({ block: "nearest" });
   if (S.logMode === "around") loadLogs();
+  radar();
 }
 const cur = () => S.view && S.sel >= 0 ? S.view[S.sel] : null;
 
@@ -391,6 +415,91 @@ async function loadLogs(before) {
          const at = document.querySelector("#logs .l.at"); if (at) at.scrollIntoView({ block: "center" }); else $("#logs").scrollTop = 0; }
 }
 $("#logs").addEventListener("click", e => { const m = e.target.closest(".more"); if (m) loadLogs(+m.dataset.b); });
+
+/* direction: radar of a phrase, room of a day */
+let ROOM = { rotation: 0, mirror: false }, RMODE = "phrase", ROOMDAY = null;
+const R = 105;
+const scr = az => ((ROOM.mirror ? -az : az) + ROOM.rotation + 360) % 360;      // 0 = in front of the Station = up
+const xy = (az, r) => { const a = (scr(az) - 90) * Math.PI / 180; return [r * Math.cos(a), r * Math.sin(a)]; };
+function frame() {
+  let s = `<circle class="ring" r="${R}"/><circle class="ring" r="${R * 0.66}"/><circle class="ring" r="${R * 0.33}"/>`;
+  for (const [a, l] of [[0, "перед колонкой"], [90, "справа"], [180, "сзади"], [270, "слева"]]) {
+    const rad = (a - 90) * Math.PI / 180;
+    s += `<line class="axis" x1="0" y1="0" x2="${R * Math.cos(rad)}" y2="${R * Math.sin(rad)}"/>`;
+    const lx = (R + 9) * Math.cos(rad), ly = (R + 9) * Math.sin(rad);
+    s += `<text class="lbl" x="${lx}" y="${ly + 3}" text-anchor="${a === 90 ? "start" : a === 270 ? "end" : "middle"}">${a === 0 || a === 180 ? l : ""}</text>`;
+  }
+  return s + `<rect class="station" x="-7" y="-7" width="14" height="14" rx="3"/>`;
+}
+function timeColor(f) { return `hsl(${210 - 190 * f} 70% 50%)`; }     /* start blue -> end orange */
+async function radarPhrase() {
+  const r = cur(), svg = $("#radar"), info = $("#radarinfo");
+  if (!r || !r.audio) { svg.innerHTML = frame(); info.innerHTML = r ? "У этой записи нет звука — направления нет." : "Выбери фразу."; return; }
+  let c;
+  try { c = await api(`/api/clip?audio=${encodeURIComponent(r.audio)}`); } catch { c = null; }
+  if (!c || !c.doa) { svg.innerHTML = frame(); info.innerHTML = "Для этой фразы направление не записано (записи до 24 ноября, или без микрофонов)."; return; }
+  const dur = c.duration || 1, blocks = (c.doa.blocks || []).filter(b => b[1] != null);
+  let s = frame();
+  // the phrase's angle: a line from the Station
+  if (c.doa.az != null) { const [x, y] = xy(c.doa.az, R); s += `<line x1="0" y1="0" x2="${x}" y2="${y}" stroke="var(--ink)" stroke-width="1.5" opacity=".35"/>`; }
+  // blocks: angle = where, distance from the centre = when (inner = start)
+  let prev = null;
+  for (const [t, az, st] of blocks) {
+    const f = Math.min(1, (t + 0.25) / dur), [x, y] = xy(az, 18 + f * (R - 18));
+    if (prev) s += `<line x1="${prev[0]}" y1="${prev[1]}" x2="${x}" y2="${y}" stroke="${timeColor(f)}" stroke-width="1" opacity=".45"/>`;
+    s += `<circle cx="${x}" cy="${y}" r="${4 + Math.min(3, (st || 0) * 8)}" fill="${timeColor(f)}" opacity="${Math.max(.25, Math.min(1, (st || 0) * 3))}"><title>${t.toFixed(1)} с · ${az}°</title></circle>`;
+    prev = [x, y];
+  }
+  // cuts: a ring at their time
+  const parts = c.parts || [];
+  for (const p of parts.slice(1)) {
+    const f = Math.min(1, p.from / dur);
+    s += `<circle r="${18 + f * (R - 18)}" fill="none" stroke="var(--danger)" stroke-width="1.2" stroke-dasharray="4 3"/>`;
+  }
+  svg.innerHTML = s;
+  const partTxt = parts.length > 1 ? parts.map((p, k) => `<div>${k + 1}) ${p.from}–${p.to} с${p.az != null ? ` · <b>${Math.round(scr(p.az))}°</b>` : ""}${p.cut ? ` · разрез: ${p.cut.by === "direction" ? "место" : "голос"} ${p.cut.d ?? p.cut.whole ?? ""}` : ""} — ${esc(p.text)}</div>`).join("") : "";
+  info.innerHTML = `<div>угол фразы <b>${c.doa.az != null ? Math.round(scr(c.doa.az)) + "°" : "—"}</b> · сила ${c.doa.strength ?? "—"} · ${dur} с</div>
+    <div class="legend"><span><i style="background:${timeColor(0)}"></i>начало</span><span><i style="background:${timeColor(1)}"></i>конец</span><span><i style="background:var(--danger)"></i>разрез</span></div>
+    ${partTxt || `<div>не резалась${c.split ? " (старый разрез по голосу)" : ""}</div>`}
+    <div><button id="calib" title="Повернуть комнату так, чтобы эта фраза была «перед колонкой»">Это сказано перед колонкой</button><button id="mirror">${ROOM.mirror ? "Зеркально ✓" : "Зеркально"}</button></div>`;
+  $("#calib").onclick = async () => {
+    if (c.doa.az == null) return;
+    const raw = ROOM.mirror ? -c.doa.az : c.doa.az;
+    ROOM = await api("/api/settings", { rotation: (360 - raw) % 360 }); toast("Комната повернута"); radar();
+  };
+  $("#mirror").onclick = async () => { ROOM = await api("/api/settings", { mirror: !ROOM.mirror }); radar(); };
+}
+async function radarDay() {
+  const day = S.day; if (!day) return;
+  const pts = await api(`/api/room?d=${day}`);
+  ROOMDAY = pts;
+  let s = frame();
+  const sel = cur();
+  pts.forEach((p, k) => {
+    const jitter = 30 + ((k * 37) % 60);           // spread the dots out from the centre so they don't overlap
+    const [x, y] = xy(p.az, jitter + 10);
+    const isSel = sel && sel.audio === p.audio;
+    s += `<circle class="dot" data-k="${k}" cx="${x}" cy="${y}" r="${isSel ? 6 : 4}" fill="${p.speaker ? color(p.speaker) : "var(--faint)"}"
+           opacity="${p.speaker ? .85 : .45}" ${isSel ? 'stroke="var(--ink)" stroke-width="2"' : ""}><title>${p.t} ${esc(p.speaker || "—")} · ${Math.round(scr(p.az))}°: ${esc((p.text || "").slice(0, 60))}</title></circle>`;
+  });
+  $("#radar").innerHTML = s;
+  const by = {};
+  for (const p of pts) { const k = p.speaker || "не в памяти"; by[k] = (by[k] || 0) + 1; }
+  $("#radarinfo").innerHTML = `<div><b>${pts.length}</b> фраз с направлением за день</div>
+    <div class="legend">${Object.entries(by).map(([k, n]) => `<span><i style="background:${k === "не в памяти" ? "var(--faint)" : color(k)}"></i>${esc(k)} ${n}</span>`).join("")}</div>
+    <div style="margin-top:4px">Точка — фраза: угол — откуда, цвет — кто. Клик — к фразе.</div>`;
+}
+$("#radar").addEventListener("click", e => {
+  const d = e.target.closest(".dot"); if (!d || !ROOMDAY) return;
+  const p = ROOMDAY[+d.dataset.k];
+  const i = S.view.findIndex(r => r.audio === p.audio);
+  if (i >= 0) select(i);
+});
+function radar() { return RMODE === "phrase" ? radarPhrase() : radarDay(); }
+for (const m of ["phrase", "day"]) $("#r-" + m).addEventListener("click", () => {
+  RMODE = m; $("#r-phrase").classList.toggle("on", m === "phrase"); $("#r-day").classList.toggle("on", m === "day"); radar();
+});
+api("/api/settings").then(s => { ROOM = s; radar(); }).catch(() => {});
 
 /* wiring */
 let qT; $("#q").addEventListener("input", () => { clearTimeout(qT); qT = setTimeout(() => doSearch($("#q").value), 300); });
