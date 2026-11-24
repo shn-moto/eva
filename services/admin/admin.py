@@ -122,6 +122,8 @@ def _heard(day, linked):
                 info = json.load(open(os.path.join(d, fn), encoding="utf-8"))
             except (OSError, ValueError):
                 continue
+            if not (info.get("text") or "").strip():
+                continue                  # noise the STT made nothing of
             hh = fn[:6]
             out.append({"id": None, "t": f"{hh[:2]}:{hh[2:4]}:{hh[4:6]}", "day": day, "role": "heard",
                         "speaker": None, "text": info.get("text") or "", "audio": base, "frag": "",
