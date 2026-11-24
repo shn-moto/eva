@@ -281,7 +281,7 @@ class Hearing:
             return seg, mics, meta
         gap = np.zeros(int(0.15 * SR), dtype=np.float32)
         m = dict(meta, start=hm["start"], speech_start=hm["speech_start"], dur=round(hm["dur"] + meta["dur"], 2),
-                 joined=True)
+                 joined=True, _joined_from=hm.get("audio"))
         # the glued sound's raw mics: both pieces' (the gap as silence), or none -
         # the rest's alone would put the direction of half the phrase on all of it
         if hmics is not None and mics is not None and hmics.shape[1] == mics.shape[1]:
@@ -349,6 +349,8 @@ class Hearing:
         meta["stt_ms"] = int(1000 * (time.time() - t))
         if out.get("audio"):
             meta["audio"] = out["audio"]
+            if meta.get("_joined_from"):
+                joined_into(meta["_joined_from"], out["audio"])
         parts = accepted_parts(out.get("parts"))
         if len(parts) > 1:
             log("split " + " | ".join(f"{p['from']}-{p['to']}s"
@@ -392,6 +394,22 @@ class Hearing:
             self.utterance(meta)
         elif not window:
             self.ui("none")
+
+
+def joined_into(piece, whole):
+    """A held piece glued with its rest was recognised again as one sound: the
+    piece's own clip in the STT log is marked, so the admin page does not show
+    the same words twice (2026-11-24 21:46: «…скажу что мы это вчера купили…»
+    once as the piece, once as the whole)."""
+    import os
+    p = os.path.join(S().LOG_DIR, piece.split("#")[0] + ".json")
+    try:
+        info = json.load(open(p, encoding="utf-8"))
+        info["joined_into"] = whole
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False)
+    except (OSError, ValueError) as e:
+        log("joined_into:", e)
 
 
 STATION = Hearing("station")

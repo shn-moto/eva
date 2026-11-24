@@ -142,6 +142,8 @@ def _heard(day, linked):
                 continue
             if not (info.get("text") or "").strip():
                 continue                  # noise the STT made nothing of
+            if info.get("joined_into"):
+                continue                  # a piece glued with its rest: the whole is shown
             hh = fn[:6]
             fix = info.get("correct") or {}
             if isinstance(fix, list):
