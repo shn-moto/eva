@@ -1,31 +1,36 @@
 #!/usr/bin/env python3
-"""Eva's hearing: microphones -> echo cancelling -> phrases -> text -> brain.
+"""Eva's hearing on the Station: only the physical part (docs/EAR-PLAN.md).
 
 Capture: 5 channels at 16 kHz from the mic board (snddaudio0):
-    ch1..ch3  microphones (averaged)
-    ch4       the amplifier tap: exactly what the speakers play, sampled by the
-              same ADC clock as the mics - the echo canceller's reference
+    7 microphones and the amplifier tap - exactly what the speakers play,
+    sampled by the same ADC clock as the mics: the echo canceller's reference.
 Echo cancelling: partitioned-block frequency-domain NLMS (overlap-save),
-1024 taps, removes Eva's own voice (and music) from the mic signal, so she
-can be interrupted while she talks.
-Phrases: Silero VAD on the echo-cancelled signal, 0.5 s of silence ends one.
-Text: GigaAM on shn-linux. Every phrase goes to the brain (127.0.0.1:8081)
-with how much of it overlapped Eva's own playback.
+removes Eva's own voice (and music) from the mic signal, so she can be
+interrupted while she talks. It needs the reference sample-aligned with the
+mics, so it stays here.
+Fragments: Silero VAD on the echo-cancelled signal; a fragment ends at a pause
+(END_SILENCE) or when it grew too long (SOFT_MAX at the next short dip,
+MAX_SPEECH anyway - "chained": the speech goes on). While her voice plays the
+allowed length is PLAYBACK_WINDOW, so a «стоп» over her is heard.
+Each fragment (mono + the 7 raw mics + its timeline and the canceller's
+measures) goes to shn-linux (services/stt/hear.py), which decides everything
+else - echo, text, direction, who, where one person ends and another begins,
+which fragments are one sentence - and sends the utterances back on an event
+stream; they go to the brain (127.0.0.1:8081) as before.
 """
 import collections
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
-import wave
 
 import numpy as np
 import onnxruntime as ort
 
-import names
 from core import profile
 
 SR = 16000
@@ -53,7 +58,7 @@ def unpack(raw):
     half = {"h": hi, "l": lo}
     mics = np.stack([half[h][:, k] for k, h in MIC_SLOTS], axis=1).astype(np.float64) / 32768.0
     return mics, half[REF_SLOT[1]][:, REF_SLOT[0]].astype(np.float64) / 32768.0
-STT_URL = profile.service("stt")
+HUB = profile.service("stt").rsplit("/", 1)[0] + "/hear"
 BRAIN_URL = os.environ.get("EVA_BRAIN_URL", "http://127.0.0.1:8081/utterance")
 UI_URL = "http://127.0.0.1:8080/api/event"    # the screen (and the LED ring): "I hear you"
 VAD_MODEL = "/opt/eva/models/silero_vad.onnx"
@@ -68,7 +73,12 @@ TAIL_KEEP = profile.tune("ear.tail_keep", 0.3)                   # s of the trai
 # ...unless only a word or two was said: "Ева, <pause> кто такая Ольга" was cut
 # after "Ева" and the lone name came out as "ево" (test set 2026-11-19)
 SHORT_HEAD, END_SILENCE_SHORT = profile.tune("ear.short_head", 0.9), profile.tune("ear.end_silence_short", 1.1)
-MIN_SPEECH, MAX_SPEECH = profile.tune("ear.min_speech", 0.35), profile.tune("ear.max_speech", 15.0)
+MIN_SPEECH = profile.tune("ear.min_speech", 0.35)                 # s: less is a click - its audio is not sent
+# length: a fragment past SOFT_MAX ends at the next short dip of the voice (a
+# gap between words), past MAX_SPEECH anyway; either way it is "chained" and
+# the hub glues it with its rest
+SOFT_MAX, DIP = profile.tune("ear.soft_max", 12.0), profile.tune("ear.dip", 0.15)
+MAX_SPEECH = profile.tune("ear.max_speech", 20.0)
 PREROLL = profile.tune("ear.preroll_chunks", 20)                      # chunks kept before the start (640 ms): a quiet "Ева" at the start was cut
 PLAYBACK_WINDOW = profile.tune("ear.playback_window", 1.5)             # s: while she talks, recognise in windows this long
 OVERLAP = 19                      # chunks (~0.6 s) shared by consecutive windows: no word cut in half
@@ -85,10 +95,8 @@ def hearing(on):
             os.remove(HEARING_FLAG)
     except OSError:
         pass
-ECHO_RESIDUAL = profile.tune("ear.echo_residual", 0.1)               # canceller left <10% of the energy: her own echo
 REF_ACTIVE = profile.tune("ear.ref_active", 5e-4)                 # reference level (of full scale) = speakers playing
-RECORD_FLAG = "/var/lib/eva/stt-record"   # exists: save phrases as a test set, do not answer
-RECORD_DIR = "/var/lib/eva/stt-samples"
+RECORD_FLAG = "/var/lib/eva/stt-record"   # exists: phrases are a test set (kept on the hub), Eva does not answer
 
 
 def log(*a):
@@ -206,43 +214,6 @@ class HighPass:
         return np.array(out)
 
 
-DOA_URL = STT_URL.rsplit("/", 1)[0] + "/doa"
-
-
-def direction(raw7, pid=None):
-    """Direction fingerprint of a phrase from its 7 raw mics (shn-linux):
-    {"lags": 21 pair delays, "peak", "blocks": per 0.5 s, "az": degrees}, or None.
-    pid: the phrase's id - its /stt then splits it by the direction too."""
-    try:
-        body = np.clip(raw7 * 32768, -32768, 32767).astype(np.int16).tobytes()
-        hdr = {"Content-Type": "application/octet-stream", "X-Channels": str(raw7.shape[1])}
-        if pid:
-            hdr["X-Phrase"] = pid
-        if os.path.exists(RECORD_FLAG):
-            hdr["X-Keep"] = "1"            # recording a test set: the hub keeps the raw mics too
-        req = urllib.request.Request(DOA_URL, data=body, headers=hdr)
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return json.loads(r.read()) or None
-    except Exception as e:
-        log("doa error:", e)
-        return None
-
-
-def stt(pcm16, split=False, pid=None):
-    """-> {"text", "audio", "doa"?: {"az"}, "parts"?: [{"from", "to", "text", "emb", "lags", "az", "cut"}]}
-    (stt_server.py)"""
-    hdr = {"Content-Type": "application/octet-stream"}
-    if pid:
-        hdr["X-Phrase"] = pid
-    if os.path.exists(RECORD_FLAG):
-        hdr["X-Record"] = "1"              # the hub marks the phrase as a test-set recording
-    req = urllib.request.Request(STT_URL + ("?split=1" if split else ""), data=pcm16.tobytes(), headers=hdr)
-    with urllib.request.urlopen(req, timeout=15) as r:
-        res = json.loads(r.read())
-    res["text"] = (res.get("text") or "").strip()
-    return res
-
-
 def ui(state, text=None):
     """What hearing is doing, for the screen: on / stt / held / text / none.
     Fire and forget - the microphones must never wait for the screen."""
@@ -270,384 +241,82 @@ def send_brain(item):
         log("brain not reachable:", e)
 
 
-_SPK = None
-_SPK_LOCK = threading.Lock()
-SPK_MODEL = "/opt/eva/models/campplus.onnx"
-SPK_SECONDS = profile.tune("ear.speaker_seconds", 3.0)                 # the first seconds are enough to know a voice
 
 
-def voice_embedding(audio):
-    """CAM++ embedding (192 floats) of who is speaking, or None."""
-    global _SPK
-    try:
-        with _SPK_LOCK:
-            if _SPK is None:
-                import sherpa_onnx
-                _SPK = sherpa_onnx.SpeakerEmbeddingExtractor(
-                    sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=SPK_MODEL, num_threads=2))
-            st = _SPK.create_stream()
-            st.accept_waveform(SR, audio[: int(SR * SPK_SECONDS)].astype(np.float32))
-            st.input_finished()
-            e = np.array(_SPK.compute(st), dtype=np.float32)
-        return (e / (np.linalg.norm(e) + 1e-9)).round(5).tolist()
-    except Exception as e:  # model missing or broken: no voice id, the rest goes on
-        log("voice id error:", e)
-        return None
+# ---- to the hub and back ----
+_out = queue.Queue()
+SEQ = [0]
 
 
-SELF_PROFILE = "/var/lib/eva/voices/eva-self.json"   # her own voice (xAI "eve"), from her TTS cache
-VOICES_EXPORT = STT_URL.rsplit("/", 1)[0] + "/voices/export"   # the family's voices (the hub's voice base)
-TTS_CACHE = "/var/cache/eva/tts"
-_voices = {"self": [], "family": [], "named": {}, "loaded": 0.0}
+def send(seg, raw7, meta):
+    """A fragment to the hub, in order (one sender). seg: float mono, raw7:
+    samples x 7 float or None. A fragment is tried again while the hub comes
+    back (~25 s: a deploy restarts it); a window over her voice is not."""
+    SEQ[0] += 1
+    meta = dict(meta, seq=SEQ[0], record=os.path.exists(RECORD_FLAG) or None)
+    mono = np.clip(seg * 32767, -32767, 32767).astype("<i2").tobytes() if seg is not None else b""
+    mics = np.clip(raw7 * 32768, -32768, 32767).astype("<i2").tobytes() if raw7 is not None else b""
+    _out.put(("/fragment", mono + mics, {"X-Mono": str(len(mono) // 2),
+                                         "X-Channels": str(raw7.shape[1]) if raw7 is not None else "0"}, meta))
 
 
-def _load_wav16(path):
-    with wave.open(path) as w:
-        sr, a = w.getframerate(), np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
-    a = a.astype(np.float32) / 32768.0
-    if sr != SR:
-        a = np.interp(np.arange(0, len(a), sr / SR), np.arange(len(a)), a).astype(np.float32)
-    return a
+def started(t):
+    """The voice began (a held piece on the hub waits for its rest)."""
+    _out.put(("/start", None, None, {"t": t}))
 
 
-def self_profile():
-    """Embeddings of her own voice: her longest cached sentences, made once."""
-    try:
-        return json.load(open(SELF_PROFILE))
-    except (OSError, ValueError):
-        pass
-    wavs = sorted((os.path.join(TTS_CACHE, n) for n in os.listdir(TTS_CACHE) if n.endswith(".wav")),
-                  key=os.path.getsize, reverse=True)[:20]
-    embs = [e for e in (voice_embedding(_load_wav16(w)) for w in wavs) if e]
-    os.makedirs(os.path.dirname(SELF_PROFILE), exist_ok=True)
-    with open(SELF_PROFILE, "w") as f:
-        json.dump(embs, f)
-    log(f"own voice profile: {len(embs)} samples")
-    return embs
+def sender():
+    while True:
+        path, body, hdr, meta = _out.get()
+        meta["now"] = time.time()
+        if body is None:
+            data, h = json.dumps(meta).encode(), {"Content-Type": "application/json"}
+        else:
+            data, h = body, dict(hdr, **{"X-Meta": json.dumps(meta), "Content-Type": "application/octet-stream"})
+        waits = [] if meta.get("window") or path == "/start" else [2, 4, 8, 10]
+        while True:
+            try:
+                urllib.request.urlopen(urllib.request.Request(HUB + path, data=data, headers=h), timeout=10).read()
+                break
+            except OSError as e:
+                if not waits:
+                    log(f"hub {path} error:", e)
+                    if path == "/fragment" and not meta.get("window"):
+                        ui("none")
+                    break
+                w = waits.pop(0)
+                log(f"hub {path} error: {e} - again in {w}s")
+                time.sleep(w)
 
 
-def voice_sims(emb):
-    """-> (similarity to her own voice, best similarity to a family voice)"""
-    if time.time() - _voices["loaded"] > 300:
-        try:
-            # the family's voices from the hub's voice base (services/stt/voices.py)
-            with urllib.request.urlopen(VOICES_EXPORT, timeout=5) as r:
-                fam = json.loads(r.read())["profiles"]
-            _voices["named"] = {k: [np.asarray(e, dtype=np.float32) / (np.linalg.norm(e) + 1e-9) for e in v]
-                                for k, v in fam.items()}
-            _voices["family"] = [e for v in _voices["named"].values() for e in v]
-        except (OSError, ValueError, KeyError):
-            pass
-        _voices["loaded"] = time.time()
-    e = np.asarray(emb, dtype=np.float32)
-    best = lambda embs: max((float(e @ (x / (np.linalg.norm(x) + 1e-9))) for x in embs), default=0.0)
-    return round(best(_voices["self"]), 3), round(best(_voices["family"]), 3)
-
-
-def save_sample(pcm, seg, peak, meta):
-    """Test-set recording (docs/BACKLOG.md): the exact PCM the STT got, plus the
-    level it had before normalising - quiet speech is part of what is measured."""
-    os.makedirs(RECORD_DIR, exist_ok=True)
-    name = time.strftime("%Y%m%d-%H%M%S", time.localtime(meta["speech_start"])) + f"-{int(meta['speech_start'] * 1000) % 1000:03d}"
-    with wave.open(os.path.join(RECORD_DIR, name + ".wav"), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes(pcm.tobytes())
-    rms = float(np.sqrt(np.mean(seg.astype(np.float64) ** 2))) + 1e-12
-    info = {k: meta[k] for k in ("dur", "text", "stt_ms", "playback", "residual")}
-    info.update(peak_db=round(20 * np.log10(peak + 1e-12), 1), rms_db=round(20 * np.log10(rms), 1))
-    with open(os.path.join(RECORD_DIR, name + ".json"), "w", encoding="utf-8") as f:
-        json.dump(info, f, ensure_ascii=False)
-
-
-def recognise(seg, meta):
-    """In a thread: STT (and, for a phrase, who said it) never hold up listening."""
-    t = time.time()
-    if "held" in meta:                    # the rest of a held piece: glue only one voice, from one place
-        p0 = float(np.abs(seg).max()) or 1.0
-        rest_dir = direction(meta["mics"]) if meta.get("mics") is not None else None
-        seg, meta, _ = JOIN.glue(seg, meta, voice_embedding(seg / p0 * 0.9), rest_dir)
-    peak = float(np.abs(seg).max()) or 1.0
-    norm = seg / peak * 0.9
-    pcm = np.clip(norm * 32767, -32767, 32767).astype(np.int16)
-    emb = {}
-    raw7 = meta.pop("mics", None)
-    if raw7 is not None:
-        meta["_mics"] = raw7              # kept with a held piece: a glue needs both pieces' mics
-    pid = f"{meta.get('speech_start', meta['start']):.3f}-{os.getpid()}"
-    th_doa = None
-    if raw7 is not None and not meta.get("window"):
-        th_doa = threading.Thread(target=lambda: emb.update(doa=direction(raw7, pid)), daemon=True)
-        th_doa.start()
-    # windows too: is it her own voice (echo) or somebody talking over her?
-    th = threading.Thread(target=lambda: emb.update(v=voice_embedding(norm)), daemon=True)
-    th.start()
-    split = not meta.get("window") and meta["dur"] >= SPLIT_MIN and not os.path.exists(RECORD_FLAG)
-    # the hub's STT restarting (a deploy) dropped a phrase said at that moment
-    # (2026-11-24 13:35): a phrase is tried again while it comes back (~25 s);
-    # a window over her voice is not worth waiting for
-    waits = [] if meta.get("window") else [2, 4, 8, 10]
+def events():
+    """The hub's decisions: utterances -> the brain, hearing states -> the screen."""
     while True:
         try:
-            res = stt(pcm, split=split, pid=pid if th_doa else None)
-            break
-        except OSError as e:
-            if not waits:
-                log("stt error:", e)
-                if not meta.get("window"):
-                    ui("none")
-                return
-            w = waits.pop(0)
-            log(f"stt error: {e} - again in {w}s")
-            time.sleep(w)
-    th.join(timeout=3)
-    if th_doa:
-        th_doa.join(timeout=2)
-        if emb.get("doa"):
-            meta["doa"] = emb["doa"]
-    meta["stt_ms"] = int(1000 * (time.time() - t))
-    if res.get("audio"):
-        meta["audio"] = res["audio"]      # the phrase's sound on the hub: stored with it in the memory
-    parts = accepted_parts(res.get("parts"))
-    if len(parts) > 1:
-        # two (or three) people in one phrase: each part is a phrase of its own,
-        # with its own voice and place; the text of each from the whole's words
-        log("split " + " | ".join(f"{p['from']}-{p['to']}s"
-                                   + (f" [{p['cut']['by']} {p['cut'].get('d', p['cut'].get('whole'))}]" if p.get("cut") else "")
-                                   + (f" {p['az']:.0f}°" if p.get("az") is not None else "") + f": {p['text']!r}"
-                                   for p in parts))
-        for k, p in enumerate(parts):
-            a, b = int(p["from"] * SR), int(p["to"] * SR)
-            m_ = dict(meta, start=meta["start"] + p["from"], speech_start=meta["start"] + p["from"],
-                      end=meta["start"] + p["to"], dur=round(p["to"] - p["from"], 2), split=k + 1,
-                      audio_span=[p["from"], p["to"] if k < len(parts) - 1 else None])
-            if p.get("lags"):
-                m_["doa"] = {"lags": p["lags"], "az": p.get("az"), "peak": (meta.get("doa") or {}).get("peak")}
-            deliver(seg[a:b], m_, p["text"], p["emb"], None, peak, hold=False)
-        return
-    deliver(seg, meta, res.get("text") or "", emb.get("v"), pcm, peak)
-
-
-def deliver(seg, meta, text, v, pcm, peak, hold=True):
-    """A recognised phrase (or a part of one) -> the brain."""
-    raw, text = text, names.fix(text) if text else text
-    if v:
-        meta["self_sim"], meta["fam_sim"] = voice_sims(v)
-    meta.update(text=text, raw=raw, voice=None if meta.get("window") else v)
-    log(f"{'window' if meta.get('window') else 'phrase'} {meta['dur']:.1f}s playback {meta['playback']:.0%} residual {meta['residual']} "
-        f"stt {meta['stt_ms']}ms self {meta.get('self_sim')} fam {meta.get('fam_sim')}: {text!r}"
-        + (f" doa {meta['doa']['lags'][:6]} peak {meta['doa']['peak']}" if meta.get("doa") else ""))
-    if os.path.exists(RECORD_FLAG):
-        # recording a test set: Eva stays out of it. The STT server keeps the
-        # phrase (mono, + its 7 raw mics via /doa) on the hub - nothing goes to
-        # the Station's small disk any more (2026-11-23)
-        return
-    # her own echo is never held: joined with his next phrase it swallowed his
-    # "хорошо" (echo "снова я" held, the merge came out "снова я" again, 2026-11-19)
-    echo = meta.get("playback", 0) > 0.3 or (meta.get("self_sim") or 0) >= 0.45
-    if hold and text and not meta.get("window") and not echo and incomplete(text):
-        JOIN.hold(seg, meta)              # a sentence cut in a pause: wait for its rest
-        ui("held", text)
-    elif text:
-        # what was heard over the music or her voice is mostly the song / her
-        # echo: not shown under the face (it showed gibberish of the lyrics)
-        if not meta.get("window") and meta.get("playback", 0) < 0.3:
-            ui("text", text)
-        send_brain(meta)
-    elif not meta.get("window"):
-        ui("none")
-
-
-# Two people in one phrase (no pause between them): shn-linux finds the
-# likeliest change of voice (stt_server.speaker_change); taken when the two
-# parts are clearly different voices, or two different family voices.
-# Calibrated 2026-11-19: ~half of such phrases caught, ~2% false splits.
-SPLIT_MIN = profile.tune("ear.split_min", 3.0)
-SPLIT_SURE = profile.tune("ear.split_sure", 0.3)                  # parts this unlike: two people (0 false splits of 25 single phrases)
-
-
-def split_ok(ch):
-    if ch["whole"] < SPLIT_SURE:
-        return True
-    a, b = (who(e) for e in ch["embs"])
-    return a is not None and b is not None and a != b
-
-
-def accepted_parts(parts):
-    """The hub's parts with the cuts the ear believes: a change of place
-    (direction) always; a change of voice in one place as before - the two
-    parts very unlike, or two different family voices. A cut not believed
-    joins its two parts back (their text is in order, from the whole)."""
-    if not parts:
-        return []
-    out = [dict(parts[0])]
-    for p in parts[1:]:
-        cut = p.get("cut") or {}
-        ok = cut.get("by") == "direction" or (
-            cut.get("by") == "voice" and split_ok({"whole": cut.get("whole", 1.0), "embs": [out[-1]["emb"], p["emb"]]}))
-        if ok:
-            out.append(dict(p))
-        else:
-            prev = out[-1]
-            longer = prev if prev["to"] - prev["from"] >= p["to"] - p["from"] else p
-            prev.update(to=p["to"], text=(prev["text"] + " " + p["text"]).strip(), emb=longer["emb"])
-            prev.pop("lags", None)
-            prev.pop("az", None)
-    return out
-
-
-def who(emb):
-    """The family member this voice is (best match >= 0.5, 0.1 ahead of the next), or None."""
-    voice_sims(emb)                       # keeps the profiles fresh
-    e = np.asarray(emb, dtype=np.float32)
-    best = sorted(((max(float(e @ x) for x in v), k) for k, v in _voices["named"].items() if v), reverse=True)
-    if not best or best[0][0] < 0.5 or (len(best) > 1 and best[0][0] - best[1][0] < 0.1):
-        return None
-    return best[0][1]
-
-
-# words a finished sentence does not end with: "Ева," / "погода в" / "скажи что"
-OPEN_END = set("""ева эва и а но или в во на с со к ко у о об по за из от до для при про без над под
-что чтобы как когда если потому поэтому который которая которые это этот эта мне меня тебе тебя
-мой моя наш наша ты я он она мы вы они не ну вот слушай скажи покажи найди""".split())
-
-
-def incomplete(text):
-    words = text.lower().split()
-    return bool(words) and words[-1] in OPEN_END
-
-
-class Joiner:
-    """Finds sentences, not pieces: a phrase whose text ends open ("Ева",
-    "какая погода в") is held back for JOIN_GAP; if the voice goes on, both
-    pieces are recognised again as one audio, otherwise the piece goes as is."""
-
-    JOIN_GAP = 1.0                    # s after the piece ended (on top of END_SILENCE)
-    REST_WAIT = 12.0                  # s more for a rest that began: then the piece goes alone
-    SAME_VOICE = 0.5                  # CAM++ similarity of the two pieces to glue them
-
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.pending = None           # (audio, meta, deadline, joining)
-        self.last_end = 0.0           # when the last phrase ended (before its STT is back)
-        self.cont = 0.0               # when a phrase started soon after it
-
-    def ended(self, now):
-        with self.lock:
-            self.last_end = now
-
-    def hold(self, seg, meta):
-        """Called when STT is back, which may be after the rest of the sentence
-        already began (or even ended) - the timeline decides, not the order."""
-        with self.lock:
-            if self.last_end > meta["end"]:       # the rest is already over: too late to glue
-                p = None
-            else:
-                joining = meta["end"] < self.cont <= meta["end"] + self.JOIN_GAP
-                p = self.pending = [seg, meta, meta["end"] + self.JOIN_GAP, joining]
-        if p is None:
-            send_brain(meta)
-            return
-        log(f"held (open end): {meta['text']!r}{' - its rest is coming' if p[3] else ''}")
-        threading.Thread(target=self._expire, args=(self.pending,), daemon=True).start()
-
-    def _expire(self, p):
-        time.sleep(max(0.0, p[2] - time.time()))
-        with self.lock:
-            if self.pending is not p:
-                return
-            if not p[3]:
-                self.pending = None
-        if p[3]:
-            # its "rest" began but may never come as a phrase (a window over her
-            # voice, dropped as echo): the piece is never lost, it goes on its own
-            time.sleep(self.REST_WAIT)
-            with self.lock:
-                if self.pending is not p:
-                    return
-                self.pending = None
-            log(f"held piece sent alone (its rest never came): {p[1]['text']!r}")
-        send_brain(p[1])
-
-    def started(self, now):
-        """A new phrase began: it continues the held piece if it came in time."""
-        with self.lock:
-            if now - self.last_end <= self.JOIN_GAP:
-                self.cont = now
-            if self.pending and now <= self.pending[2]:
-                self.pending[3] = True
-
-    def merge(self, seg, meta):
-        """The new phrase ended: if it continues the held piece, the piece rides
-        along with it to recognise() - glued there only if it is the same voice
-        (pieces of two people were glued into one phrase, 2026-11-19)."""
-        with self.lock:
-            p, self.pending = self.pending, None
-        if not p or not p[3]:
-            if p:
-                with self.lock:       # not a continuation: put it back for _expire
-                    self.pending = self.pending or p
-            return seg, meta
-        meta["held"] = p
-        return seg, meta
-
-    AZ_OTHER = profile.tune("ear.glue_az_other", 30.0)   # degrees apart: another place, not glued
-    AZ_SAME = profile.tune("ear.glue_az_same", 12.0)     # this close: the same place - a voice on the fence is glued
-    # one place on the 2026-11-23 test set: 2-9 degrees of spread (one 18)
-
-    def glue(self, seg, meta, v, rest_dir=None):
-        """In recognise(), the voice (and the place) of the rest known: one
-        sentence of one voice from one place -> (seg, meta) glued; another voice
-        or another place -> the piece goes alone first."""
-        p = meta.pop("held")
-        hv = p[1].get("voice")
-        unit = lambda x: np.asarray(x, dtype=np.float32) / (np.linalg.norm(x) + 1e-9)
-        sim = float(unit(hv) @ unit(v)) if hv is not None and v is not None else 0.0
-        a1 = (p[1].get("doa") or {}).get("az")
-        a2 = (rest_dir or {}).get("az")
-        apart = abs((a1 - a2 + 180) % 360 - 180) if a1 is not None and a2 is not None else None
-        place = f", {apart:.0f}° apart" if apart is not None else ""
-        if apart is not None and apart >= self.AZ_OTHER:
-            log(f"not joined: another place{place} (voice {sim:.2f}) after {p[1]['text']!r}")
-            send_brain(p[1])
-            return seg, meta, False
-        same_place = apart is not None and apart <= self.AZ_SAME
-        if sim < self.SAME_VOICE and not (same_place and sim >= self.SAME_VOICE - 0.15):
-            log(f"not joined: another voice ({sim:.2f}{place}) after {p[1]['text']!r}")
-            send_brain(p[1])
-            return seg, meta, False
-        gap = np.zeros(int(0.15 * SR), dtype=np.float32)
-        m = dict(meta, start=p[1]["start"], speech_start=p[1]["speech_start"],
-                 dur=round(p[1]["dur"] + meta["dur"], 2), joined=True)
-        # the glued sound's raw mics: both pieces' (the gap as silence), or none -
-        # the rest's alone would put the direction of half the phrase on all of it
-        pm, rm = p[1].get("_mics"), meta.get("mics")
-        if pm is not None and rm is not None and pm.shape[1] == rm.shape[1]:
-            m["mics"] = np.concatenate([pm, np.zeros((len(gap), pm.shape[1]), dtype=pm.dtype), rm])
-        else:
-            m.pop("mics", None)
-        log(f"joined with {p[1]['text']!r} (same voice {sim:.2f}{place})")
-        return np.concatenate([p[0], gap, seg]), m, True
-
-    def release(self):
-        """The continuation turned out to be nothing (echo, a cough): send the piece."""
-        with self.lock:
-            p, self.pending = self.pending, None
-        if p and p[3]:
-            send_brain(p[1])
-        elif p:
-            with self.lock:
-                self.pending = self.pending or p
-
-
-JOIN = Joiner()
+            with urllib.request.urlopen(HUB + "/events", timeout=40) as r:
+                log("hub events: connected")
+                for line in r:
+                    line = line.decode("utf-8", "replace").strip()
+                    if not line.startswith("data: "):
+                        continue
+                    ev = json.loads(line[6:])
+                    if ev.get("type") == "utterance":
+                        it = ev["item"]
+                        log(f"{'window' if it.get('window') else 'phrase'} {it.get('dur')}s "
+                            f"{(it.get('speaker') or {}).get('label', '')}: {it.get('text')!r}")
+                        send_brain(it)
+                    elif ev.get("type") == "ui" and ev.get("state") != "stt":
+                        ui(ev["state"], ev.get("text"))
+        except Exception as e:
+            log("hub events:", e)
+            time.sleep(3)
 
 
 def main():
     vad, aec = Vad(), EchoCanceller(adapt_floor=1e-6)   # scaled signals: tested 21 dB steady
-    _voices["self"] = [np.asarray(e, dtype=np.float32) for e in self_profile()]
-    voice_embedding(np.zeros(SR, dtype=np.float32))   # load CAM++ now: lazily it cost the first phrase 3 s and its voice
+    threading.Thread(target=sender, daemon=True).start()
+    threading.Thread(target=events, daemon=True).start()
+
     proc = subprocess.Popen(["arecord", "-q", "-D", "hw:snddaudio0,0", "-c", "5", "-f", "S32_LE",
                              "-r", str(SR), "--period-size=256", "-t", "raw"],
                             stdout=subprocess.PIPE, bufsize=0)
@@ -656,7 +325,7 @@ def main():
     dump = open(os.environ["EVA_EAR_DUMP"], "wb") if os.environ.get("EVA_EAR_DUMP") else None
     pre = collections.deque(maxlen=PREROLL)
     seg, seg_ref, speaking, silence, playing_until = [], [], False, 0.0, 0.0
-    seg_raw = []                          # the 7 raw mics of the phrase: its direction (stt_server /doa)
+    seg_raw = []                          # the 7 raw mics of the fragment: its direction (on the hub)
     n_pre = 0
     stats_t, stats = time.time(), collections.Counter()
     log("listening")
@@ -675,7 +344,7 @@ def main():
         # what is heard: the mics in HEAR_MICS only. All 7 averaged made her deaf
         # (2026-11-23): some capsules have the opposite polarity (pair correlation
         # down to -0.38) and the sum cancelled the voice - VAD max 0.36 while
-        # talking. All 7 still go to the direction (raw7 -> /doa).
+        # talking. All 7 still go to the hub for the direction.
         y = hp_mic(mics[:, HEAR_MICS].mean(axis=1) * MIC_GAIN)
         x = hp_ref(ref * GAIN)
         ref_on = float(np.sqrt(np.mean(x * x))) > REF_ACTIVE * GAIN
@@ -717,7 +386,7 @@ def main():
                 pre.clear()
                 t_start = now - len(seg) * CHUNK / SR
                 t_speech = now - CHUNK / SR          # when the voice itself began (no pre-roll)
-                JOIN.started(now)
+                started(now)
                 if not play_now:
                     ui("on")
         else:
@@ -736,14 +405,17 @@ def main():
                 # windows go to recognition instead, each on its own.
                 meta = {"dur": round(dur, 2), "start": t_start, "speech_start": t_speech, "end": now,
                         "playback": 1.0, "residual": None, "window": True}
-                threading.Thread(target=recognise, args=(np.concatenate(seg), meta), daemon=True).start()
+                send(np.concatenate(seg), None, meta)
                 seg, seg_ref, seg_raw = seg[-OVERLAP:], seg_ref[-OVERLAP:], seg_raw[-OVERLAP:]
                 n_pre = 0
                 t_start = t_speech = now - len(seg) * CHUNK / SR
                 continue
             voiced = (len(seg) - n_pre) * CHUNK / SR - silence      # without the pre-roll
             end_silence = END_SILENCE_SHORT if voiced < SHORT_HEAD and not play_now else END_SILENCE
-            if silence >= end_silence or dur >= MAX_SPEECH:
+            # a pause ends the fragment; a long one also ends at a short dip of the
+            # voice (between words) or at MAX_SPEECH - then it is "chained"
+            paused = silence >= end_silence
+            if paused or dur >= MAX_SPEECH or (dur >= SOFT_MAX and silence >= DIP):
                 speaking = False
                 hearing(False)
                 speech = dur - silence
@@ -751,26 +423,18 @@ def main():
                 playback = len(played) / len(seg_ref)
                 # left after the canceller / heard: near 0 = it was all her echo
                 residual = (sum(o for _, o in played) / (sum(i for i, _ in played) + 1e-12)) if played else 1.0
-                if speech >= MIN_SPEECH and playback > 0.5 and residual < ECHO_RESIDUAL:
-                    log(f"echo dropped: {speech:.1f}s, residual {residual:.3f}")
-                    JOIN.release()
-                    ui("none")
-                elif speech < MIN_SPEECH:
-                    JOIN.release()
+                meta = {"dur": round(speech, 2), "start": t_start, "speech_start": t_speech, "end": now,
+                        "playback": round(playback, 3), "residual": round(residual, 3), "chained": not paused}
+                if speech < MIN_SPEECH:
+                    send(None, None, meta)          # a click: no sound, the hub only learns it ended
                     ui("none")
                 else:
-                    meta = {"dur": round(speech, 2), "start": t_start, "speech_start": t_speech, "end": now,
-                            "playback": playback, "residual": round(residual, 3)}
                     # keep 0.3 s after the VAD dropped: soft endings ("-ть", "-с") fade
                     # out after it, cutting 60 % of the silence cut them off (2026-11-23)
                     keep_n = int(len(seg) * CHUNK - max(0.0, silence - TAIL_KEEP) * SR)
-                    s = np.concatenate(seg)[:keep_n]
-                    raw7 = np.concatenate(seg_raw)[:keep_n]
-                    s, meta = JOIN.merge(s, meta)
-                    meta["mics"] = raw7
-                    JOIN.ended(now)
-                    ui("stt")
-                    threading.Thread(target=recognise, args=(s, meta), daemon=True).start()
+                    send(np.concatenate(seg)[:keep_n], np.concatenate(seg_raw)[:keep_n], meta)
+                    if playback < 0.5:
+                        ui("stt")
         if now - stats_t > 60:
             log(f"level: speech {stats['speech']}/{stats['chunks']} chunks, playback {stats['play']}, "
                 f"resets aec {aec.resets} vad {vad.resets}, mic peak {20 * np.log10(stats['mic_peak'] + 1e-12):.0f} dBFS, "

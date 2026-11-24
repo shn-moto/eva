@@ -13,6 +13,7 @@ from core import profile
 from core.util import log
 
 HUB = profile.service("stt").rsplit("/", 1)[0] + "/voices"
+HEAR_CONFIG = profile.service("stt").rsplit("/", 1)[0] + "/hear/config"
 ID_MARGIN = profile.tune("voices.margin", 0.1)     # a claim's lead (the hub's rule, the same number)
 # a known voice saying it is a family member with no voice yet is enrolled under
 # that name unless it is this sure to be the voice it was taken for
@@ -39,7 +40,7 @@ def people():
 
 
 def _call(path, body=None, timeout=3):
-    req = urllib.request.Request(HUB + path, data=json.dumps(body).encode() if body is not None else None,
+    req = urllib.request.Request(path if path.startswith("http") else HUB + path, data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
@@ -54,11 +55,18 @@ class Voices:
         threading.Thread(target=self._send_people, daemon=True).start()
 
     def _send_people(self):
+        """The household's names (voice base) and its name fixes (the hub's ear,
+        services/stt/hear.py) - again every 10 minutes: a restarted hub keeps
+        the names in its base but not the fixes."""
+        sent = False
         while True:
             try:
                 _call("/people", {"people": people()}, timeout=10)
-                log(f"voices: household names sent to the hub ({len(people())})")
-                return
+                _call(HEAR_CONFIG, {"stt_fixes": [list(x) for x in profile.STT_FIXES]}, timeout=10)
+                if not sent:
+                    log(f"voices: household names and name fixes sent to the hub ({len(people())})")
+                sent = True
+                time.sleep(600)
             except Exception as e:
                 log("voices: hub not ready:", e)
                 time.sleep(20)

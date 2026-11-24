@@ -408,7 +408,7 @@ def _listen_finish(why):
     LISTEN.update(active=False, parts=[], voice=None)
     person = identity.GUEST
     if voice:
-        label, _, known = VOICES.identify(voice[0], voice[1])
+        label, _, known = who_said({"voice": voice[0], "dur": voice[1], "speaker": voice[2]})
         person = identity.from_voice(label, known)
     other = person.known and owner.known and owner.profile != person.profile
     words = text.split()
@@ -446,7 +446,7 @@ def on_phrase(item):
                 words.pop(0)
             LISTEN["parts"].append(" ".join(words))
             if item.get("voice"):
-                LISTEN["voice"] = (item["voice"], item.get("dur", 0))
+                LISTEN["voice"] = (item["voice"], item.get("dur", 0), item.get("speaker"))
             if item.get("window"):
                 LISTEN["deadline"] = time.time() + LISTEN_IDLE
             else:
@@ -500,8 +500,7 @@ def on_phrase(item):
     if relay_take(text, item):
         return
     # who is it
-    label, sim, known = (VOICES.identify(item["voice"], item.get("dur", 0)) if item.get("voice")
-                         else ("unknown", 0.0, False))
+    label, sim, known = who_said(item)
     person = identity.from_voice(label, known)
     log(f"voice: {label} ({sim})")
     if introduction(text, item, label, sim, known, person):
@@ -714,8 +713,7 @@ def relay_take(text, item):
         if RELAY["to"] is None or time.time() > RELAY["until"]:
             RELAY["to"] = None
             return False
-        label, sim, known = (VOICES.identify(item["voice"], item.get("dur", 0)) if item.get("voice")
-                             else ("unknown", 0.0, False))
+        label, sim, known = who_said(item)
         who = identity.from_voice(label, known).name if known else None
         RELAY["parts"].append((who, text))
         if RELAY["timer"]:
@@ -825,6 +823,17 @@ def attention_watch():
                 "speaking": cur[2]})
             last = cur
         time.sleep(0.25)
+
+
+def who_said(item):
+    """(label, similarity, known): decided on the hub with the phrase (its voice
+    base, services/stt/voices.py) - asked again only for an item without it."""
+    sp = item.get("speaker")
+    if sp:
+        return sp["label"], sp["sim"], sp["known"]
+    if item.get("voice"):
+        return VOICES.identify(item["voice"], item.get("dur", 0))
+    return "unknown", 0.0, False
 
 
 def introduction(text, item, label, sim, known, person):

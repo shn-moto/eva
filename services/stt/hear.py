@@ -298,6 +298,10 @@ class Hearing:
         t = time.time()
         self.clock(meta.get("now"))
         window = bool(meta.get("window"))
+        if meta.get("record"):
+            # recording a test set: kept on the hub (mono, raw mics for good), Eva stays out
+            self.recognise(seg, mics, meta, t)
+            return
         if not window:
             speech, playback, residual = meta.get("dur", 0), meta.get("playback", 0), meta.get("residual", 1.0)
             if speech < MIN_SPEECH:
@@ -331,11 +335,17 @@ class Hearing:
             d = st._doa_work(mics)
             if d:
                 meta["doa"] = {k: d[k] for k in ("lags", "peak", "az", "az_strength") if k in d}
-        split = not meta.get("window") and meta["dur"] >= SPLIT_MIN
+        record = bool(meta.get("record"))
+        split = not meta.get("window") and not record and meta["dur"] >= SPLIT_MIN
         text, letters = st.decode(norm)
         out = st._place_and_split(norm, text, letters, mics if not meta.get("window") else None, split)
         if not self.dry:
-            out = st._finish(norm, out, mics, False, t)
+            out = st._finish(norm, out, mics, record, t)
+            if record and mics is not None:
+                st._keep_raw(mics)
+        if record:
+            log(f"recorded for the test set: {out.get('text')!r}")
+            return
         meta["stt_ms"] = int(1000 * (time.time() - t))
         if out.get("audio"):
             meta["audio"] = out["audio"]
@@ -373,7 +383,8 @@ class Hearing:
         # her own echo is never held: joined with his next phrase it swallowed his
         # "хорошо" (echo "снова я" held, the merge came out "снова я" again, 2026-11-19)
         echo = meta.get("playback", 0) > SHOW_PLAYBACK or (meta.get("self_sim") or 0) >= 0.45
-        if hold and text and not window and not echo and not self.dry and incomplete(text):
+        # a fragment cut by length (the speech went on) waits for its rest like an open end
+        if hold and text and not window and not echo and not self.dry and (incomplete(text) or meta.get("chained")):
             self.hold(seg, mics, meta)
         elif text:
             if not window and meta.get("playback", 0) < SHOW_PLAYBACK:
