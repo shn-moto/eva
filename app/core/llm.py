@@ -14,7 +14,7 @@ import time
 
 import anthropic
 
-from core import cost, skills
+from core import actions, cost, skills
 from core import profile
 from core.util import log, secrets
 
@@ -110,36 +110,46 @@ def _stored(content):
     return out
 
 
-def _server_result_text(use, res, sources):
-    """What a server tool gave, short, for the history."""
+FETCH_SHORT = profile.tune("llm.fetch_short", 1500)       # chars of a fetched page in the history (whole in the journal)
+
+
+def _server_result(use, res, sources):
+    """What a server tool gave -> (whole text, short text, source, its date)."""
     if res is None:
-        return "результата нет"
+        return "результата нет", "результата нет", None, None
     c = getattr(res, "content", None)
     if getattr(c, "type", "").endswith("_error"):
-        return "ошибка: " + str(getattr(c, "error_code", ""))
+        t = "ошибка: " + str(getattr(c, "error_code", ""))
+        return t, t, None, None
     if res.type == "web_search_tool_result" and isinstance(c, list):
         lines = [f"{getattr(x, 'title', '')} - {getattr(x, 'url', '')}" + (f" ({x.page_age})" if getattr(x, "page_age", None) else "")
                  for x in c]
-        return "Найдено:\n" + "\n".join(lines)
+        t = "Найдено:\n" + "\n".join(lines)
+        return t, t, None, None
     if res.type == "web_fetch_tool_result":
         doc = getattr(c, "content", None)
         src = getattr(doc, "source", None)
         body = getattr(src, "data", "") if isinstance(getattr(src, "data", None), str) else ""
-        return f"Открыта страница {getattr(c, 'url', '')}: {getattr(doc, 'title', '') or ''}\n{body[:1500]}"
+        url, when = getattr(c, "url", "") or "", getattr(c, "retrieved_at", None)
+        head = f"Открыта страница {url}" + (f" (получена {when})" if when else "") + f": {getattr(doc, 'title', '') or ''}\n"
+        short = head + body[:FETCH_SHORT] + (f" …[страница длиннее: {len(body)} символов]" if len(body) > FETCH_SHORT else "")
+        return head + body, short, url, when
     out = getattr(c, "stdout", None)
     if out:
-        return "Вывод:\n" + str(out)
+        return "Вывод:\n" + str(out), "Вывод:\n" + str(out), None, None
     if sources:
-        return "Поиск выполнен (результат у Anthropic зашифрован). Источники ответа:\n" + "\n".join(sources)
-    return "Выполнено."
+        t = "Поиск выполнен (результат у Anthropic зашифрован). Источники ответа:\n" + "\n".join(sources)
+        return t, t, None, None
+    return "Выполнено.", "Выполнено.", None, None
 
 
-def _server_pairs(content):
+def _server_pairs(content, person=None, channel=None):
     """Anthropic's server tools that ran inside this answer (the web search, a
     page fetched, the code that filters search results) -> tool call + result
-    pairs for the history. Without them the history kept only her text: an hour
-    later she saw news she had told with no search behind them and "confessed"
-    she had made them up - she had searched (2026-11-25 06:59 / 09:07)."""
+    pairs for the history, the whole results into the action journal. Without
+    them the history kept only her text and she "confessed" she had made the
+    news up (2026-11-25 06:59 / 09:07); with a page cut silently to its first
+    lines, a week's forecast she had read (10:07)."""
     uses = [b for b in content if b.type == "server_tool_use"]
     if not uses:
         return []
@@ -148,28 +158,34 @@ def _server_pairs(content):
     sources = []
     for b in content:
         for ct in (getattr(b, "citations", None) or []):
-            s = f"{getattr(ct, 'title', '') or ''} - {getattr(ct, 'url', '') or ''}"
-            if getattr(ct, "url", None) and s not in sources:
-                sources.append(s)
+            src = f"{getattr(ct, 'title', '') or ''} - {getattr(ct, 'url', '') or ''}"
+            if getattr(ct, "url", None) and src not in sources:
+                sources.append(src)
     out = []
     for i, u in enumerate(uses):
         tid = "toolu_" + u.id.split("_", 1)[-1]
         inp = u.input if isinstance(u.input, dict) else {}
+        whole, short, src, when = _server_result(u, results.get(u.id), sources if i == len(uses) - 1 else [])
+        aid = actions.record(channel, getattr(person, "profile", None), u.name, inp, whole, source=src, source_date=when)
         if "code" in inp:
             inp = {"code": str(inp["code"])[:400]}
-        text = _server_result_text(u, results.get(u.id), sources if i == len(uses) - 1 else [])
         out.append({"role": "assistant", "content": [{"type": "tool_use", "id": tid, "name": u.name, "input": inp}]})
-        out.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": _kept(text)}]})
+        out.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid,
+                                                  "content": _kept(short, aid, len(whole))}]})
     return out
 
 
-def _tool_round(final, msgs, person, on_show, trace=None, record=None):
+def _tool_round(final, msgs, person, on_show, trace=None, record=None, channel=None):
     msgs.append({"role": "assistant", "content": final.content})
-    results = []
+    results, aids = [], []
     for b in final.content:
         if b.type == "tool_use":
             res, show = skills.run(b, person)
             results.append(res)
+            # the whole result into the journal (a re-read of one is not journalled again)
+            text, images = actions.blocks_text(res.get("content"))
+            aids.append(None if b.name == "action_recall" else actions.record(
+                channel, person.profile, b.name, b.input, text, images or None))
             if trace is not None:
                 trace.append(f"{b.name}({', '.join(f'{k}={v}' for k, v in b.input.items())})"
                              f"{' - ошибка' if res.get('is_error') else ''}: {str(res.get('content'))[:300]}")
@@ -181,22 +197,26 @@ def _tool_round(final, msgs, person, on_show, trace=None, record=None):
         # after her own text she took for her own invention and "confessed" that
         # she had made the search up (Telegram, 2026-11-19)
         record.append({"role": "assistant", "content": _stored(final.content)})
-        record.append({"role": "user", "content": [dict(r, content=_kept(r.get("content", ""))) for r in results]})
+        record.append({"role": "user", "content": [dict(r, content=_kept(r.get("content", ""), aid))
+                                                   for r, aid in zip(results, aids)]})
 
 
-def _cut(text):
+def _cut(text, aid=None, whole=None):
     """A long result shortened for the history, and said so. Without the mark she
     read her own cut result on the next turn, decided she had answered without
     the data and "confessed" to a guess she never made (2026-11-23, sensors;
     the same with a photo search on 2026-11-19)."""
-    if len(text) <= KEEP_RESULT:
+    whole = whole or len(text)
+    if len(text) <= KEEP_RESULT and whole <= len(text):
         return text
-    return (text[:KEEP_RESULT] + f" …[в истории сокращено: {KEEP_RESULT} из {len(text)} символов. "
-            "Когда ты отвечала, результат был у тебя целиком - твой ответ на нём основан. "
-            "Нужны подробности, которых здесь нет, - запроси снова]")
+    kept = text[:KEEP_RESULT]
+    where = (f"целиком - действие #{aid}, его можно перечитать: action_recall(id={aid})" if aid
+             else "нужны подробности, которых здесь нет, - запроси снова")
+    return (kept + f" …[в истории сокращено: {len(kept)} из {whole} символов. Отвечая тогда, ты видела "
+            f"результат целиком - твой ответ на нём основан; {where}]")
 
 
-def _kept(content):
+def _kept(content, aid=None, whole=None):
     """A tool result as the history keeps it: text, cut (and marked as cut); a
     picture she looked at as a 512 px copy (~330 tokens; the full one would be sent
     again with every phrase)."""
@@ -204,7 +224,7 @@ def _kept(content):
         out = []
         for b in content:
             if b.get("type") == "text":
-                out.append({"type": "text", "text": _cut(b["text"])})
+                out.append({"type": "text", "text": _cut(b["text"], aid)})
             elif b.get("type") == "image":
                 small = skills.HISTORY_IMAGES.pop(b["source"].get("data", ""), None)
                 if small:
@@ -212,11 +232,13 @@ def _kept(content):
                     # a 200 px copy made her take back what she had read on the full one
                     # (a tyre size "not readable" a minute after she read it, 2026-11-24)
                     out.append({"type": "text", "text": "[в истории - уменьшенная копия; отвечая, ты видела картинку "
-                                                        "целиком: что ты тогда на ней прочитала - верно]"})
+                                                        "целиком: что ты тогда на ней прочитала - верно"
+                                                        + (f"; целиком - действие #{aid}" if aid else "") + "]"})
                 else:
-                    out.append({"type": "text", "text": "[картинка: ты её видела целиком, в истории не хранится]"})
+                    out.append({"type": "text", "text": "[картинка: ты её видела целиком, в истории не хранится"
+                                                        + (f"; целиком - действие #{aid}" if aid else "") + "]"})
         return out or "…"
-    return _cut(str(content))
+    return _cut(str(content), aid, whole)
 
 
 def prepare(history, person):
@@ -325,7 +347,7 @@ def stream(system, history, person, on_chunk, on_show=None, on_tool=None, max_to
             f"written {final.usage.cache_creation_input_tokens} in {final.usage.input_tokens} "
             f"out {final.usage.output_tokens}")
         if record is not None:
-            record.extend(_server_pairs(final.content))      # her searches, as real calls in the history
+            record.extend(_server_pairs(final.content, person, "voice"))   # her searches, as real calls in the history
         if final.stop_reason == "pause_turn":
             # a long web search paused on the server's side: the same turn goes
             # back as it is and the server goes on with it
@@ -333,7 +355,7 @@ def stream(system, history, person, on_chunk, on_show=None, on_tool=None, max_to
             continue
         if final.stop_reason != "tool_use":
             break
-        _tool_round(final, msgs, person, on_show, trace, record)
+        _tool_round(final, msgs, person, on_show, trace, record, "voice")
         params = _escalate(final, params)
         on_chunk(" ")                    # text before and after a tool call stays apart
     if final.stop_reason == "refusal":
@@ -356,7 +378,7 @@ def complete(system, history, person, on_show=None, max_tokens=2048, trace=None,
         log(f"cost {params['model'].replace('claude-', '')} ${usd:.4f}: read {r.usage.cache_read_input_tokens} "
             f"written {r.usage.cache_creation_input_tokens} in {r.usage.input_tokens} out {r.usage.output_tokens}")
         if record is not None:
-            record.extend(_server_pairs(r.content))          # her searches, as real calls in the history
+            record.extend(_server_pairs(r.content, person, "chat"))        # her searches, as real calls in the history
         part = final_text(r)
         if part:
             parts.append(part)
@@ -365,7 +387,7 @@ def complete(system, history, person, on_show=None, max_tokens=2048, trace=None,
             continue
         if r.stop_reason != "tool_use":
             break
-        _tool_round(r, msgs, person, on_show, trace, record)
+        _tool_round(r, msgs, person, on_show, trace, record, "chat")
         params = _escalate(r, params)
     if record is not None:
         record.append({"role": "assistant", "content": final_text(r) or "…"})
