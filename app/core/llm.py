@@ -54,7 +54,14 @@ def _escalate(message, params):
     if used <= LIGHT_TOOLS:
         return params
     log(f"to {AGENT_MODEL}: {', '.join(sorted(used - LIGHT_TOOLS))}")
-    return dict(params, model=AGENT_MODEL, output_config={"effort": AGENT_EFFORT})
+    # Opus with the 5-minute cache, not the hour: it comes in mid-turn, once in an hour
+    # or two, and its cache of the conversation ends inside that turn (full images and
+    # results, later cut in the history) - the next Opus call never read it; 1 h writes
+    # cost 2x the input, 5 min 1.25x. Within one turn its next rounds still read it.
+    # (2026-11-25: 3 Opus calls wrote 140k tokens, read 26k)
+    five = {"type": "ephemeral", "ttl": "5m"}
+    return dict(params, model=AGENT_MODEL, output_config={"effort": AGENT_EFFORT}, cache_control=five,
+                system=[dict(params["system"][0], cache_control=five)])
 
 
 # chars of a tool result kept in the conversation history. 1500 cut what she needed
