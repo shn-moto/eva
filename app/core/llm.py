@@ -110,6 +110,59 @@ def _stored(content):
     return out
 
 
+def _server_result_text(use, res, sources):
+    """What a server tool gave, short, for the history."""
+    if res is None:
+        return "результата нет"
+    c = getattr(res, "content", None)
+    if getattr(c, "type", "").endswith("_error"):
+        return "ошибка: " + str(getattr(c, "error_code", ""))
+    if res.type == "web_search_tool_result" and isinstance(c, list):
+        lines = [f"{getattr(x, 'title', '')} - {getattr(x, 'url', '')}" + (f" ({x.page_age})" if getattr(x, "page_age", None) else "")
+                 for x in c]
+        return "Найдено:\n" + "\n".join(lines)
+    if res.type == "web_fetch_tool_result":
+        doc = getattr(c, "content", None)
+        src = getattr(doc, "source", None)
+        body = getattr(src, "data", "") if isinstance(getattr(src, "data", None), str) else ""
+        return f"Открыта страница {getattr(c, 'url', '')}: {getattr(doc, 'title', '') or ''}\n{body[:1500]}"
+    out = getattr(c, "stdout", None)
+    if out:
+        return "Вывод:\n" + str(out)
+    if sources:
+        return "Поиск выполнен (результат у Anthropic зашифрован). Источники ответа:\n" + "\n".join(sources)
+    return "Выполнено."
+
+
+def _server_pairs(content):
+    """Anthropic's server tools that ran inside this answer (the web search, a
+    page fetched, the code that filters search results) -> tool call + result
+    pairs for the history. Without them the history kept only her text: an hour
+    later she saw news she had told with no search behind them and "confessed"
+    she had made them up - she had searched (2026-11-25 06:59 / 09:07)."""
+    uses = [b for b in content if b.type == "server_tool_use"]
+    if not uses:
+        return []
+    results = {getattr(b, "tool_use_id", None): b for b in content
+               if b.type.endswith("_tool_result") and b.type != "tool_result"}
+    sources = []
+    for b in content:
+        for ct in (getattr(b, "citations", None) or []):
+            s = f"{getattr(ct, 'title', '') or ''} - {getattr(ct, 'url', '') or ''}"
+            if getattr(ct, "url", None) and s not in sources:
+                sources.append(s)
+    out = []
+    for i, u in enumerate(uses):
+        tid = "toolu_" + u.id.split("_", 1)[-1]
+        inp = u.input if isinstance(u.input, dict) else {}
+        if "code" in inp:
+            inp = {"code": str(inp["code"])[:400]}
+        text = _server_result_text(u, results.get(u.id), sources if i == len(uses) - 1 else [])
+        out.append({"role": "assistant", "content": [{"type": "tool_use", "id": tid, "name": u.name, "input": inp}]})
+        out.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": _kept(text)}]})
+    return out
+
+
 def _tool_round(final, msgs, person, on_show, trace=None, record=None):
     msgs.append({"role": "assistant", "content": final.content})
     results = []
@@ -271,6 +324,8 @@ def stream(system, history, person, on_chunk, on_show=None, on_tool=None, max_to
         log(f"cost {params['model'].replace('claude-', '')} ${usd:.4f}: read {final.usage.cache_read_input_tokens} "
             f"written {final.usage.cache_creation_input_tokens} in {final.usage.input_tokens} "
             f"out {final.usage.output_tokens}")
+        if record is not None:
+            record.extend(_server_pairs(final.content))      # her searches, as real calls in the history
         if final.stop_reason == "pause_turn":
             # a long web search paused on the server's side: the same turn goes
             # back as it is and the server goes on with it
@@ -300,6 +355,8 @@ def complete(system, history, person, on_show=None, max_tokens=2048, trace=None,
         usd = cost.add(params["model"], r.usage, "chat")
         log(f"cost {params['model'].replace('claude-', '')} ${usd:.4f}: read {r.usage.cache_read_input_tokens} "
             f"written {r.usage.cache_creation_input_tokens} in {r.usage.input_tokens} out {r.usage.output_tokens}")
+        if record is not None:
+            record.extend(_server_pairs(r.content))          # her searches, as real calls in the history
         part = final_text(r)
         if part:
             parts.append(part)

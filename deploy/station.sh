@@ -72,7 +72,9 @@ git archive "$sha" "$ROOTFS" | "${SSH[@]}" "tar -x -C / --strip-components=3 --n
 
 # restart what the change touches
 units=()
-echo "$changed" | grep -q "/opt/eva/app/" && units+=(eva-body eva-brain eva-ear eva-telegram eva-logship)
+echo "$changed" | grep -q "/opt/eva/app/" && units+=(eva-brain eva-ear eva-telegram eva-logship)
+# the body only when its own code changed: a restart of it cuts her voice and the music
+echo "$changed" | grep -q "/opt/eva/app/body.py\|/opt/eva/app/say.py\|/opt/eva/app/core/util.py\|/opt/eva/app/core/profile.py" && units+=(eva-body)
 echo "$changed" | grep -q "/opt/eva/eva/" && units+=(eva-brain eva-telegram)
 echo "$changed" | grep -q "/opt/eva/ui/spike/ui_server.py" && units+=(eva-ui-http)
 echo "$changed $rootfs_changed" | grep -q "/opt/eva/ui/spike/\|eva-ui" && ui_reload=1 || ui_reload=0
