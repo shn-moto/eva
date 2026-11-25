@@ -100,6 +100,35 @@ def print_url(args, person):
                    "pages": args.get("pages") or None})
 
 
+def print_page(args, person):
+    return _print({"kind": "html", "title": args.get("title", ""), "html": args["html"],
+                   "layout": args.get("layout") or "document", "copies": args.get("copies", 1)})
+
+
+def print_screen(args, person):
+    """Whatever the TV shows now: a photo (open, the slideshow's), a page of
+    photos, a picture she drew, a page she wrote (as the TV shows it)."""
+    from core import screen
+    s = screen.shown()
+    copies = args.get("copies", 1)
+    if not s:
+        return "На экране сейчас ничего для печати (только лицо или плеер)."
+    if s.get("photo"):
+        return _print({"kind": "photos", "photo_ids": [s["photo"]], "copies": copies, "fit": args.get("fit")})
+    if s.get("file"):
+        return _print({"kind": "file", "file_id": s["file"], "copies": copies, "fit": args.get("fit"),
+                       "title": s.get("title")})
+    if s.get("html"):
+        return _print({"kind": "html", "html": s["html"], "title": s.get("title", ""), "layout": "screen",
+                       "copies": copies})
+    if s.get("photos"):
+        if len(s["photos"]) > 1 and not args.get("all"):
+            return (f"На экране {len(s['photos'])} фото: каждое печатается на своём листе. Уточни, какие "
+                    "(print_photos по номерам) или все (print_screen all=true).")
+        return _print({"kind": "photos", "photo_ids": s["photos"], "copies": copies, "fit": args.get("fit")})
+    return "Не поняла, что на экране печатать."
+
+
 def status(args, person):
     try:
         return json.dumps(_req("/printers"), ensure_ascii=False)
@@ -134,7 +163,12 @@ docx, xlsx и др., другие файлы), лежит у тебя
   файл (PDF, картинка); print_photos - фото из архива по номерам; print_text -
   то, что ты составила сама (список покупок, рецепт, заметка: заголовки «# »,
   пункты «- »); print_url - PDF или картинка по ссылке (веб-страницу целиком не
-  печатаешь - перескажи и напечатай текстом). printer_status - принтер и очередь,
+  печатаешь - перескажи и напечатай текстом); print_page - своя страница
+  (график, отчёт, таблица по финансам, электроэнергии, чему угодно - то же,
+  что для show_html, но для бумаги: белый фон, чёрный текст и линии, A4;
+  layout=document); print_screen - то, что сейчас на телевизоре («напечатай
+  это»: открытое фото, фото заставки, твой рисунок, твоя страница).
+  Печать - для любого вывода: что показала или посчитала, можно напечатать. printer_status - принтер и очередь,
   print_cancel - отменить задание.
 - Просят напечатать - печатай, не переспрашивая; скажи, сколько страниц ушло.
   Больше 10 страниц или копий - сначала уточни. Фото выйдут чёрно-белыми.""",
@@ -173,6 +207,27 @@ docx, xlsx и др., другие файлы), лежит у тебя
         schema={"type": "object", "additionalProperties": False, "required": ["url"],
                 "properties": {"url": {"type": "string"}, "copies": _COPIES, "pages": _PAGES}},
         handler=print_url, needs="known",
+    ), Tool(
+        name="print_page",
+        description="Напечатать свою страницу: график, отчёт, таблицу (финансы, электроэнергия, что угодно). "
+                    "html - документ целиком, для бумаги: белый фон, чёрный текст, линии графиков тёмные и "
+                    "различимые без цвета (принтер чёрно-белый), шрифт 12-14 pt. Графики: "
+                    "<script src=\"/lib/chart.umd.min.js\"></script> (Chart.js 4), animation: false. "
+                    "layout: document - A4 страницы, как печатает браузер (по умолчанию); screen - одна "
+                    "картинка 1280x720 на лист, как на телевизоре.",
+        schema={"type": "object", "additionalProperties": False, "required": ["html"],
+                "properties": {"title": {"type": "string"}, "html": {"type": "string"},
+                               "layout": {"type": "string", "enum": ["document", "screen"]}, "copies": _COPIES}},
+        handler=print_page, needs="known",
+    ), Tool(
+        name="print_screen",
+        description="Напечатать то, что сейчас на телевизоре: открытое фото, фото заставки, твой рисунок, "
+                    "твою страницу (как на экране; тёмный фон печатается светлым). Сетка из нескольких фото - "
+                    "только с all=true (каждое на своём листе).",
+        schema={"type": "object", "additionalProperties": False,
+                "properties": {"copies": _COPIES, "all": {"type": "boolean"},
+                               "fit": {"type": "string", "enum": ["fit", "fill"]}}},
+        handler=print_screen, needs="screen",
     ), Tool(
         name="printer_status",
         description="Домашний принтер: готов ли, что в очереди печати.",

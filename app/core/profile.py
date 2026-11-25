@@ -49,6 +49,8 @@ SKILLS = set(_P["skills"]) if isinstance(_P.get("skills"), list) else None   # N
 DOCUMENT_TAGS = tuple(_H.get("document_tags", []))
 # databases Eva may read (skill "data"): [{name, dsn: <secret key>, needs, about}]
 DATABASES = list(_P.get("databases", []))
+# skill artist: which pictures API she draws with (skills/artist: the defaults and what each key means)
+ARTIST = {k: v for k, v in dict(_P.get("artist", {})).items() if not k.startswith("_")}
 # where the home is, roughly: web search answers for this place (prices, shops,
 # weather) - {"city", "region", "country": "PL", "timezone": "Europe/Warsaw"}
 LOCATION = {k: v for k, v in dict(_H.get("location", {})).items() if v and not k.startswith("_")}

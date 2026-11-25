@@ -73,6 +73,11 @@ def present(chat, p):
         upload("sendPhoto", {"p": image(f"/image/{p['id']}/full")}, chat_id=chat,
                photo="attach://p", caption=p.get("caption", "")[:1000])
         return
+    if kind == "picture":
+        # a picture she drew: a JPEG of it from the print service's inbox (skill artist)
+        with urllib.request.urlopen(f"{profile.service('print')}/files/{p['file_id']}/jpeg?size=1568", timeout=60) as r:
+            upload("sendPhoto", {"p": r.read()}, chat_id=chat, photo="attach://p", caption=p.get("caption", "")[:1000])
+        return
     if kind == "person":
         items = p.get("items") or [{"id": i, "caption": ""} for i in p.get("photos", [])]
         title = p.get("name", "")

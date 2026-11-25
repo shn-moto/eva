@@ -618,7 +618,8 @@ function showView(v) {
     vbody.append(grid(v.items));
   } else if (v.kind === "photo") {
     vhead.replaceChildren(el("span", "", v.caption || ""), el("span", "sub", v.count > 1 ? v.index + " из " + v.count : ""));
-    const f = el("div", "full"); f.append(img("/img/" + v.id + "/full")); vbody.append(f);
+    // a picture she drew comes from the print service's inbox (file id), a photo from the archive
+    const f = el("div", "full"); f.append(img(v.file ? "/file/" + v.file : "/img/" + v.id + "/full")); vbody.append(f);
   } else if (v.kind === "person") {
     vhead.replaceChildren(el("span", "", v.name), el("span", "sub", pages));
     const card = el("div", "card");

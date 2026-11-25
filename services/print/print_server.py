@@ -15,6 +15,10 @@ the home's CUPS (the cups_airprint container, host network) with `lp`.
          kind "photos": photo_ids [photolib], copies, fit ("fit" | "fill"), color (false: grey)
          kind "text":   title, text (lines; "- " bullets, "# " headings)
          kind "url":    url of a PDF or a picture (a web page is not printed)
+         kind "html":   html (a page she wrote: a chart, a report, a table), title,
+                        layout "document" (A4 pages, as a browser prints it) | "screen"
+                        (a 1280x720 shot of the page as the TV shows it, on one A4 sheet;
+                        a dark page is printed inverted - light paper, dark lines)
     POST /cancel  {job}
 
 PDFs are made here because the CUPS container has no fonts at all (its text
@@ -159,6 +163,50 @@ def _pdf_from_text(title, text):
     return bytes(pdf.output()), pdf.page_no()
 
 
+CHROME = os.environ.get("CHROME", "chromium")
+LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")   # Chart.js, as the TV's /lib
+
+
+def _chrome(work, html, *args):
+    """Her page in headless Chromium, offline: /lib/... resolves to the copy here. -> its output"""
+    with open(os.path.join(work, "page.html"), "w", encoding="utf-8") as f:
+        f.write(re.sub(r"""(src|href)=(["'])/lib/""", r"\1=\2lib/", html))
+    os.symlink(LIB, os.path.join(work, "lib"))
+    _, out = _run(CHROME, "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+                  "--hide-scrollbars", "--no-pdf-header-footer", "--virtual-time-budget=8000",
+                  f"--user-data-dir={work}/profile", *args, f"file://{work}/page.html", timeout=90)
+    return out
+
+
+def _from_html(html, layout="document"):
+    import shutil
+    if not (html or "").strip():
+        raise HTTPException(400, "пустая страница")
+    work = tempfile.mkdtemp()
+    try:
+        if layout == "screen":
+            shot = os.path.join(work, "shot.png")
+            out = _chrome(work, html, "--window-size=1280,720", "--force-device-scale-factor=2", "--screenshot=" + shot)
+            if not os.path.exists(shot):
+                raise HTTPException(502, f"страница не отрисовалась: {out[-300:]}")
+            from PIL import Image, ImageOps, ImageStat
+            img = Image.open(shot).convert("RGB")
+            if ImageStat.Stat(img.convert("L")).mean[0] < 100:
+                # a TV page is dark; on a mono laser that is a sheet of toner
+                img = ImageOps.invert(img)
+            buf = io.BytesIO()
+            img.save(buf, "PNG")
+            return _pages_from_images([buf.getvalue()])
+        path = os.path.join(work, "out.pdf")
+        out = _chrome(work, html, "--print-to-pdf=" + path)
+        if not os.path.exists(path):
+            raise HTTPException(502, f"страница не напечаталась в PDF: {out[-300:]}")
+        data = open(path, "rb").read()
+        return data, _pdf_pages(data)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _from_url(url):
     if not url.startswith(("http://", "https://")):
         raise HTTPException(400, "нужна ссылка http(s)")
@@ -301,6 +349,9 @@ def _print(b):
     elif kind == "url":
         pdf, pages = _from_url(b.get("url") or "")
         title = title or (b.get("url") or "")[-60:]
+    elif kind == "html":
+        pdf, pages = _from_html(b.get("html") or "", b.get("layout") or "document")
+        title = title or "страница"
     elif kind == "file":
         data, meta = _file(b.get("file_id"))
         if meta["kind"] == "pdf" or (meta["kind"] == "office" and meta.get("pdf")):
@@ -312,7 +363,7 @@ def _print(b):
                                      "такое не печатаю, пусть пришлют PDF")
         title = title or meta["name"]
     else:
-        raise HTTPException(400, "kind: photos | text | url | file")
+        raise HTTPException(400, "kind: photos | text | url | file | html")
     job = _lp(pdf, printer, copies, title, b.get("pages"))
     return {"job": job, "pages": pages, "copies": copies, "printer": printer}
 

@@ -24,22 +24,24 @@ import urllib.request
 from collections import OrderedDict
 
 PAGES = []                 # one queue per connected page
-def _photolib_url():
-    """As app/core/profile.service("photolib"): env, else eva/profile.json, else the hub's :8000."""
-    if os.environ.get("EVA_PHOTOLIB_URL"):
-        return os.environ["EVA_PHOTOLIB_URL"]
+def _service_url(name, default):
+    """As app/core/profile.service(name): env, else eva/profile.json, else the hub's default port."""
+    if os.environ.get(f"EVA_{name.upper()}_URL"):
+        return os.environ[f"EVA_{name.upper()}_URL"]
     try:
         sv = json.load(open(os.environ.get("EVA_PROFILE", "/opt/eva/eva/profile.json"), encoding="utf-8")).get("services", {})
     except (OSError, ValueError):
         sv = {}
     hub = os.environ.get("EVA_HUB", sv.get("hub", "127.0.0.1"))
-    return sv.get("photolib", "http://{hub}:8000").replace("{hub}", hub)
+    return sv.get(name, default).replace("{hub}", hub)
 
 
-PHOTOLIB = _photolib_url()
+PHOTOLIB = _service_url("photolib", "http://{hub}:8000")
+# pictures she drew and files sent to her live in the print service's inbox (services/print)
+PRINT = _service_url("print", "http://{hub}:8909")
 IMG_CACHE = os.environ.get("EVA_IMG_CACHE", "/var/cache/eva/img")
 IMG_CACHE_MB = 60          # thumbnails and faces on disk (the root fs is small)
-IMG_PATH = re.compile(r"^/(img)/(\d+)/(thumb|full)$|^/(face)/(\d+)$")
+IMG_PATH = re.compile(r"^/(img)/(\d+)/(thumb|full)$|^/(face)/(\d+)$|^/(file)/([0-9a-f]{10})$")
 FULL = OrderedDict()       # the last few full-size photos, in memory
 FULL_LOCK = threading.Lock()
 
@@ -47,7 +49,8 @@ FULL_LOCK = threading.Lock()
 def photolib_image(kind, ident, size):
     """Images for the screen from photolib, through here: same origin for the
     page, cached so a reload or "назад" costs nothing. -> (bytes, type)"""
-    url = f"{PHOTOLIB}/image/{ident}/{size}" if kind == "img" else f"{PHOTOLIB}/faces/{ident}/thumb"
+    url = (f"{PHOTOLIB}/image/{ident}/{size}" if kind == "img" else f"{PHOTOLIB}/faces/{ident}/thumb" if kind == "face"
+           else f"{PRINT}/files/{ident}/jpeg?size=1280")
     key = f"{kind}-{ident}-{size}"
     if size == "full":
         with FULL_LOCK:
@@ -263,11 +266,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         m = IMG_PATH.match(self.path)
         if m:
-            kind, ident, size = (m.group(1), m.group(2), m.group(3)) if m.group(1) else (m.group(4), m.group(5), "thumb")
+            kind, ident, size = ((m.group(1), m.group(2), m.group(3)) if m.group(1) else
+                                 (m.group(4), m.group(5), "thumb") if m.group(4) else (m.group(6), m.group(7), "full"))
             try:
                 data, ctype = photolib_image(kind, ident, size)
             except OSError as e:
-                self.send_error(502, f"photolib: {e}")
+                self.send_error(502, f"{kind}: {e}")
                 return
             self.send_response(200)
             self.send_header("Content-Type", ctype)

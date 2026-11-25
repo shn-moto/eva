@@ -76,7 +76,9 @@
     "photos",
     "finance",
     "power",
-    "data"
+    "data",
+    "print",
+    "artist"
   ],
   "speech": {
     "stt_fixes": [
@@ -123,5 +125,20 @@
       "needs": "known",
       "about": "smart home: devices and rooms, sensor history (temperature, humidity, motion), energy"
     }
-  ]
+  ],
+  "artist": {
+    "_comment": "Skill artist (app/skills/artist): the pictures API, OpenAI-compatible (/images/generations, /images/edits). All keys optional, these are the defaults. key = the name of its key in /etc/eva/secrets.env.",
+    "base_url": "https://api.grid.sam-solutions.net/v1",
+    "key": "GRID_KEY",
+    "model": "saipixel-qwen-image-2.1",
+    "fast_model": "saipixel-krea2-turbo",
+    "edit_model": "saipixel-flux2-klein-9b-edit",
+    "sizes": {
+      "square": "1024x1024",
+      "portrait": "832x1216",
+      "landscape": "1216x832"
+    },
+    "album": "Картинки от Евы",
+    "folder": "_EVA"
+  }
 }

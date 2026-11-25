@@ -5,6 +5,7 @@ A tool returns a presentation (data, not UI):
     {"kind": "photos", "title", "items": [{"id", "caption"}]}
     {"kind": "photo",  "id", "caption"}
     {"kind": "person", "name", "face", "lines": [...], "photos": [ids]}
+    {"kind": "picture", "file_id", "caption"}   a picture she drew (skill artist)
 The brain keeps what is on screen (so «дальше», «открой третью» work for any
 presentation) and sends the page a ready-to-draw "view" event; the page only
 draws it, with the face in a corner. Images come through ui_server (/img, /face).
@@ -25,7 +26,7 @@ state = {"p": None, "page": 0, "open": None, "touched": 0.0}
 
 def present(p):
     """A tool's presentation goes on the TV (voice channel)."""
-    if not p or p.get("kind") not in ("photos", "photo", "person", "html"):
+    if not p or p.get("kind") not in ("photos", "photo", "person", "html", "picture"):
         return
     with _lock:
         state.update(p=p, page=0, open=None, touched=time.time())
@@ -39,7 +40,7 @@ def _items():
         return []
     if p["kind"] == "photos":
         return p["items"]
-    if p["kind"] == "html":
+    if p["kind"] in ("html", "picture"):
         return []
     if p["kind"] == "person":
         return [{"id": i, "caption": ""} for i in p.get("photos", [])]
@@ -84,6 +85,9 @@ def _send():
     if p["kind"] == "photo":
         ui({"type": "view", "kind": "photo", "id": p["id"], "caption": p.get("caption", ""), "index": 1, "count": 1})
         return
+    if p["kind"] == "picture":
+        ui({"type": "view", "kind": "photo", "file": p["file_id"], "caption": p.get("caption", ""), "index": 1, "count": 1})
+        return
     if p["kind"] == "html":
         # a page she wrote (a chart, a table): in the view with her face in the
         # corner, or the whole screen
@@ -112,6 +116,28 @@ def item(n=None):
     return items[n - 1]["id"] if 1 <= n <= len(items) else None
 
 
+def shown():
+    """What is on the TV now, for printing it: {"photo": id} | {"file": file_id,
+    "title"} | {"html", "title"} | {"photos": [ids], "title"} | None (the face, the player)."""
+    p = state["p"]
+    if p is None:
+        import slideshow
+        c = slideshow.state.get("current") if slideshow.state.get("on") else slideshow.held_photo()
+        if not c and slideshow.state.get("last") and time.time() - slideshow.state["last"][1] < 60:
+            c = slideshow.state["last"][0]   # it stops as soon as she is called
+        return {"photo": c["id"], "title": c.get("title", "")} if c else None
+    if state["open"] is not None or p["kind"] == "photo":
+        return {"photo": item(), "title": p.get("caption") or p.get("title", "")}
+    if p["kind"] == "picture":
+        return {"file": p["file_id"], "title": p.get("caption", "")}
+    if p["kind"] == "html":
+        return {"html": p["html"], "title": p.get("title", "")}
+    pages = max(1, (len(_items()) + PER_PAGE - 1) // PER_PAGE)
+    first = min(state["page"], pages - 1) * PER_PAGE
+    return {"photos": [it["id"] for it in _items()[first:first + PER_PAGE]],
+            "title": p.get("title") or p.get("name", "")}
+
+
 def describe():
     """What is on the screen now, in words, for the model."""
     p = state["p"]
@@ -128,6 +154,8 @@ def describe():
         return f"Открыто фото {state['open'] + 1} из {len(items)}."
     if p["kind"] == "photo":
         return "На экране одно фото."
+    if p["kind"] == "picture":
+        return f"На экране твой рисунок «{p.get('caption', '')}» (file_id {p['file_id']})."
     if p["kind"] == "html":
         return f"На экране твоя страница «{p.get('title', '')}»{' на весь экран' if p.get('full') else ' (в окне)'}."
     pages = max(1, (len(items) + PER_PAGE - 1) // PER_PAGE)
