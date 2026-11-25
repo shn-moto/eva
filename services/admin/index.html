@@ -67,6 +67,38 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 #rs { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; justify-content: center; align-items: stretch;
       padding: 4vh 4vw; z-index: 20; }
 #rs[hidden] { display: none; }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; justify-content: center; align-items: stretch;
+         padding: 4vh 4vw; z-index: 20; }
+.modal[hidden] { display: none; }
+/* calendar */
+#cal-body { display: grid; grid-template-columns: 340px 1fr; min-height: 0; flex: 1; }
+#cal-body > div { min-height: 0; overflow: auto; padding: 10px 14px; }
+#cal-body > div + div { border-left: 1px solid var(--line); }
+.mon { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; font-size: 12px; }
+.mon .h { color: var(--faint); text-align: center; padding: 2px 0; }
+.mon .d { min-height: 38px; border: 1px solid var(--line); border-radius: 5px; padding: 2px 4px; cursor: pointer; }
+.mon .d.out { opacity: .35; } .mon .d.today { border-color: var(--accent); } .mon .d.sel { background: var(--sel); }
+.mon .d i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin: 2px 1px 0 0; }
+.mon .d i.bd { background: var(--keep); }
+.ev { display: grid; grid-template-columns: 96px 1fr auto; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.ev .w { color: var(--mute); font-family: var(--mono); font-size: 12px; }
+.ev .r { color: var(--faint); font-size: 12px; }
+.ev.bd { color: var(--keep); }
+.ev button { border: 0; background: none; color: var(--danger); cursor: pointer; }
+.form { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; align-items: center; font-size: 13px; margin-top: 12px; }
+.form input, .form select, .form textarea { padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
+  color: var(--ink); font: inherit; font-size: 13px; }
+.form textarea { min-height: 54px; resize: vertical; }
+.form .full { grid-column: 1 / -1; }
+.days label { margin-right: 6px; font-size: 12px; color: var(--mute); }
+/* listeners */
+#ls-body { display: grid; grid-template-columns: 240px 1fr; min-height: 0; flex: 1; }
+#ls-body > div { min-height: 0; overflow: auto; padding: 10px 14px; }
+#ls-body > div + div { border-left: 1px solid var(--line); }
+.li { padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.li:hover { background: var(--sel); } .li.on { background: var(--accent-soft); } .li.off { color: var(--faint); }
+.lg { font-family: var(--mono); font-size: 11.5px; color: var(--mute); margin-top: 10px; white-space: pre-wrap; }
+.help { color: var(--mute); font-size: 12px; }
 .rs-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: min(1100px, 100%);
           display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .rs-note { padding: 8px 14px; color: var(--mute); font-size: 12.5px; border-bottom: 1px solid var(--line); }
@@ -165,8 +197,42 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
   <input id="q" type="search" placeholder="Поиск по всем фразам…" autocomplete="off">
   <span class="hint">↑↓ фраза · пробел — слушать · E — исправить · K — оставить · Del — удалить</span>
   <button id="rs-open" class="btn" title="Прочитать заново, кто что сказал, с тем, что голоса знают теперь">Пересчитать голоса</button>
+  <button id="cal-open" class="btn" title="Что Ева сделает по времени: напоминания, музыка, будильники, поручения">Календарь</button>
+  <button id="ls-open" class="btn" title="Правила на каждую услышанную фразу">Слушатели</button>
   <datalist id="speakers"></datalist>
 </header>
+<div id="cal" class="modal" hidden>
+  <div class="rs-box">
+    <div class="bar"><span class="title">Календарь</span><span class="sub" id="cal-sub"></span><span style="flex:1"></span>
+      <button class="btn" id="cal-prev">‹</button><span id="cal-month" style="min-width:130px;text-align:center"></span><button class="btn" id="cal-next">›</button>
+      <button class="btn" id="cal-close">Закрыть</button></div>
+    <div id="cal-body">
+      <div><div class="mon" id="cal-grid"></div>
+        <div class="form">
+          <span class="full" style="font-weight:600">Новое событие</span>
+          <span>Что</span><input id="cf-title" placeholder="таблетки, подъём, Наутилус - Крылья">
+          <span>Действие</span><select id="cf-action"><option value="remind">напомнить</option><option value="music">музыка</option><option value="alarm">будильник</option><option value="task">поручение Еве</option></select>
+          <span>Когда</span><input id="cf-when" type="datetime-local">
+          <span>Повтор</span><select id="cf-every"><option value="">один раз</option><option value="day">каждый день</option><option value="weekdays">по будням</option><option value="weekend">по выходным</option><option value="week">по дням недели</option><option value="month">каждый месяц</option><option value="year">каждый год</option></select>
+          <span></span><span class="days" id="cf-days"></span>
+          <span>Текст / запрос</span><input id="cf-text" placeholder="что сказать / что включить / что сделать">
+          <span>Куда</span><select id="cf-notify"><option value="home">вслух дома</option><option value="telegram">в Телеграм</option><option value="both">и то, и другое</option></select>
+          <span>Для кого</span><input id="cf-who" placeholder="имя (для Телеграма)">
+          <span></span><button class="btn primary" id="cf-add">Добавить</button>
+        </div></div>
+      <div id="cal-list"></div>
+    </div>
+  </div>
+</div>
+<div id="ls" class="modal" hidden>
+  <div class="rs-box">
+    <div class="bar"><span class="title">Слушатели</span><span class="sub">правила на каждую фразу, которую Ева записала в лог</span><span style="flex:1"></span>
+      <button class="btn" id="ls-new">Новый</button><button class="btn primary" id="ls-save">Сохранить</button><button class="btn" id="ls-close">Закрыть</button></div>
+    <div class="rs-note">Проверяется от дешёвого к дорогому: чей голос → слова (регулярное выражение) → дети рядом → вопрос локальной модели (бесплатно, на GPU) → действие.
+      «Сказать» и «Телеграм» — без Claude; «поручение Еве» — ход Claude, только если всё совпало.</div>
+    <div id="ls-body"><div id="ls-list"></div><div id="ls-edit"></div></div>
+  </div>
+</div>
 <div id="rs" hidden>
   <div class="rs-box">
     <div class="bar">
@@ -697,6 +763,135 @@ window.addEventListener("hashchange", () => { const d = location.hash.slice(1); 
   const h = location.hash.slice(1);
   openDay(/^\d{4}-\d{2}-\d{2}$/.test(h) ? h : (days[0] ? days[0].day : new Date().toISOString().slice(0, 10)));
 })().catch(e => { $("#rows").innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; });
+
+// ---- calendar (the brain's app/core/calendar.py) ----
+const CAL = { data: { events: [], birthdays: [] }, month: new Date(), sel: null };
+const CWD = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
+const ACT = { remind: "напомнить", music: "музыка", alarm: "будильник", task: "поручение" };
+const EVERY = { day: "каждый день", weekdays: "по будням", weekend: "по выходным", week: "по дням", month: "каждый месяц", year: "каждый год" };
+const isoDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function occurs(e, day) {               // does a (repeating) event fall on this day (yyyy-mm-dd)?
+  const first = e.next.slice(0, 10); if (day < first) return false;
+  if (!e.repeat) return day === first;
+  const d = new Date(day + "T12:00"), f = new Date(first + "T12:00"), wd = (d.getDay() + 6) % 7;
+  switch (e.repeat.every) {
+    case "day": return true; case "weekdays": return wd < 5; case "weekend": return wd >= 5;
+    case "week": return (e.repeat.days || [(f.getDay() + 6) % 7]).includes(wd);
+    case "month": return d.getDate() === f.getDate();
+    case "year": return d.getDate() === f.getDate() && d.getMonth() === f.getMonth();
+  }
+  return false;
+}
+const bdOn = day => CAL.data.birthdays.filter(b => b.date.slice(5) === day.slice(5));
+function calRender() {
+  const m = CAL.month, y = m.getFullYear(), mo = m.getMonth();
+  $("#cal-month").textContent = m.toLocaleDateString("ru", { month: "long", year: "numeric" });
+  const start = new Date(y, mo, 1); start.setDate(1 - (start.getDay() + 6) % 7);
+  let h = CWD.map(w => `<div class="h">${w}</div>`).join(""); const today = isoDay(new Date());
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i); const k = isoDay(d);
+    const n = CAL.data.events.filter(e => occurs(e, k)).length, b = bdOn(k).length;
+    h += `<div class="d${d.getMonth() !== mo ? " out" : ""}${k === today ? " today" : ""}${k === CAL.sel ? " sel" : ""}" data-d="${k}">`
+      + `${d.getDate()}<br>${"<i></i>".repeat(Math.min(n, 4))}${b ? '<i class="bd"></i>' : ""}</div>`;
+  }
+  $("#cal-grid").innerHTML = h;
+  document.querySelectorAll("#cal-grid .d").forEach(x => x.onclick = () => { CAL.sel = CAL.sel === x.dataset.d ? null : x.dataset.d; calRender(); });
+  const evs = CAL.data.events.filter(e => !CAL.sel || occurs(e, CAL.sel));
+  const bds = CAL.sel ? bdOn(CAL.sel) : CAL.data.birthdays;
+  $("#cal-sub").textContent = CAL.sel ? "на " + new Date(CAL.sel + "T12:00").toLocaleDateString("ru", { day: "numeric", month: "long" }) : "всё запланированное";
+  const rep = e => e.repeat ? (EVERY[e.repeat.every] || "") + (e.repeat.days ? " " + e.repeat.days.map(i => CWD[i]).join(",") : "") : "один раз";
+  $("#cal-list").innerHTML = (evs.length ? evs.map(e => `<div class="ev"><span class="w">${esc(e.next.replace("T", " ").slice(5))}</span>
+      <span><b>${ACT[e.action] || e.action}</b>: ${esc(e.title || "")}${e.text || e.query ? ` <span class="r">— ${esc(e.text || e.query)}</span>` : ""}
+      <div class="r">${rep(e)}${e.who ? " · для " + esc(e.who) : ""}${e.notify ? " · " + e.notify : ""} · поставил(а) ${esc(e.by || "?")}</div></span>
+      <button title="Удалить" data-id="${e.id}">✕</button></div>`).join("") : '<div class="help">Ничего не запланировано.</div>')
+    + (bds.length ? '<div style="margin-top:14px;font-weight:600">Дни рождения</div>'
+       + bds.map(b => `<div class="ev bd"><span class="w">${b.date.slice(5)}</span><span>${esc(b.name)}, ${b.age}</span><span></span></div>`).join("") : "");
+  document.querySelectorAll("#cal-list button[data-id]").forEach(b => b.onclick = async () => {
+    if (!confirm("Удалить событие?")) return;
+    CAL.data = await api("/api/calendar", { remove: b.dataset.id }); calRender();
+  });
+}
+async function calLoad() { CAL.data = await api("/api/calendar"); calRender(); }
+$("#cf-days").innerHTML = CWD.map((w, i) => `<label><input type="checkbox" value="${i}">${w}</label>`).join("");
+$("#cf-every").onchange = () => { $("#cf-days").style.display = $("#cf-every").value === "week" ? "" : "none"; };
+$("#cf-every").onchange();
+$("#cf-add").onclick = async () => {
+  const every = $("#cf-every").value, act = $("#cf-action").value, txt = $("#cf-text").value.trim();
+  const b = { title: $("#cf-title").value.trim(), action: act, when: $("#cf-when").value,
+              notify: act === "remind" ? $("#cf-notify").value : undefined, who: $("#cf-who").value.trim() || undefined };
+  if (act === "music" || act === "alarm") b.query = txt || undefined; else b.text = txt || undefined;
+  if (every) b.repeat = { every, ...(every === "week" ? { days: [...document.querySelectorAll("#cf-days input:checked")].map(x => +x.value) } : {}) };
+  if (!b.title || !b.when) return toast("Нужно «что» и «когда»");
+  try { CAL.data = await api("/api/calendar", b); calRender(); toast("Добавлено"); $("#cf-title").value = ""; $("#cf-text").value = ""; }
+  catch (e) { toast("Не добавилось: " + e.message); }
+};
+$("#cal-open").onclick = () => { $("#cal").hidden = false; calLoad(); };
+$("#cal-close").onclick = () => { $("#cal").hidden = true; };
+$("#cal-prev").onclick = () => { CAL.month = new Date(CAL.month.getFullYear(), CAL.month.getMonth() - 1, 1); calRender(); };
+$("#cal-next").onclick = () => { CAL.month = new Date(CAL.month.getFullYear(), CAL.month.getMonth() + 1, 1); calRender(); };
+
+// ---- listeners (the brain's app/core/listeners.py) ----
+const LS = { items: [], log: {}, cur: 0 };
+const ON = { any: "любой голос", known: "известный голос (семья)", unknown: "неизвестный голос" };
+const WHO = { any: "любой", adult: "взрослый или незнакомый", child: "ребёнок из семьи" };
+const LACT = { say: "сказать вслух", telegram: "в Телеграм", eva: "поручение Еве (Claude)", log: "только в лог" };
+const opts = (o, v) => Object.entries(o).map(([k, t]) => `<option value="${k}"${k === v ? " selected" : ""}>${t}</option>`).join("");
+function lsRender() {
+  $("#ls-list").innerHTML = LS.items.map((x, i) =>
+    `<div class="li${i === LS.cur ? " on" : ""}${x.enabled ? "" : " off"}" data-i="${i}">${x.enabled ? "●" : "○"} ${esc(x.name || x.id)}</div>`).join("")
+    || '<div class="help">Слушателей нет.</div>';
+  document.querySelectorAll("#ls-list .li").forEach(e => e.onclick = () => { lsGrab(); LS.cur = +e.dataset.i; lsRender(); });
+  const x = LS.items[LS.cur];
+  if (!x) { $("#ls-edit").innerHTML = ""; return; }
+  const lg = (LS.log[x.id] || []).map(l => `${l.t}  ${l.msg}`).join("\n");
+  $("#ls-edit").innerHTML = `<div class="form">
+    <span>Название</span><input data-k="name" value="${esc(x.name || "")}">
+    <span>Включён</span><label class="tog"><input type="checkbox" data-k="enabled"${x.enabled ? " checked" : ""}> да</label>
+    <span>Событие</span><select data-k="on">${opts(ON, x.on || "any")}</select>
+    <span>Кто говорит</span><select data-k="who">${opts(WHO, x.who || "any")}</select>
+    <span>Слова</span><input data-k="words" value="${esc(x.words || "")}" placeholder="регулярное выражение; пусто — любая фраза" style="font-family:var(--mono);font-size:12px">
+    <span>Дети рядом, с</span><input data-k="children_within" type="number" min="0" value="${x.children_within || 0}">
+    <span class="full help">«Кто говорит» и «дети рядом» — по голосам семьи; дети рядом — голос ребёнка в пределах N секунд до или после фразы (0 — не проверять).</span>
+    <span>Вопрос модели</span><textarea data-k="prompt" placeholder="необязательно: вопрос да/нет локальной модели, например «Человек злится или ругается?»">${esc(x.prompt || "")}</textarea>
+    <span>Действие</span><select data-k="action">${opts(LACT, x.action || "say")}</select>
+    <span>Текст</span><textarea data-k="text" placeholder="что сказать / написать / поручить; подстановки {phrase} {who} {children}">${esc(x.text || "")}</textarea>
+    <span>Кому (Телеграм)</span><input data-k="to" value="${esc(x.to || "")}" placeholder="имя из семьи">
+    <span>Пауза, с</span><input data-k="cooldown" type="number" min="0" value="${x.cooldown ?? 600}">
+    <span class="full" style="margin-top:8px;font-weight:600">Проверить на фразе</span>
+    <input class="full" id="ls-sample" placeholder="фраза, как её распознала бы Ева">
+    <span></span><span><button class="btn" id="ls-test">Проверить</button> <button class="btn" id="ls-del" style="color:var(--danger)">Удалить слушателя</button> <span id="ls-res" class="help"></span></span>
+  </div><div class="lg">${lg ? "Последние срабатывания:\n" + esc(lg) : "Срабатываний за 14 дней нет."}</div>`;
+  $("#ls-test").onclick = async () => {
+    lsGrab();
+    const r = await api("/api/listeners/test", { listener: LS.items[LS.cur], text: $("#ls-sample").value });
+    $("#ls-res").textContent = (r.words === null ? "слова: не заданы" : r.words ? `слова: «${r.words}» ✓` : "слова: нет совпадения ✗")
+      + (r.model !== null ? ` · модель: ${r.model}` : "");
+  };
+  $("#ls-del").onclick = () => { if (confirm("Удалить слушателя? (сохранится по «Сохранить»)")) { LS.items.splice(LS.cur, 1); LS.cur = 0; lsRender(); } };
+}
+function lsGrab() {                     // the form into the current listener
+  const x = LS.items[LS.cur];
+  if (!x || !document.querySelector("#ls-edit [data-k]")) return;
+  document.querySelectorAll("#ls-edit [data-k]").forEach(e => {
+    const k = e.dataset.k; x[k] = e.type === "checkbox" ? e.checked : e.type === "number" ? +e.value : e.value;
+  });
+}
+$("#ls-open").onclick = async () => {
+  $("#ls").hidden = false;
+  const r = await api("/api/listeners"); LS.items = r.listeners; LS.log = r.log; LS.cur = 0; lsRender();
+};
+$("#ls-close").onclick = () => { $("#ls").hidden = true; };
+$("#ls-new").onclick = () => {
+  lsGrab();
+  LS.items.push({ id: "l" + Date.now().toString(36), name: "Новый слушатель", enabled: false, on: "any", who: "any",
+                  words: "", children_within: 0, prompt: "", action: "log", text: "", to: "", cooldown: 600 });
+  LS.cur = LS.items.length - 1; lsRender();
+};
+$("#ls-save").onclick = async () => {
+  lsGrab();
+  try { const r = await api("/api/listeners", { listeners: LS.items }); LS.items = r.listeners; LS.log = r.log; lsRender(); toast("Сохранено — Ева подхватит сразу"); }
+  catch (e) { toast("Не сохранилось: " + e.message); }
+};
 </script>
 </body>
 </html>

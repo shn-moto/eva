@@ -43,7 +43,8 @@ admin)
     src=services/admin; image=eva-admin; name=eva-admin; port=8908
     run="-p 8908:8908 --add-host=host.docker.internal:host-gateway --env-file \$HOME/eva-data/admin.env -e STT_LOG_DIR=/log -e KEEP_DIR=/keep \
 -e PGTZ=\$(cat /etc/timezone) -v /etc/localtime:/etc/localtime:ro \
--v \$HOME/eva-data/stt-log:/log -v \$HOME/eva-data/stt-keep:/keep"
+-v \$HOME/eva-data/stt-log:/log -v \$HOME/eva-data/stt-keep:/keep -v \$HOME/eva-data/brain/data:/brain"
+    # /brain: the brain's calendar and listeners, edited on the page (app/core/calendar.py, listeners.py)
     cmd=""; health=/api/days ;;
 print)
     # files sent to Eva in Telegram (kept a week) + printing through the home's CUPS

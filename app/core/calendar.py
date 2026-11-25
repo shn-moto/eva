@@ -36,7 +36,30 @@ EVERY = ("day", "weekdays", "weekend", "week", "month", "year")
 
 HANDLERS = {}            # action -> fn(event); set by skills/calendar
 BIRTHDAY = [None]        # fn(text) that says a birthday line; set by skills/calendar
-_lock = threading.Lock()
+_tlock = threading.Lock()
+
+
+class _Lock:
+    """In the process and across processes: the admin page edits the same file
+    (services/admin), each read-modify-write holds an flock on calendar.json.lock."""
+    def __enter__(self):
+        _tlock.acquire()
+        self.f = None
+        try:
+            import fcntl
+            self.f = open(FILE + ".lock", "a")
+            fcntl.flock(self.f, fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            pass                              # Windows (tests): the thread lock only
+        return self
+
+    def __exit__(self, *a):
+        if self.f:
+            self.f.close()                    # closing drops the flock
+        _tlock.release()
+
+
+_lock = _Lock()
 
 
 def _load():
@@ -198,6 +221,14 @@ def run():
             d = _load()
             changed = False
             for e in list(d["events"]):
+                if e.pop("pending", None):
+                    # added on the admin page: put on its first real time here, as add() does
+                    t, minute = first(e["next"], e.get("repeat")), now.replace(second=0, microsecond=0)
+                    while e.get("repeat") and t < minute:
+                        t = following(t, e["repeat"])
+                    e["next"] = fmt(t)
+                    changed = True
+                    log(f"calendar: from the admin page {e['id']} {e.get('action')} «{e.get('title')}» at {e['next']}")
                 t = parse(e["next"])
                 if t > now:
                     continue

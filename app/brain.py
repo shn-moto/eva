@@ -111,6 +111,8 @@ if __name__ == "__main__":
     threading.Thread(target=screen.watch, daemon=True).start()
     from core import calendar          # the scheduler: reminders, alarms, birthdays (skills/calendar)
     calendar.start()
+    from core import listeners         # rules over every logged phrase (the admin page edits them)
+    listeners.start()
     # the body on the Station (app/body.py): its events in. A restart of the brain
     # ends the music - its queue lived here - so the body's mpg123 stops too and
     # the TV does not keep showing the player

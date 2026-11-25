@@ -18,7 +18,7 @@ import numpy as np
 import memory
 import music
 import voices
-from core import cost, hub_ear, identity, llm, profile, router, screen
+from core import cost, hub_ear, identity, listeners, llm, profile, router, screen
 from core.prompt import SILENT, system
 from core.speech import Voice, ui
 from core.util import log, ru_now
@@ -460,6 +460,7 @@ def on_phrase(item):
     text = item.get("text", "").strip()
     if len(text) < 2:
         return
+    _to_listeners(item)
     if item.get("end") and not item.get("window"):
         LATENCY["end"] = item["end"]
     VOICE.on_first = _first_sound
@@ -850,6 +851,18 @@ def attention_watch():
                 "speaking": cur[2]})
             last = cur
         time.sleep(0.25)
+
+
+def _to_listeners(item):
+    """Every logged phrase to the listeners (core/listeners.py) - not her own voice."""
+    if item.get("self_sim", 0) >= SELF_SIM and item["self_sim"] > item.get("fam_sim", 0) + SELF_MARGIN:
+        return
+    try:
+        label, _, known = who_said(item)
+    except Exception:
+        label, known = "unknown", False
+    name = voices.CALL.get(label, label) if known else None
+    listeners.feed(item, name, known, bool(name and name in profile.CHILDREN))
 
 
 def who_said(item):

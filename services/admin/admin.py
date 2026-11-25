@@ -705,3 +705,152 @@ def room(d: str):
                 out.append({"audio": base, "t": t, "az": doa["az"], "strength": doa.get("strength"),
                             "speaker": sp, "text": text})
     return out
+
+
+# ---- the brain's calendar and listeners (app/core/calendar.py, app/core/listeners.py) -------
+# The brain's state dir is mounted here (BRAIN_DATA). The calendar is read-modify-written
+# under the same flock as the brain's scheduler; a new event gets "pending": the brain
+# puts it on its first real time (repeats, weekdays) at its next tick.
+BRAIN = os.environ.get("BRAIN_DATA", "/brain")
+CAL = os.path.join(BRAIN, "calendar.json")
+LST = os.path.join(BRAIN, "listeners.json")
+PHOTOLIB = os.environ.get("PHOTOLIB_URL", "http://host.docker.internal:8000")
+ROUTER = os.environ.get("ROUTER_URL", "http://host.docker.internal:8906/v1/chat/completions")
+
+
+class _CalLock:
+    def __enter__(self):
+        import fcntl
+        self.f = open(CAL + ".lock", "a")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+
+    def __exit__(self, *a):
+        self.f.close()
+
+
+def _jload(path, empty):
+    try:
+        return json.load(open(path, encoding="utf-8"))
+    except (OSError, ValueError):
+        return empty
+
+
+def _jsave(path, d):
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=1)
+    os.replace(path + ".tmp", path)
+
+
+def _birthdays(days=60):
+    import urllib.request
+    try:
+        with urllib.request.urlopen(PHOTOLIB + "/persons/family-tree", timeout=10) as r:
+            persons = json.load(r).get("persons", [])
+    except Exception:
+        return []
+    today, out = datetime.date.today(), []
+    for p in persons:
+        b = str(p.get("birth_date") or "")[:10]
+        if not b or p.get("death_date") or p.get("birth_date_approx"):
+            continue
+        try:
+            b = datetime.date.fromisoformat(b)
+            nxt = b.replace(year=today.year)
+        except ValueError:
+            continue
+        if nxt < today:
+            nxt = nxt.replace(year=today.year + 1)
+        if (nxt - today).days <= days:
+            out.append({"date": nxt.isoformat(), "name": p.get("name"), "age": nxt.year - b.year})
+    return sorted(out, key=lambda x: x["date"])
+
+
+@app.get("/api/calendar")
+def calendar_get():
+    d = _jload(CAL, {"events": []})
+    return {"events": sorted(d.get("events", []), key=lambda e: e.get("next", "")), "birthdays": _birthdays()}
+
+
+@app.post("/api/calendar")
+async def calendar_post(request: Request):
+    b = await request.json()
+    with _CalLock():
+        d = _jload(CAL, {"events": [], "said": {}})
+        ev = d.setdefault("events", [])
+        if b.get("remove"):
+            d["events"] = [e for e in ev if e["id"] != b["remove"]]
+        else:
+            e = {k: b[k] for k in ("title", "action", "text", "query", "notify", "who", "repeat") if b.get(k)}
+            if not e.get("title") or e.get("action") not in ("remind", "music", "alarm", "task") or not b.get("when"):
+                raise HTTPException(400, "title, action, when")
+            datetime.datetime.fromisoformat(b["when"].replace(" ", "T"))
+            e.update(id=b.get("id") or os.urandom(3).hex(), next=b["when"].replace(" ", "T")[:16], pending=True,
+                     by="админка", channel="admin", created=datetime.datetime.now().strftime("%Y-%m-%dT%H:%M"))
+            d["events"] = [x for x in ev if x["id"] != e["id"]] + [e]
+        _jsave(CAL, d)
+    return calendar_get()
+
+
+@app.get("/api/listeners")
+def listeners_get():
+    items = _jload(LST, {"listeners": []}).get("listeners", [])
+    fired = {}
+    try:
+        with db() as c:
+            for ts, msg in c.execute("SELECT ts, msg FROM eva_log WHERE msg LIKE 'listener %%' "
+                                     "AND ts > now() - interval '14 days' ORDER BY ts DESC LIMIT 200"):
+                m = re.match(r"listener (\S+): (.*)", msg)
+                if m:
+                    fired.setdefault(m.group(1), []).append(
+                        {"t": ts.astimezone().strftime("%d.%m %H:%M:%S"), "msg": m.group(2)[:200]})
+    except Exception:
+        pass
+    return {"listeners": items, "log": {k: v[:10] for k, v in fired.items()}}
+
+
+@app.post("/api/listeners")
+async def listeners_post(request: Request):
+    items = (await request.json()).get("listeners")
+    if not isinstance(items, list):
+        raise HTTPException(400, "listeners: []")
+    seen = set()
+    for x in items:
+        x["id"] = re.sub(r"[^\w-]", "_", str(x.get("id") or x.get("name") or os.urandom(3).hex()))[:40]
+        if x["id"] in seen:
+            raise HTTPException(400, f"id {x['id']} twice")
+        seen.add(x["id"])
+        if x.get("words"):
+            try:
+                re.compile(x["words"], re.I)
+            except re.error as e:
+                raise HTTPException(400, f"{x['id']}: words: {e}")
+    _jsave(LST, {"listeners": items})
+    return listeners_get()
+
+
+@app.post("/api/listeners/test")
+async def listeners_test(request: Request):
+    """A listener over a sample phrase: the words, then the local model's yes/no."""
+    import urllib.request
+    b = await request.json()
+    x, text = b.get("listener") or {}, (b.get("text") or "").strip()
+    out = {"words": None, "model": None}
+    if x.get("words"):
+        try:
+            m = re.search(x["words"], text, re.I)
+        except re.error as e:
+            raise HTTPException(400, f"words: {e}")
+        out["words"] = m.group(0) if m else False
+    if x.get("prompt") and out["words"] is not False:
+        body = {"messages": [
+            {"role": "system", "content": "Ты проверяешь фразы, услышанные дома голосовым помощником. "
+                                          "Фраза распознана из речи и может содержать ошибки. Ответь только да или нет."},
+            {"role": "user", "content": f"Фраза: «{text}»\n\nВопрос: {x['prompt']}"}],
+            "temperature": 0, "max_tokens": 4}
+        try:
+            req = urllib.request.Request(ROUTER, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                out["model"] = json.loads(r.read())["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            out["model"] = f"ошибка: {e}"
+    return out
