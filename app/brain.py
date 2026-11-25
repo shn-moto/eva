@@ -23,7 +23,7 @@ import music  # noqa: E402
 import photolib  # noqa: E402
 import say  # noqa: E402
 import slideshow  # noqa: E402
-from core import cost, identity, llm, screen, skills, speech  # noqa: E402
+from core import body, cost, identity, llm, screen, skills, speech  # noqa: E402
 from core.speech import ui  # noqa: E402
 from core.util import log, secrets  # noqa: E402
 
@@ -101,7 +101,11 @@ if __name__ == "__main__":
     threading.Thread(target=dialog.worker, daemon=True).start()
     threading.Thread(target=dialog.attention_watch, daemon=True).start()
     threading.Thread(target=screen.watch, daemon=True).start()
-    # a restart ends the music (mpg123 was ours): the TV must not keep showing the player
+    # the body on the Station (app/body.py): its events in. A restart of the brain
+    # ends the music - its queue lived here - so the body's mpg123 stops too and
+    # the TV does not keep showing the player
+    body.start()
+    body.post("/music", {"cmd": "STOP"})
     music._flag(False)
     speech.ui({"type": "view", "kind": "close"})
     # the music goes down when she is called by name, answers or talks

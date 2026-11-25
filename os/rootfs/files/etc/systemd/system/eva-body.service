@@ -1,0 +1,14 @@
+[Unit]
+Description=Eva: body (her voice out, music, volume, keys, the screen's events)
+After=eva-sound.service eva-ui-http.service
+Wants=eva-sound.service eva-ui-http.service
+
+[Service]
+WorkingDirectory=/opt/eva/app
+ExecStart=/opt/eva/venv/bin/python /opt/eva/app/body.py
+Nice=-5
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

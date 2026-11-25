@@ -1,7 +1,7 @@
 [Unit]
 Description=Eva: brain (decides, answers with Claude, speaks)
-After=eva-ui-http.service network-online.target
-Wants=eva-ui-http.service
+After=eva-ui-http.service eva-body.service network-online.target
+Wants=eva-ui-http.service eva-body.service
 
 [Service]
 ExecStart=/opt/eva/venv/bin/python /opt/eva/app/brain.py

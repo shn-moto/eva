@@ -1,7 +1,7 @@
-"""The music player on the Station: YouTube Music streamed as MP3 by the music
-service on shn-linux (services/music), played by one mpg123 in
-remote-control mode (-R) on the "eva" ALSA mixer (/etc/asound.conf), so her
-voice can sound over it. While she speaks or listens the music is turned down.
+"""The music player: YouTube Music streamed as MP3 by the music service on
+shn-linux (services/music), played by one mpg123 in remote-control mode (-R)
+on the Station's "eva" ALSA mixer, so her voice can sound over it - mpg123
+runs in the body (app/body.py), driven from here by commands and its lines. While she speaks or listens the music is turned down.
 
 Ported from the old assistant.py (yt-dlp -> ffmpeg -> mpg123 on the Station);
 the Station has no room for yt-dlp and ffmpeg now, so they run on shn-linux.
@@ -10,24 +10,18 @@ The TV shows the player (kind "music"); other views (photos) go over it and
 the player comes back when they close (core/screen.py).
 """
 import json
-import os
-import subprocess
 import threading
 import time
 import urllib.parse
 import urllib.request
 
 from core.speech import ui, volume_get, volume_set
-from core import profile
+from core import body, profile
 from core.util import log
 
 SERVICE = profile.service("music")
-DEVICE = "eva"
 DUCK = profile.tune("music.duck", 0.2)                     # the music's share of its volume while she talks or listens
 VOLUME_STEP = profile.tune("music.volume_step", 10)               # % of the master per «громче» / «тише» (5 % = 2 dB was not heard, 2026-11-23)
-
-
-MUSIC_FLAG = "/run/eva/music"     # ear.py: music plays -> listen in short windows over it
 
 
 EARLY_END = 30                    # s: a longer track "ending" before this broke off - played once more
@@ -44,13 +38,8 @@ def clean(text):
 
 
 def _flag(on):
-    try:
-        if on:
-            open(MUSIC_FLAG, "w").close()
-        elif os.path.exists(MUSIC_FLAG):
-            os.remove(MUSIC_FLAG)
-    except OSError:
-        pass
+    """The ear's flag on the Station: music plays -> listen in short windows over it."""
+    threading.Thread(target=body.post, args=("/flag", {"name": "music", "on": bool(on)}), daemon=True).start()
 
 
 def _get(path, timeout=150):
@@ -65,7 +54,6 @@ def search(query, kind="track", limit=1):
 class Player:
     def __init__(self):
         self.lock = threading.Lock()
-        self.proc = None
         self.queue, self.index = [], 0
         self.playing = False           # a track is loaded and not paused
         self.paused = False
@@ -76,40 +64,30 @@ class Player:
         self.started = 0.0             # when the current track began (minus paused time)
         self.paused_at = 0.0
         self.busy = lambda: False      # set by the brain: she talks or listens -> duck
+        body.on("mpg123", self._line)
 
-    # --- mpg123 ---
+    # --- mpg123, in the body (app/body.py) ---
     def _ensure(self):
-        if self.proc and self.proc.poll() is None:
-            return
-        self.proc = subprocess.Popen(["mpg123", "-R", "-o", "alsa", "-a", DEVICE],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, text=True, bufsize=1)
-        self._cmd("SILENCE")           # no per-frame progress lines
-        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
+        """The body starts mpg123 at the first command; the level is set again."""
         self._apply_volume()
 
     def _cmd(self, c):
-        try:
-            self.proc.stdin.write(c + "\n")
-            self.proc.stdin.flush()
-        except (OSError, AttributeError) as e:
-            log(f"music: mpg123 command {c!r}: {e}")
+        body.post("/music", {"cmd": c})
 
-    def _read(self, proc):
-        for line in proc.stdout:
-            line = line.strip()
-            # "@P 0": the track ended. Right after a LOAD it is the old track's
-            # end (whether mpg123 says it then is not certain) - not ours.
-            if line == "@P 0" and time.time() - self.loaded_at > 2:
-                threading.Thread(target=self._ended, daemon=True).start()
-            elif line.startswith("@S") and self.loading:
-                # mpg123 has begun to decode: the sound starts now - not at LOAD,
-                # 3-5 s earlier, while shn-linux finds the stream (the progress ran ahead)
-                self.loading = False
-                self.started = time.time()
-                self.view()
-            elif line.startswith(("@E", "@I", "@P")) and line != "@P 2":
-                log(f"music: mpg123 {line[:160]}")    # errors, stream info, state: why a track stopped
+    def _line(self, ev):
+        line = ev.get("line", "")
+        # "@P 0": the track ended. Right after a LOAD it is the old track's
+        # end (whether mpg123 says it then is not certain) - not ours.
+        if line == "@P 0" and time.time() - self.loaded_at > 2:
+            threading.Thread(target=self._ended, daemon=True).start()
+        elif line.startswith("@S") and self.loading:
+            # mpg123 has begun to decode: the sound starts now - not at LOAD,
+            # 3-5 s earlier, while shn-linux finds the stream (the progress ran ahead)
+            self.loading = False
+            self.started = time.time()
+            self.view()
+        elif line.startswith(("@E", "@I", "@P")) and line != "@P 2":
+            log(f"music: mpg123 {line[:160]}")    # errors, stream info, state: why a track stopped
 
     def _apply_volume(self):
         v = self.volume * (DUCK if self.ducked else 1.0)

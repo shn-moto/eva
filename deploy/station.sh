@@ -67,10 +67,12 @@ fi
 git archive "$sha" "${PARTS[@]}" | "${SSH[@]}" 'tar -x -C /opt/eva'
 git archive "$sha" "$ROOTFS" | "${SSH[@]}" "tar -x -C / --strip-components=3 --no-overwrite-dir"
 "${SSH[@]}" "echo '$sha $(date -u +%FT%TZ)' > /opt/eva/DEPLOYED; systemctl daemon-reload"
+# units added since (the body, 2026-11-25) start with the next boot too
+"${SSH[@]}" "systemctl is-enabled -q eva-body 2>/dev/null || systemctl enable -q eva-body"
 
 # restart what the change touches
 units=()
-echo "$changed" | grep -q "/opt/eva/app/" && units+=(eva-brain eva-ear eva-telegram eva-logship)
+echo "$changed" | grep -q "/opt/eva/app/" && units+=(eva-body eva-brain eva-ear eva-telegram eva-logship)
 echo "$changed" | grep -q "/opt/eva/eva/" && units+=(eva-brain eva-telegram)
 echo "$changed" | grep -q "/opt/eva/ui/spike/ui_server.py" && units+=(eva-ui-http)
 echo "$changed $rootfs_changed" | grep -q "/opt/eva/ui/spike/\|eva-ui" && ui_reload=1 || ui_reload=0
@@ -83,4 +85,4 @@ fi
 # the TV page: reload without blocking (eva-ui waits for HDMI and never "starts" with the TV off)
 [ "$ui_reload" = 1 ] && "${SSH[@]}" "systemctl restart --no-block eva-ui" && echo "TV page reloading"
 sleep 5
-"${SSH[@]}" "systemctl is-active eva-brain eva-ear eva-telegram eva-logship eva-ui-http | paste -sd' '; cat /opt/eva/DEPLOYED"
+"${SSH[@]}" "systemctl is-active eva-body eva-brain eva-ear eva-telegram eva-logship eva-ui-http | paste -sd' '; cat /opt/eva/DEPLOYED"
