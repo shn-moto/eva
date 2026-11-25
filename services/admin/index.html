@@ -850,8 +850,9 @@ function lsRender() {
     <span>Название</span><input data-k="name" value="${esc(x.name || "")}">
     <span>Включён</span><label class="tog"><input type="checkbox" data-k="enabled"${x.enabled ? " checked" : ""}> да</label>
     <span>Событие</span><select data-k="on">${opts(ON, x.on || "any")}</select>
-    <span>Кто говорит</span><select data-k="who">${opts(WHO, x.who || "any")}<optgroup label="конкретный голос">${
-      [...new Set([...VOICES, ...(x.who && !WHO[x.who] ? [x.who] : [])])].map(v => `<option value="${esc(v)}"${v === x.who ? " selected" : ""}>${esc(v)}</option>`).join("")}</optgroup></select>
+    <span>Кто говорит</span><span style="display:flex;gap:6px"><select id="ls-who">${opts({ ...WHO, person: "конкретный человек…" }, WHO[x.who || "any"] ? (x.who || "any") : "person")}</select>
+      <input id="ls-who-name" list="ls-voices" placeholder="имя, как в голосовой базе" value="${WHO[x.who || "any"] ? "" : esc(x.who)}" style="flex:1"></span>
+    <datalist id="ls-voices">${VOICES.map(v => `<option value="${esc(v)}">`).join("")}</datalist>
     <span>Слова</span><input data-k="words" value="${esc(x.words || "")}" placeholder="регулярное выражение; пусто — любая фраза" style="font-family:var(--mono);font-size:12px">
     <span>Дети рядом, с</span><input data-k="children_within" type="number" min="0" value="${x.children_within || 0}">
     <span class="full help">«Кто говорит» и «дети рядом» — по голосам семьи; дети рядом — голос ребёнка в пределах N секунд до или после фразы (0 — не проверять).</span>
@@ -864,6 +865,9 @@ function lsRender() {
     <input class="full" id="ls-sample" placeholder="фраза, как её распознала бы Ева">
     <span></span><span><button class="btn" id="ls-test">Проверить</button> <button class="btn" id="ls-del" style="color:var(--danger)">Удалить слушателя</button> <span id="ls-res" class="help"></span></span>
   </div><div class="lg">${lg ? "Последние срабатывания:\n" + esc(lg) : "Срабатываний за 14 дней нет."}</div>`;
+  const whoSel = () => { $("#ls-who-name").style.display = $("#ls-who").value === "person" ? "" : "none";
+    if ($("#ls-who").value === "person") $("#ls-who-name").focus(); };
+  $("#ls-who").onchange = whoSel; $("#ls-who-name").style.display = $("#ls-who").value === "person" ? "" : "none";
   const tg = () => document.querySelectorAll("#ls-edit .tg").forEach(e => e.style.display =
     document.querySelector('#ls-edit [data-k="action"]').value === "telegram" ? "" : "none");
   document.querySelector('#ls-edit [data-k="action"]').onchange = tg; tg();
@@ -881,6 +885,8 @@ function lsGrab() {                     // the form into the current listener
   document.querySelectorAll("#ls-edit [data-k]").forEach(e => {
     const k = e.dataset.k; x[k] = e.type === "checkbox" ? e.checked : e.type === "number" ? +e.value : e.value;
   });
+  // who speaks: a group, or one person by name (the brain matches the voice's label or name)
+  x.who = $("#ls-who").value === "person" ? ($("#ls-who-name").value.trim() || "any") : $("#ls-who").value;
 }
 $("#ls-open").onclick = async () => {
   $("#ls").hidden = false;
