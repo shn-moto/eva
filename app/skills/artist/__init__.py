@@ -95,13 +95,16 @@ def edit(png, prompt, size):
 
 
 def _size(shape, src=None):
-    """A size the API takes (multiples of 64); for a redraw "auto" follows the source."""
+    """A size the API takes (multiples of 64); for a redraw "auto" keeps the
+    source's proportions at about a megapixel (a 4:3 photo stays 4:3)."""
     sizes = CFG["sizes"]
     if shape in sizes:
         return sizes[shape]
     if src is not None:
         w, h = src
-        return sizes["landscape"] if w > h * 1.15 else sizes["portrait"] if h > w * 1.15 else sizes["square"]
+        k = (1024 * 1024 / (w * h)) ** 0.5
+        w, h = (max(512, min(1536, round(x * k / 64) * 64)) for x in (w, h))
+        return f"{w}x{h}"
     return sizes["square"]
 
 
@@ -144,7 +147,7 @@ def draw(args, person):
     raw = generate(args["prompt"], _size(args.get("shape")), model)
     title = (args.get("title") or "рисунок").strip()
     fid = _keep(raw, f"{title}.png")
-    MADE[fid] = {"title": title, "prompt": args["prompt"], "by": person.name}
+    MADE[fid] = {"title": title, "prompt": args["prompt"], "by": getattr(person, "name", None)}
     log(f"artist: drew {fid} in {time.time() - t0:.0f} s ({model})")
     return _result(raw, fid, title, f"Готово за {time.time() - t0:.0f} с.")
 
@@ -153,12 +156,15 @@ def redraw(args, person):
     if not CFG.get("edit_model"):
         return "Этот API картинок не умеет переделывать готовые - могу нарисовать заново по описанию."
     from PIL import Image
+    if not args.get("photo_id") and not args.get("file_id"):
+        # «сделай HDR» about the photo open on the TV: what the screen shows
+        args = dict(args, **_on_screen(person))
+        if args.get("error"):
+            return args["error"]
     if args.get("photo_id"):
         src = _photo(int(args["photo_id"]))
-    elif args.get("file_id"):
-        src = _file(args["file_id"])
     else:
-        return "Что переделать: photo_id (фото из архива) или file_id (присланная картинка, твой рисунок)."
+        src = _file(args["file_id"])
     img = Image.open(io.BytesIO(src)).convert("RGB")
     size = _size(args.get("shape") or "auto", img.size)
     img.thumbnail((1536, 1536))
@@ -168,10 +174,27 @@ def redraw(args, person):
     raw = edit(buf.getvalue(), args["prompt"], size)
     title = (args.get("title") or "рисунок").strip()
     fid = _keep(raw, f"{title}.png")
-    MADE[fid] = {"title": title, "prompt": args["prompt"], "by": person.name,
+    MADE[fid] = {"title": title, "prompt": args["prompt"], "by": getattr(person, "name", None),
                  "from": args.get("photo_id") or args.get("file_id")}
     log(f"artist: redrew {args.get('photo_id') or args.get('file_id')} -> {fid} in {time.time() - t0:.0f} s")
     return _result(raw, fid, title, f"Готово за {time.time() - t0:.0f} с.")
+
+
+def _on_screen(person):
+    """The picture on the TV now -> {"photo_id"} | {"file_id"} | {"error"}."""
+    if person.channel != "voice":
+        return {"error": "Какую картинку переделать: укажи photo_id (фото из архива) или file_id "
+                         "(присланная картинка, твой рисунок)."}
+    from core import screen
+    s = screen.shown() or {}
+    if s.get("photo"):
+        return {"photo_id": s["photo"]}
+    if s.get("file"):
+        return {"file_id": s["file"]}
+    if s.get("photos"):
+        return {"error": f"На экране {len(s['photos'])} фото - какое переделать? Открой его (screen open) "
+                         "или укажи photo_id."}
+    return {"error": "На экране нет фото или рисунка - что переделать? Укажи photo_id или file_id."}
 
 
 def _photo(image_id):
@@ -219,8 +242,23 @@ _TITLE = {"type": "string", "description": "короткое название п
 PROMPT = """## Художник (рисунки)
 
 Ты умеешь рисовать: picture_draw - картинка по описанию, picture_redraw -
-переделать готовую (фото из архива по photo_id, присланную картинку или свой
-рисунок по file_id: «сделай в стиле аниме», «добавь шапку», «раскрась»).
+обработать готовую картинку по указанию (image prompt): фото из архива по
+photo_id, присланную картинку или свой рисунок по file_id. Просят про то, что
+открыто на телевизоре («сделай HDR», «изобрази его лысым», «посади их на
+яхту», «нарисуй такую же раскраску, но с собачкой») - picture_redraw без
+photo_id и file_id: возьмётся то, что на экране.
+- Prompt правки - по-английски, повелительно: что изменить и что сохранить.
+  С людьми всегда: "keep the person's face, identity, pose and clothes
+  unchanged". Примеры: HDR - "apply a strong HDR photo effect: bright
+  shadows, detailed highlights, vivid colors, keep the composition and
+  people unchanged"; лысый - "make the man bald, keep his face and identity
+  unchanged, photorealistic"; яхта - "place the person on the deck of a
+  sailing yacht at sea, sunny day, keep the face and identity unchanged,
+  photorealistic"; в том же стиле, другой сюжет - "replace the panda with
+  a puppy, keep exactly the same coloring-page style: black outlines on
+  white, same line thickness, same layout".
+- Людей не раздеваешь и не делаешь унизительного или пугающего; шутки
+  (лысый, усы, костюм супергероя, другая эпоха) - пожалуйста.
 - Описание (prompt) пиши по-английски, подробно: что изображено, стиль
   (детская книжка, акварель, аниме, мультфильм, раскраска - чёрные контуры
   на белом), цвета, фон. Надписей на картинке не проси: модели пишут буквы
@@ -251,12 +289,15 @@ SKILL = Skill(
         handler=draw, needs="known",
     ), Tool(
         name="picture_redraw",
-        description="Переделать картинку по указанию: фото из архива (photo_id), присланную картинку или "
-                    "свой рисунок (file_id). Новая картинка показывается сама.",
+        description="Обработать картинку по указанию (image prompt: эффект, другой фон, другая внешность, "
+                    "тот же стиль с другим сюжетом): фото из архива (photo_id), присланную картинку или свой "
+                    "рисунок (file_id), а без них - то, что открыто на телевизоре. Результат показывается сам.",
         schema={"type": "object", "additionalProperties": False, "required": ["prompt", "title"],
                 "properties": {"prompt": {"type": "string", "description": "что сделать, по-английски "
                                           "(\"turn into a watercolor illustration, keep the faces\")"},
-                               "photo_id": {"type": "integer"}, "file_id": {"type": "string"},
+                               "photo_id": {"type": "integer", "description": "фото из архива; "
+                                            "без photo_id и file_id - то, что сейчас на телевизоре"},
+                               "file_id": {"type": "string"},
                                "title": _TITLE,
                                "shape": {"type": "string", "enum": ["auto", "square", "portrait", "landscape"],
                                          "description": "auto - как у исходной (по умолчанию)"}}},

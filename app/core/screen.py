@@ -151,9 +151,9 @@ def describe():
         return shown or "На экране только твоё лицо."
     items = _items()
     if state["open"] is not None:
-        return f"Открыто фото {state['open'] + 1} из {len(items)}."
+        return f"Открыто фото {state['open'] + 1} из {len(items)} (photo_id {items[state['open']]['id']})."
     if p["kind"] == "photo":
-        return "На экране одно фото."
+        return f"На экране одно фото (photo_id {p['id']})."
     if p["kind"] == "picture":
         return f"На экране твой рисунок «{p.get('caption', '')}» (file_id {p['file_id']})."
     if p["kind"] == "html":
