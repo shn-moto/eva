@@ -1,0 +1,95 @@
+"""Re-reading who said what, after the voices learnt more (on demand, from the
+admin page). Nothing is changed here: the job gives proposals, a person looks
+at them and the admin page applies the ones he keeps.
+
+- a phrase in the memory that she labelled herself (not a person's correction)
+  and that the voice base now gives to another family member, surely;
+- a heard-only clip (a voice she did not know then, so not in the memory) that
+  is now surely a family member's.
+
+Same base and thresholds as the live recognition (voices.identify, learn=False:
+nothing is learnt, no guest clusters). The print is made of the whole phrase
+(or its part), not of its first 3 s as live.
+"""
+import json
+import os
+import threading
+import time
+
+JOB = {"state": "idle", "done": 0, "total": 0, "proposals": [], "started": None, "error": None}
+_lock = threading.Lock()
+
+
+def S():
+    import stt_server
+    return stt_server
+
+
+def start(days):
+    with _lock:
+        if JOB["state"] == "running":
+            return status()
+        JOB.update(state="running", done=0, total=0, proposals=[], started=time.time(), error=None)
+    threading.Thread(target=_run, args=(int(days),), daemon=True).start()
+    return status()
+
+
+def status():
+    with _lock:
+        return dict(JOB, proposals=list(JOB["proposals"]))
+
+
+def _run(days):
+    try:
+        _scan(days)
+        JOB["state"] = "done"
+    except Exception as e:
+        JOB.update(state="error", error=repr(e))
+
+
+def _scan(days):
+    import psycopg
+    st, vb = S(), S().VOICES
+    with psycopg.connect(st.VOICE_DSN, connect_timeout=5) as c:
+        rows = c.execute(
+            "SELECT id, ts, speaker, audio, text FROM utterances WHERE role = 'user' AND audio IS NOT NULL"
+            " AND corrected_at IS NULL AND ts > now() - make_interval(days => %s) ORDER BY ts", (days,)).fetchall()
+        linked = {a.split("#")[0] for (a,) in c.execute(
+            "SELECT audio FROM utterances WHERE audio IS NOT NULL AND ts > now() - make_interval(days => %s)",
+            (days + 1,)).fetchall()}
+    heard = []
+    for day in sorted(os.listdir(st.LOG_DIR))[-days - 1:]:
+        d = os.path.join(st.LOG_DIR, day)
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".json") or "-raw" in fn:
+                continue
+            base = f"{day}/{fn[:-5]}"
+            if base in linked:
+                continue
+            try:
+                info = json.load(open(os.path.join(d, fn), encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if (info.get("text") or "").strip() and not info.get("joined_into") and not info.get("correct") \
+                    and not info.get("record"):
+                heard.append((base, info))
+    JOB["total"] = len(rows) + len(heard)
+    for uid, ts, speaker, audio, text in rows:
+        e = st.clip_emb(audio)
+        JOB["done"] += 1
+        if "error" in e:
+            continue
+        label, sim, known = vb.identify(e["emb"], e["dur"], learn=False)
+        if known and label != speaker:
+            JOB["proposals"].append({"kind": "retag", "id": uid, "ts": ts.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                                     "old": speaker, "new": label, "sim": sim, "text": text, "audio": audio})
+    for base, info in heard:
+        e = st.clip_emb(base)
+        JOB["done"] += 1
+        if "error" in e:
+            continue
+        label, sim, known = vb.identify(e["emb"], e["dur"], learn=False)
+        if known:
+            day, name = base.split("/")
+            JOB["proposals"].append({"kind": "heard", "audio": base, "old": None, "new": label, "sim": sim,
+                                     "ts": f"{day} {name[:2]}:{name[2:4]}:{name[4:6]}", "text": info.get("text")})

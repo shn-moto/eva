@@ -509,6 +509,9 @@ if VOICE_DSN:
     threading.Thread(target=_voices_load, daemon=True).start()
 
 
+import rescan as _rescan  # noqa: E402
+
+
 def _vb():
     if VOICES is None or not VOICES.loaded:
         raise RuntimeError("voice base not ready")
@@ -561,7 +564,10 @@ for _path, _fn, _m in (("/voices/identify", _identify, "POST"), ("/voices/claim"
                        ("/voices/correct", _correct, "POST"),
                        ("/voices/people", lambda v, b: v.set_people(b["people"]) or {"ok": True}, "POST"),
                        ("/voices/names", lambda v, b: {"names": v.names(), "guests": len(v.clusters)}, "GET"),
-                       ("/voices/export", lambda v, b: v.export(), "GET")):
+                       ("/voices/export", lambda v, b: v.export(), "GET"),
+                       # who said what, read again with what the voices know now (proposals only)
+                       ("/voices/rescan", lambda v, b: _rescan.start(b.get("days", 30)), "POST"),
+                       ("/voices/rescan/status", lambda v, b: _rescan.status(), "GET")):
     app.add_api_route(_path, _voice_call(_fn), methods=[_m])
 
 

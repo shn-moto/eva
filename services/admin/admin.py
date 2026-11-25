@@ -403,6 +403,62 @@ def _teach_voice(uid, speaker, heard, audio):
         return {"error": str(e)}
 
 
+def _hub(path, body=None, timeout=10):
+    import urllib.request
+    req = urllib.request.Request(VOICES_URL + path, headers={"Content-Type": "application/json"},
+                                 data=json.dumps(body).encode() if body is not None else None)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+# ---- who said what, read again after the voices learnt (services/stt/rescan.py) ----
+@app.post("/api/rescan")
+async def rescan_start(request: Request):
+    b = await request.json()
+    try:
+        return _hub("/rescan", {"days": int(b.get("days", 30))})
+    except Exception as e:
+        raise HTTPException(502, f"hub: {e}")
+
+
+@app.get("/api/rescan")
+def rescan_status():
+    try:
+        return _hub("/rescan/status")
+    except Exception as e:
+        raise HTTPException(502, f"hub: {e}")
+
+
+@app.post("/api/rescan/apply")
+async def rescan_apply(request: Request):
+    """The proposals a person kept: a phrase she labelled herself gets the voice
+    it is now (what she said then stays in speaker_heard; a person's correction
+    is never touched); a heard-only clip of a known voice goes into the memory,
+    marked as found by the voice, not as a correction."""
+    items = (await request.json()).get("items", [])
+    done = {"retag": 0, "heard": 0, "skipped": 0}
+    with db() as c:
+        for it in items:
+            if it.get("kind") == "retag" and it.get("id"):
+                r = c.execute("UPDATE utterances SET speaker_heard = coalesce(speaker_heard, speaker), speaker = %s"
+                              " WHERE id = %s AND corrected_at IS NULL AND speaker IS NOT DISTINCT FROM %s RETURNING id",
+                              (it["new"], int(it["id"]), it.get("old"))).fetchone()
+                done["retag" if r else "skipped"] += 1
+            elif it.get("kind") == "heard" and it.get("audio"):
+                base, _ = _clip(it["audio"])
+                if not base or c.execute("SELECT 1 FROM utterances WHERE audio = %s OR audio LIKE %s",
+                                         (base, base + "#%")).fetchone():
+                    done["skipped"] += 1
+                    continue
+                day, name = base.split("/")
+                ts = datetime.datetime.strptime(day + name[:6], "%Y-%m-%d%H%M%S").astimezone()
+                c.execute("INSERT INTO utterances (ts, role, text, speaker, dialog, woke, stt, audio, speaker_heard)"
+                          " VALUES (%s, 'user', %s, %s, false, false, 'gigaam', %s, 'не узнан')",
+                          (ts, it.get("text") or "", it["new"], base))
+                done["heard"] += 1
+    return done
+
+
 @app.post("/api/correct")
 async def correct(request: Request):
     b = await request.json()

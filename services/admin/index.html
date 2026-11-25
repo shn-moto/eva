@@ -58,6 +58,29 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .row .txt { word-break: break-word; }
 .row .tags { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: 1px; }
 .tag { font-size: 10.5px; padding: 0 5px; border-radius: 4px; background: var(--bg); color: var(--mute); border: 1px solid var(--line); }
+/* the rescan: a preview, applied only on confirmation */
+.btn { padding: 5px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink);
+       font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn:disabled { opacity: .45; cursor: default; }
+#rs { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; justify-content: center; align-items: stretch;
+      padding: 4vh 4vw; z-index: 20; }
+#rs[hidden] { display: none; }
+.rs-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: min(1100px, 100%);
+          display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.rs-note { padding: 8px 14px; color: var(--mute); font-size: 12.5px; border-bottom: 1px solid var(--line); }
+.rs-group { padding: 10px 14px 4px; font-weight: 600; display: flex; gap: 10px; align-items: baseline; }
+.rs-group .sub { color: var(--mute); font-weight: 400; font-size: 12px; }
+.rs-row { display: grid; grid-template-columns: 26px 30px 150px 190px 1fr; gap: 8px; align-items: start; padding: 5px 14px;
+          border-bottom: 1px solid var(--line); }
+.rs-row:hover { background: var(--sel); }
+.rs-row .t { font-family: var(--mono); font-size: 12px; color: var(--mute); padding-top: 2px; }
+.rs-row .who { font-size: 12.5px; }
+.rs-row .who b { font-weight: 600; }
+.rs-row .who s { color: var(--faint); }
+.rs-row .sim { color: var(--faint); font-size: 11px; margin-left: 4px; }
+.rs-row button.p { border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 13px; padding: 0; }
 .row.assistant .who { color: var(--her); font-weight: 400; }
 .row.assistant .txt { color: var(--her); }
 .row.heard .who, .row.heard .txt { color: var(--heard); font-style: italic; font-weight: 400; }
@@ -136,8 +159,24 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
   <h1>Ева <span>· журнал</span></h1>
   <input id="q" type="search" placeholder="Поиск по всем фразам…" autocomplete="off">
   <span class="hint">↑↓ фраза · пробел — слушать · E — исправить · K — оставить · Del — удалить</span>
+  <button id="rs-open" class="btn" title="Прочитать заново, кто что сказал, с тем, что голоса знают теперь">Пересчитать голоса</button>
   <datalist id="speakers"></datalist>
 </header>
+<div id="rs" hidden>
+  <div class="rs-box">
+    <div class="bar">
+      <span class="title">Пересчёт голосов</span><span class="sub" id="rs-sub"></span>
+      <span style="flex:1"></span>
+      <label class="tog">за <select id="rs-days"><option>3</option><option>7</option><option selected>30</option></select> дн.</label>
+      <button id="rs-run" class="btn">Сканировать</button>
+      <button id="rs-apply" class="btn primary" disabled>Применить отмеченные</button>
+      <button id="rs-close" class="btn">Закрыть</button>
+    </div>
+    <div class="rs-note">Ничего не меняется до «Применить». Твои ручные исправления не трогаются. Подпись меняется только у фраз,
+      которые Ева подписала сама; скрытые «услышанные» попадают в память только отмеченные.</div>
+    <div class="scroll" id="rs-list"></div>
+  </div>
+</div>
 <main>
   <section>
     <div class="bar"><span class="title">Дни</span></div>
@@ -555,6 +594,65 @@ api("/api/settings").then(s => { ROOM = s; radar(); }).catch(() => {});
 
 /* wiring */
 let qT; $("#q").addEventListener("input", () => { clearTimeout(qT); qT = setTimeout(() => doSearch($("#q").value), 300); });
+// ---- the rescan: who said what, read again with what the voices know now ----
+const RS = { items: [], timer: null, audio: new Audio() };
+function rsShow(on) { $("#rs").hidden = !on; if (!on) { clearTimeout(RS.timer); RS.audio.pause(); } }
+function rsRender(st) {
+  const list = $("#rs-list");
+  if (st.state === "running") {
+    $("#rs-sub").textContent = `сканирую… ${st.done} из ${st.total || "?"}`;
+    list.innerHTML = ""; $("#rs-apply").disabled = true; return;
+  }
+  if (st.state === "error") { $("#rs-sub").textContent = "ошибка: " + st.error; return; }
+  if (st.state !== "done") { $("#rs-sub").textContent = ""; list.innerHTML = ""; return; }
+  RS.items = st.proposals;
+  const retag = RS.items.map((p, i) => [p, i]).filter(([p]) => p.kind === "retag");
+  const heard = RS.items.map((p, i) => [p, i]).filter(([p]) => p.kind === "heard");
+  $("#rs-sub").textContent = `проверено ${st.total}: сменить подпись ${retag.length}, в память ${heard.length}`;
+  const row = ([p, i]) => `<div class="rs-row"><input type="checkbox" data-i="${i}" checked>
+      <button class="p" data-i="${i}" title="слушать">▶</button>
+      <span class="t">${esc(p.ts)}</span>
+      <span class="who">${p.old ? `<s>${esc(p.old)}</s> → ` : "не узнан → "}<b>${esc(p.new)}</b><span class="sim">${(+p.sim).toFixed(2)}</span></span>
+      <span>${esc(p.text || "")}</span></div>`;
+  list.innerHTML =
+    `<div class="rs-group">Сменить подпись <span class="sub">фразы в памяти, которые Ева подписала сама</span></div>` +
+    (retag.length ? retag.map(row).join("") : `<div class="rs-note">нет</div>`) +
+    `<div class="rs-group">Скрытые → в память <span class="sub">тогда голос не узнан, теперь узнаётся</span></div>` +
+    (heard.length ? heard.map(row).join("") : `<div class="rs-note">нет</div>`);
+  $("#rs-apply").disabled = !RS.items.length;
+}
+async function rsPoll() {
+  try {
+    const st = await api("/api/rescan");
+    rsRender(st);
+    if (st.state === "running") RS.timer = setTimeout(rsPoll, 1000);
+  } catch (e) { $("#rs-sub").textContent = "не отвечает: " + e.message; }
+}
+$("#rs-open").onclick = () => { rsShow(true); rsPoll(); };
+$("#rs-close").onclick = () => rsShow(false);
+$("#rs-run").onclick = async () => {
+  try { await api("/api/rescan", { days: +$("#rs-days").value }); } catch (e) { toast("Не запустилось: " + e.message); return; }
+  rsPoll();
+};
+$("#rs-list").addEventListener("click", e => {
+  const b = e.target.closest("button.p"); if (!b) return;
+  const p = RS.items[+b.dataset.i];
+  const [base, frag] = p.audio.split("#");
+  if (RS.audio.dataset.k === p.audio && !RS.audio.paused) { RS.audio.pause(); return; }
+  RS.audio.src = `/audio/${base}.wav${frag ? "#" + frag : ""}`; RS.audio.dataset.k = p.audio;
+  RS.audio.play().catch(err => toast("Не играет: " + err.message));
+});
+$("#rs-apply").onclick = async () => {
+  const items = [...document.querySelectorAll("#rs-list input[type=checkbox]:checked")].map(c => RS.items[+c.dataset.i]);
+  if (!items.length) { toast("Ничего не отмечено"); return; }
+  try {
+    const r = await api("/api/rescan/apply", { items });
+    toast(`Подписи: ${r.retag}, в память: ${r.heard}` + (r.skipped ? `, пропущено ${r.skipped}` : ""));
+  } catch (e) { toast("Не применилось: " + e.message); return; }
+  rsShow(false);
+  if (S.day && !S.search) openDay(S.day, true);
+};
+
 $("#heard").checked = store.get("heard", false);
 $("#heard").addEventListener("change", () => { store.set("heard", $("#heard").checked); if (S.day && !S.search) openDay(S.day); });
 $("#onlykeep").addEventListener("change", () => render());
