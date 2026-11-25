@@ -7,6 +7,8 @@ FROM python:3.13-slim
 RUN apt-get update && apt-get install -y --no-install-recommends mpg123 curl && rm -rf /var/lib/apt/lists/*
 # versions as in the Station's venv when the brain moved (2026-11-25)
 RUN pip install --no-cache-dir anthropic==2.10.0 numpy==2.2.4 "psycopg[binary]==3.3.9"
+# pillow: the artist skill sizes its pictures (a small copy for her eyes, PNG for a redraw)
+RUN pip install --no-cache-dir pillow==11.3.0
 
 WORKDIR /opt/eva/app
 COPY . /opt/eva/app/
