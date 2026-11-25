@@ -47,6 +47,27 @@ class Skill:
     context: Callable | None = None  # () -> str, refreshed hourly
 
 
+def _think_deeper(args, person):
+    return ("Хорошо: следующий шаг делает более сильная модель. Продолжай - собери, что нужно, "
+            "и ответь.")
+
+
+# Not a skill of a home: part of the core, every home has it. Sonnet's way to call
+# Opus in (core/llm.py _escalate); the reason goes to the log for tuning.
+THINK_DEEPER = Tool(
+    name="think_deeper",
+    description=("Передать следующий шаг ответа более сильной модели. Вызывай, ДО ответа, если верно хоть одно: "
+                 "нужно сопоставить данные из нескольких источников или много чисел (расчёт, итоги, сравнение "
+                 "периодов); данные противоречат друг другу или их мало для уверенного вывода (одна короткая "
+                 "фраза, неизвестный голос, пустой результат там, где данные должны быть); вывод о людях - кто "
+                 "где, кто что сказал, кто есть на фото; деньги, здоровье, безопасность; ты дважды пробовала и не "
+                 "вышло; собираешься сказать «наверное», «кажется», «скорее всего» о факте. Простые действия, "
+                 "показ и пересказ найденного - сама, без этого инструмента."),
+    schema={"type": "object", "additionalProperties": False, "required": ["reason"],
+            "properties": {"reason": {"type": "string", "description": "коротко, почему нужна сильная модель"}}},
+    handler=_think_deeper, needs="known",
+)
+
 SKILLS = []
 # a picture she looked at -> a small copy of it for the conversation history
 # (without any picture there she later "confessed" she had not seen it, 2026-11-20)
@@ -102,7 +123,7 @@ def prompt():
 
 
 def _tools():
-    return [t for s in SKILLS for t in s.tools]
+    return [t for s in SKILLS for t in s.tools] + [THINK_DEEPER]
 
 
 def specs_for(person):

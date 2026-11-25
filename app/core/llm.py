@@ -11,6 +11,7 @@ refusal is logged.
 """
 import contextlib
 import os
+import re
 import threading
 import time
 
@@ -24,18 +25,15 @@ MODEL = profile.tune("llm.model", "claude-sonnet-5-5")   # user choice 2026-11-1
 EFFORT = profile.tune("llm.effort", "low")
 CLIENT = anthropic.Anthropic(api_key=secrets()["ANTHROPIC_API_KEY"], max_retries=1, timeout=30)
 ROUNDS = profile.tune("llm.rounds", 8)                           # tool rounds in one answer (an agent: look, then act, then report)
-# Weighing what the tools gave and deciding the next step is the agent's work:
-# Opus at medium (Иван, 2026-11-20 - Sonnet low took one short word for "Маша
-# is at home"). The voice keeps Sonnet low for its first round (the first word,
-# small talk, "сейчас гляну"); once a tool has run, the rounds go to Opus.
-# Text channels: Opus medium all the way, no one waits for a first word there.
+# The model ladder (Иван, 2026-11-25): simple commands - the local router (no Claude);
+# the rest - Sonnet low, which also weighs what its tools brought; Opus medium only
+# when _escalate finds a reason (Sonnet asks, or a rule below says so). Text channels
+# take the same ladder.
 AGENT_MODEL = profile.tune("llm.agent_model", "claude-opus-5-5")
 AGENT_EFFORT = profile.tune("llm.agent_effort", "medium")
-# ...but only when there is something to think over. A simple action is done
-# by Sonnet to the end: «выключи музыку» went Sonnet -> tool -> Opus, and Opus
-# (its own cache, cold) wrote 26k tokens to say "Выключила музыку" - $0.16
-# (2026-11-21). Opus comes in after a tool that brings data to weigh; any tool
-# not listed here counts as such.
+# Tools after which nothing needs weighing (an action done, a picture shown): they
+# never count towards an escalation. «выключи музыку» once went Sonnet -> tool -> Opus,
+# and Opus (cold cache) wrote 26k tokens to say "Выключила музыку" - $0.16 (2026-11-21).
 LIGHT_TOOLS = profile.tune("llm.light_tools", {"music_play", "music_control", "screen", "panel", "avatar", "say_at_home", "send_message",
                "eva_spend", "photo_indexing", "show_html", "show_feed", "weather",
                "home_api_index", "home_api_get",
@@ -46,14 +44,64 @@ LIGHT_TOOLS = profile.tune("llm.light_tools", {"music_play", "music_control", "s
                "picture_draw", "picture_redraw", "picture_save"})
 
 
-def _escalate(message, params):
-    """Params for the next round: Opus once a tool needs weighing, else as they are."""
+# Opus does not come in just because a tool brought data: Sonnet (warm cache, ~$0.01 a
+# round) weighs it. Opus (cold cache, $0.25-0.45 a call) comes in when one of these says
+# so - Sonnet's own word is one of them, not the only one, since a model that thinks it
+# can always cope never asks (Иван, 2026-11-25):
+#  - she asks: the tool think_deeper (core/skills.py) with her reason;
+#  - a tool whose result is a judgement about people from thin evidence (HEAVY_TOOLS):
+#    Sonnet low took one short word for "Маша is at home" (2026-11-20);
+#  - the person corrects her ("не так", "ты ошиблась", "перепроверь") - she was wrong once;
+#  - a long chain: the third round of data tools in one answer - she is wandering;
+#  - tools failing twice in one answer;
+#  - much data to weigh at once (BIG_RESULT characters from data tools in one round).
+# Sonnet's effort stays as it is: a mid-conversation effort change drops the messages
+# cache just as a model change does (API docs, 2026-11-25).
+HEAVY_TOOLS = profile.tune("llm.heavy_tools", {"who_heard"})
+BIG_RESULT = profile.tune("llm.big_result", 15000)
+CHAIN = profile.tune("llm.chain", 3)
+CORRECTION = re.compile(r"(не так|неправильн|ошиб(лась|ка)|не т(о|от|а|у|е)\b|не поняла|не права|перепровер|проверь ещ|"
+                        r"подумай|посчитай точн|уверена\?|ерунд|чушь)", re.I)
+
+
+def _turn_ctx(msgs):
+    """What an answer starts with, for _escalate: was she just corrected?"""
+    last = msgs[-1]["content"] if msgs else ""
+    text = last if isinstance(last, str) else " ".join(b.get("text", "") for b in last if isinstance(b, dict))
+    return {"rounds": 0, "errors": 0, "correction": bool(CORRECTION.search(text))}
+
+
+def _escalate(message, params, results=(), turn=None):
+    """Params for the next round: Opus when there is a reason (above), else as they are."""
     if params["model"] == AGENT_MODEL:
         return params
-    used = {b.name for b in message.content if b.type == "tool_use"}
-    if used <= LIGHT_TOOLS:
+    turn = turn if turn is not None else {"rounds": 0, "errors": 0, "correction": False}
+    uses = [b for b in message.content if b.type == "tool_use"]
+    used = {b.name for b in uses}
+    data = used - LIGHT_TOOLS - {"think_deeper"}
+    turn["errors"] += sum(1 for r in results if r.get("is_error"))
+    if data:
+        turn["rounds"] += 1
+    size = sum(len(str(r.get("content", ""))) for b, r in zip(uses, results) if b.name in data)
+    why = []
+    for b in uses:
+        if b.name == "think_deeper":
+            why.append(f"she asked: {(b.input or {}).get('reason', '')[:120]}")
+    if data & HEAVY_TOOLS:
+        why.append(f"heavy tool {', '.join(sorted(data & HEAVY_TOOLS))}")
+    if data and turn["correction"]:
+        why.append("she was corrected")
+    if turn["rounds"] >= CHAIN:
+        why.append(f"round {turn['rounds']} of data tools")
+    if turn["errors"] >= 2:
+        why.append(f"{turn['errors']} tool errors")
+    if size > BIG_RESULT:
+        why.append(f"{size} chars of data")
+    if not why:
+        if data:
+            log(f"sonnet weighs: {', '.join(sorted(data))} ({size} chars)")
         return params
-    log(f"to {AGENT_MODEL}: {', '.join(sorted(used - LIGHT_TOOLS))}")
+    log(f"to {AGENT_MODEL}: {'; '.join(why)}")
     # Opus with the 5-minute cache, not the hour: it comes in mid-turn, once in an hour
     # or two, and its cache of the conversation ends inside that turn (full images and
     # results, later cut in the history) - the next Opus call never read it; 1 h writes
@@ -205,6 +253,11 @@ def _tool_round(final, msgs, person, on_show, trace=None, record=None, channel=N
             if show and on_show:
                 on_show(show)
     msgs.append({"role": "user", "content": results})
+    _record_round(final, results, aids, record)
+    return results
+
+
+def _record_round(final, results, aids, record):
     if record is not None:
         # the real calls and results go into the history: a note in brackets
         # after her own text she took for her own invention and "confessed" that
@@ -344,7 +397,7 @@ def stream(system, history, person, on_chunk, on_show=None, on_tool=None, max_to
 
 
 def _stream(msgs, params, person, on_chunk, on_show, on_tool, trace, record, t0):
-    first = None
+    first, turn = None, _turn_ctx(msgs)
     for _ in range(ROUNDS):
         with CLIENT.messages.stream(messages=msgs, **params) as s:
             for ev in s:
@@ -376,8 +429,8 @@ def _stream(msgs, params, person, on_chunk, on_show, on_tool, trace, record, t0)
             continue
         if final.stop_reason != "tool_use":
             break
-        _tool_round(final, msgs, person, on_show, trace, record, "voice")
-        params = _escalate(final, params)
+        results = _tool_round(final, msgs, person, on_show, trace, record, "voice")
+        params = _escalate(final, params, results, turn)
         on_chunk(" ")                    # text before and after a tool call stays apart
     if final.stop_reason == "refusal":
         log("refusal:", getattr(final.stop_details, "category", None))
@@ -413,7 +466,7 @@ def complete(system, history, person, on_show=None, max_tokens=2048, trace=None,
 
 
 def _complete(msgs, params, person, on_show, trace, record):
-    parts = []
+    parts, turn = [], _turn_ctx(msgs)
     for _ in range(ROUNDS):
         r = CLIENT.messages.create(messages=msgs, **params)
         usd = cost.add(params["model"], r.usage, "chat")
@@ -429,8 +482,8 @@ def _complete(msgs, params, person, on_show, trace, record):
             continue
         if r.stop_reason != "tool_use":
             break
-        _tool_round(r, msgs, person, on_show, trace, record, "chat")
-        params = _escalate(r, params)
+        results = _tool_round(r, msgs, person, on_show, trace, record, "chat")
+        params = _escalate(r, params, results, turn)
     if record is not None:
         record.append({"role": "assistant", "content": final_text(r) or "…"})
     # only the last round's words: the text before a tool call is her "сейчас

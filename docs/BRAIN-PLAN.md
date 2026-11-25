@@ -14,8 +14,9 @@ on the projects that run on shn-linux).
 - Every phrase: the hub's ear -> the Station's brain -> the local router on the
   hub's GPU (`core/router.py`, Qwen3-4B, ~0.2 s: ignore / ack / catalog commands)
   -> for "claude": one tool loop over the Anthropic API (`core/llm.py`): Sonnet
-  low for the first round, Opus medium once a tool brings data to weigh, prompt
-  caching (1 h), server tools web search/fetch, daily budget (`core/cost.py`).
+  low, which also weighs its tools' data; Opus medium only on a reason (Sonnet's
+  think_deeper, a heavy tool, a correction, a long chain, errors, big data -
+  `llm._escalate`, since 2026-11-25), Opus with a 5-min cache; prompt caching (1 h), server tools web search/fetch, daily budget (`core/cost.py`).
 - The ear moved to the hub on 2026-11-24 (docs/EAR-PLAN.md): an utterance is
   made on the hub, travels to the Station, and the brain's calls go back to the
   hub (router, voices, memory, photolib, finances...). The brain is the last big
