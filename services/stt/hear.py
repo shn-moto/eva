@@ -34,6 +34,7 @@ REL_LEAD, REL_MIN = 0.05, 0.4     # a voice cut believed: each part prefers its 
 # The move to the hub goes with the Station's rule; a better one only once it
 # is measured on the phrases a person marked.
 RELATIVE = os.environ.get("EVA_HEAR_RELATIVE") == "1"
+GLUE_MAX = 30.0                   # s: a held piece and its rest glued at most this long
 SHOW_PLAYBACK = 0.3               # heard over her voice / the music: not shown under the face
 
 
@@ -182,6 +183,7 @@ class Hearing:
         self.cont = 0.0           # Station clock: when a fragment started soon after it
         self.offset = 0.0         # hub clock - Station clock
         self.out = []             # dry: what was delivered
+        self.q = None             # the fragments waiting their turn (submit)
 
     def emit(self, ev):
         ev["source"] = self.name
@@ -292,6 +294,29 @@ class Hearing:
         return np.concatenate([hseg, gap, seg]), gm, m
 
     # -- a fragment --
+    def submit(self, seg, mics, meta):
+        """A fragment from the Station: in the order it came. One after another,
+        not in parallel threads: a short fragment overtook the long one before it
+        (the utterances came out of order) and a piece still being recognised
+        could not be glued with its rest. Windows over her voice go at once,
+        apart - a «стоп» must not wait."""
+        if meta.get("window"):
+            threading.Thread(target=self.fragment, args=(seg, mics, meta), daemon=True).start()
+            return
+        if self.q is None:
+            self.q = queue.Queue()
+            threading.Thread(target=self._worker, daemon=True).start()
+        self.q.put((seg, mics, meta))
+
+    def _worker(self):
+        while True:
+            seg, mics, meta = self.q.get()
+            try:
+                self.fragment(seg, mics, meta)
+            except Exception as e:          # one bad fragment must not stop the ear
+                log(f"fragment #{meta.get('seq')} failed: {e!r}")
+                self.ui("none")
+
     def fragment(self, seg, mics, meta):
         """seg: float mono (the canceller's output), mics: int16 samples x 7 or
         None, meta: the Station's timeline and echo measures."""
@@ -305,6 +330,7 @@ class Hearing:
         if not window:
             speech, playback, residual = meta.get("dur", 0), meta.get("playback", 0), meta.get("residual", 1.0)
             if speech < MIN_SPEECH:
+                log(f"#{meta.get('seq')} click {speech:.2f}s")
                 self.release()
                 self.ui("none")
                 return
@@ -317,6 +343,12 @@ class Hearing:
             with self.lock:
                 self.last_end = max(self.last_end, meta["end"])
             self.ui("stt")
+            if held is not None and (len(held[0]) + len(seg)) / SR > GLUE_MAX:
+                # reading aloud without pauses: chained pieces would grow without end
+                # (each glue recognised again from the start) - the piece goes alone
+                log(f"not joined: {len(held[0]) / SR:.0f} + {len(seg) / SR:.0f} s is over {GLUE_MAX:.0f} s")
+                self.utterance(held[2])
+                held = None
             if held is not None:
                 p0 = float(np.abs(seg).max()) or 1.0
                 rest_v = S().spk_emb((seg / p0 * 0.9)[:int(SR * SPK_SECONDS)]).tolist()
@@ -379,7 +411,7 @@ class Hearing:
         if v and vb is not None and not window and text:
             label, sim, known = vb.identify(v, meta.get("dur", 0), learn=not self.dry)
             meta["speaker"] = {"label": label, "sim": sim, "known": known}
-        log(f"{'window' if window else 'phrase'} {meta['dur']:.1f}s playback {meta.get('playback', 0):.0%} "
+        log(f"#{meta.get('seq')} {'window' if window else 'phrase'} {meta['dur']:.1f}s playback {meta.get('playback', 0):.0%} "
             f"residual {meta.get('residual')} stt {meta.get('stt_ms')}ms self {meta.get('self_sim')} "
             f"fam {meta.get('fam_sim')} {(meta.get('speaker') or {}).get('label', '')}: {text!r}")
         # her own echo is never held: joined with his next phrase it swallowed his

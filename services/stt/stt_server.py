@@ -813,7 +813,7 @@ async def hear_fragment(request: Request):
         return JSONResponse({"events": h.out})
     if not meta.get("window"):
         _hear.EVENTS.publish({"type": "hearing", "on": False, "source": "station"})   # the phrase ended
-    threading.Thread(target=_hear.STATION.fragment, args=(a, mics, meta), daemon=True).start()
+    _hear.STATION.submit(a, mics, meta)
     return JSONResponse({"ok": True}, status_code=202)
 
 
