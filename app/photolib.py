@@ -269,13 +269,16 @@ def meta(image_id):
     try:
         faces = _get(f"/photo/{image_id}/faces")
         faces = faces.get("faces", faces) if isinstance(faces, dict) else faces
-        unknown = sum(1 for f in faces or [] if not (f.get("person_name") or (f.get("person") or {}).get("name")))
+        nameless = [f for f in faces or [] if not (f.get("person_name") or (f.get("person") or {}).get("name"))]
     except (OSError, ValueError):
-        unknown = 0
+        nameless = []
     if people:
         m["people"] = people
-    if unknown:
-        m["faces_unknown"] = unknown
+    if nameless:
+        m["faces_unknown"] = len(nameless)
+        guesses = [g for g in (face_guess(f.get("face_id")) for f in nameless[:GUESS_FACES]) if g]
+        if guesses:
+            m["faces_like"] = guesses
     where = place(p)
     if where:
         m["gps"] = where
@@ -392,6 +395,39 @@ def place(ph):
     if lat is None or lon is None or (abs(lat) < 0.01 and abs(lon) < 0.01) or abs(lat) > 75:
         return None
     return f"{lat:.3f}, {lon:.3f}"
+
+
+GUESS_FACES = 4          # nameless faces on one photo looked up at most
+GUESS_MIN, GUESS_LEAD = 0.6, 0.05
+
+
+def face_guess(face_id):
+    """A face nobody has named yet in the archive -> whom it is like among the
+    named faces (photolib's own face search; nothing is changed there):
+    {"person", "similarity", "matches"} or None. 37 thousand of 70 thousand faces
+    are not linked to anybody until photolib's auto-assign runs; a photo of the
+    younger daughter was then "probably the elder one" by her eye, while the
+    archive's faces said clearly who it was (0.74, five of her photos, 2026-11-25)."""
+    if not face_id:
+        return None
+    try:
+        r = _post(f"/search/face/by_id/{int(face_id)}?top_k=20&similarity_threshold=0.5", {}, timeout=10)
+    except (OSError, ValueError):
+        return None
+    best = {}
+    for x in (r.get("results", r) if isinstance(r, dict) else r) or []:
+        n, s = x.get("person_name"), float(x.get("similarity") or 0)
+        if n:
+            b = best.setdefault(n, [0.0, 0])
+            b[0], b[1] = max(b[0], s), b[1] + 1
+    if not best:
+        return None
+    ranked = sorted(best.items(), key=lambda kv: (kv[1][0], kv[1][1]), reverse=True)
+    name, (sim, cnt) = ranked[0]
+    second = ranked[1][1][0] if len(ranked) > 1 else 0.0
+    if sim < GUESS_MIN or sim - second < GUESS_LEAD:
+        return None
+    return {"person": name, "similarity": round(sim, 2), "matches": cnt}
 
 
 def photo_people(image_id):
