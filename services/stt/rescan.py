@@ -16,6 +16,9 @@ import os
 import threading
 import time
 
+SAME = 0.98          # a print this like the phrase is the phrase itself
+SELF_MAX = 0.4       # this like Eva's own voice: her echo, not a person (the live echo rule: 0.45)
+HEARD_MIN = 0.5      # a clip to bring into the memory: a sure match only, not the weaker "another room" one
 JOB = {"state": "idle", "done": 0, "total": 0, "proposals": [], "started": None, "error": None}
 _lock = threading.Lock()
 
@@ -79,7 +82,8 @@ def _scan(days):
         JOB["done"] += 1
         if "error" in e:
             continue
-        label, sim, known = vb.identify(e["emb"], e["dur"], learn=False)
+        # its own print (learnt from this very phrase) does not count: a match of 1.0 proves nothing
+        label, sim, known = vb.identify(e["emb"], e["dur"], learn=False, skip_same=SAME)
         if known and label != speaker:
             JOB["proposals"].append({"kind": "retag", "id": uid, "ts": ts.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
                                      "old": speaker, "new": label, "sim": sim, "text": text, "audio": audio})
@@ -88,8 +92,11 @@ def _scan(days):
         JOB["done"] += 1
         if "error" in e:
             continue
-        label, sim, known = vb.identify(e["emb"], e["dur"], learn=False)
-        if known:
+        # her own voice (her echo, «сейчас посмотрю») is not a family member's
+        if vb.self_sim(e["emb"]) >= SELF_MAX:
+            continue
+        label, sim, known = vb.identify(e["emb"], e["dur"], learn=False, skip_same=SAME)
+        if known and sim >= HEARD_MIN:
             day, name = base.split("/")
             JOB["proposals"].append({"kind": "heard", "audio": base, "old": None, "new": label, "sim": sim,
                                      "ts": f"{day} {name[:2]}:{name[2:4]}:{name[4:6]}", "text": info.get("text")})

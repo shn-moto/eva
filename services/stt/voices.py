@@ -241,13 +241,16 @@ class VoiceBase:
             return sorted(((max(float(e @ np.asarray(p, dtype=np.float32)) for p in v), k)
                            for k, v in self.profiles.items() if v), reverse=True)
 
-    def identify(self, emb, dur, learn=True):
+    def identify(self, emb, dur, learn=True, skip_same=None):
         """(label, similarity, known). label: profile name, or a guest cluster.
         learn=False: only look (a replay, a test) - no learning, no guest
-        clusters, no enrollment sample."""
+        clusters, no enrollment sample. skip_same: prints this like the phrase
+        are the phrase itself (it was learnt from) and do not count (a rescan)."""
         emb = _unit(emb)
         with self.lock:
             voices = self._voices()
+            if skip_same:
+                voices = {k: [p for p in v if float(np.dot(emb, p)) < skip_same] for k, v in voices.items()}
             name, sim = self._best(emb, voices.items())
             learning = self.enroll["name"] if learn and time.time() < self.enroll["until"] else None
             if learning:
