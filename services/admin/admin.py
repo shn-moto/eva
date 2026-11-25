@@ -39,6 +39,8 @@ LOG_DIR = os.environ.get("STT_LOG_DIR", "/log")
 KEEP_DIR = os.environ.get("KEEP_DIR", "/keep")
 # the hub's voice base (services/stt/voices.py): a corrected speaker teaches it
 VOICES_URL = os.environ.get("VOICES_URL", "http://host.docker.internal:8901/voices")
+# a speaker outside the family (services/stt/voices.py STRANGER): «Неизвестный1», «Гость 2»
+STRANGER = re.compile(r"^\s*(неизвестн\w*|незнаком\w*|гость|чужой)[\s_-]*\d*\s*$", re.I)
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = re.compile(r"^\d{4}-\d{2}-\d{2}/\d{6}-\d{3}$")
 app = FastAPI()
@@ -490,6 +492,14 @@ async def correct(request: Request):
         out = {"ok": True}
         if speaker and speaker != old_speaker and audio:
             out["voice"] = _teach_voice(uid, speaker, heard_speaker or old_speaker, audio)
+        if speaker and STRANGER.match(speaker):
+            # somebody outside the family: the voice is learnt under that name (above),
+            # the phrase leaves the memory - it stays a heard clip with the mark
+            with db() as c:
+                with c.transaction():
+                    _forget(c, uid)
+                    c.execute("DELETE FROM utterances WHERE id = %s", (uid,))
+            out["removed"] = True
         return out
     base, _ = _clip(b.get("audio"))
     if not base:
@@ -503,7 +513,10 @@ async def correct(request: Request):
             pass
     _mark_clip(base, text, speaker, heard)
     out = {"ok": True}
-    if speaker:
+    if speaker and STRANGER.match(speaker):
+        # a stranger named: the voice learns it (not taken for family again), the memory does not
+        out["voice"] = _teach_voice(None, speaker, None, base)
+    elif speaker:
         # a heard-only clip (a voice she did not know) with its speaker named by a
         # person is a phrase like any other: into the memory, shown in the log,
         # and its print into that voice (2026-11-24)

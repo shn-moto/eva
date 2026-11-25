@@ -383,6 +383,8 @@ function edit(i) {
     } catch (e) { toast("Не сохранилось: " + e.message); return; }
     // a heard-only clip given its speaker is now a phrase in the memory: a row like the others at once
     if (!r.id && res && res.id) { r.id = res.id; r.role = "user"; r.text_heard = r.text_heard || r.text; r.corrected = false; }
+    // a stranger named: the phrase left the memory - a heard clip with the mark now
+    if (res && res.removed) { r.id = null; r.role = "heard"; }
     if (!r.corrected) { r.text_heard = r.text; if ((who.value.trim() || r.speaker) !== r.speaker) r.speaker_heard = r.speaker; }
     r.text = text; r.speaker = who.value.trim() || r.speaker; r.corrected = true; if (r.has_audio) r.keep = true;
     render(true); toast("Исправлено · звук оставлен для обучения");

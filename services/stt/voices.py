@@ -15,6 +15,7 @@ Tables (created by the owner once, see SCHEMA):
 """
 import json
 import os
+import re
 import threading
 import time
 
@@ -58,6 +59,17 @@ CLUSTER_MAX_EMB = 10
 CLUSTER_MIN_SEC = tune("voices.cluster_min_sec", 1.2)       # short shouts are not clustered
 ENROLL_SECONDS = 60
 SELF = "Ева"                    # her own voice (source "self"): echo, not a person
+
+
+# A voice named on the admin page as somebody outside the family: «Неизвестный1»,
+# «Гость 2». It gets a profile of its own (so it is not taken for a family voice
+# again - a stranger on a speakerphone was "Alex", 2026-11-25), but it is never
+# family: not "known", not in the memory, no personal data.
+STRANGER = re.compile(r"^\s*(неизвестн\w*|незнаком\w*|гость|чужой)[\s_-]*\d*\s*$", re.I)
+
+
+def is_stranger(name):
+    return bool(name) and bool(STRANGER.match(name))
 
 
 def _unit(e):
@@ -156,8 +168,14 @@ class VoiceBase:
         own = next((p for p in self.profiles if self.same_person(p, name)), None)
         if own:
             return own
+        if is_stranger(name):
+            return name.strip()               # a stranger's own profile, never family
         fam = next((p for p, v in self.people.items() if v["family"] and self.same_person(p, name)), None)
         return fam
+
+    def family(self, prof):
+        """A family voice (a stranger's profile is not)."""
+        return not is_stranger(prof)
 
     # --- matching ---
     def _voices(self):
@@ -223,8 +241,8 @@ class VoiceBase:
         the echo check (the family's honest prints, as the ear had them)."""
         e = _unit(emb)
         with self.lock:
-            fam = max((float(e @ np.asarray(p, dtype=np.float32)) for v in self.profiles.values() for p in v),
-                      default=0.0)
+            fam = max((float(e @ np.asarray(p, dtype=np.float32)) for k, v in self.profiles.items()
+                       if self.family(k) for p in v), default=0.0)
         return round(self.self_sim(e), 3), round(fam, 3)
 
     def who(self, emb):
@@ -273,7 +291,7 @@ class VoiceBase:
                 if sim - second >= (ID_MARGIN if sim >= THRESHOLD else LOW_MARGIN):
                     if learn:
                         self._learn(name, emb, sim, second, dur)
-                    return name, round(sim, 3), True
+                    return name, round(sim, 3), self.family(name)
                 if sim >= THRESHOLD:
                     log(f"{name} {sim:.2f} vs next {second:.2f} - too close, not recognised")
                     return "unknown", round(sim, 3), False
@@ -385,8 +403,6 @@ class VoiceBase:
         e = _unit(emb).round(6).tolist()
         with self.lock:
             prof = self._profile_for(name)
-            if not prof:
-                return None
             if heard:
                 wrong = next((p for p in self.profiles if self.same_person(p, heard)), heard)
                 if wrong != prof and self.auto.get(wrong):
@@ -394,14 +410,18 @@ class VoiceBase:
                     if gone:
                         self.auto[wrong] = [x for x in self.auto[wrong] if x not in gone]
                         self._exec("DELETE FROM voice_prints WHERE id = ANY(%s)", ([i for i, _ in gone if i],))
+            if not prof:
+                return None                   # a guest without a name to learn: only the wrong copies went
             return self._enroll(prof, [e], "correction", trusted=True,
                                 meta=[{"audio": audio, "utterance_id": utterance_id}])
 
     # --- for the ear (its split check, till it moves here too) ---
     def export(self):
         with self.lock:
-            return {"profiles": {k: list(v) for k, v in self.profiles.items()}, "self": list(self.self_)}
+            return {"profiles": {k: list(v) for k, v in self.profiles.items() if self.family(k)},
+                    "self": list(self.self_)}
 
     def names(self):
+        """The family's voices (strangers' profiles are not names to call)."""
         with self.lock:
-            return sorted(self.profiles)
+            return sorted(k for k in self.profiles if self.family(k))
