@@ -257,6 +257,9 @@ photo_id и file_id: возьмётся то, что на экране.
   photorealistic"; в том же стиле, другой сюжет - "replace the panda with
   a puppy, keep exactly the same coloring-page style: black outlines on
   white, same line thickness, same layout".
+  Людей на фото несколько - назови, кого меняешь ("the man on the left"), и
+  добавь "keep everyone else in the picture unchanged" (иначе модель может
+  убрать остальных: на яхте оставила одного папу без дочки).
 - Людей не раздеваешь и не делаешь унизительного или пугающего; шутки
   (лысый, усы, костюм супергероя, другая эпоха) - пожалуйста.
 - Описание (prompt) пиши по-английски, подробно: что изображено, стиль
