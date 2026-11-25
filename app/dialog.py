@@ -862,7 +862,8 @@ def _to_listeners(item):
     except Exception:
         label, known = "unknown", False
     name = voices.CALL.get(label, label) if known else None
-    listeners.feed(item, name, known, bool(name and name in profile.CHILDREN))
+    listeners.feed(item, name, known, bool(name and (name in profile.CHILDREN or label in profile.CHILDREN)),
+                   label if known else None)
 
 
 def who_said(item):

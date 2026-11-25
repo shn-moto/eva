@@ -10,6 +10,7 @@ costs nothing:
     {"id", "name", "enabled",
      "on":       "known" | "unknown" | "any"     whose voice: a family voice or not
      "who":      "any" | "adult" (not a child of the family: a guest too) | "child" (a family child)
+                 | a voice profile of the family ("Аэлита"; its label or how she calls them)
      "words":    a regular expression over the phrase ("" - every phrase)
      "children_within": N  - fires only if a child's voice was heard N s around it
      "prompt":   a yes/no question for the local model (router's Qwen, on the hub's GPU,
@@ -46,7 +47,7 @@ DEFAULTS = [{
     "action": "say", "text": "Пожалуйста, не ругайтесь при детях.", "to": "", "cooldown": 600,
 }]
 
-RECENT = collections.deque()                  # (ts, name|None, known, child, text)
+RECENT = collections.deque()                  # (ts, name|None, known, child, text, label)
 _q = queue.Queue(maxsize=200)
 _state = {"mtime": -1, "items": [], "fired": {}}       # -1: not read yet
 STATS = {}                                    # id -> {"checked", "fired", "last"} (since the start)
@@ -89,11 +90,11 @@ def save(items):
     os.replace(tmp, FILE)
 
 
-def feed(item, name, known, child):
+def feed(item, name, known, child, label=None):
     """Every logged phrase comes here (dialog.on_phrase); checked in a thread of
     its own so that the dialog never waits for a listener."""
     try:
-        _q.put_nowait((time.time(), item.get("text", "").strip(), name, known, child))
+        _q.put_nowait((time.time(), item.get("text", "").strip(), name, known, child, label))
     except queue.Full:
         pass
 
@@ -119,21 +120,23 @@ def _ask(prompt, phrase, who, context):
 
 def _context(now, around=120):
     return "\n".join(f"{time.strftime('%H:%M:%S', time.localtime(ts))} {n or 'неизвестный голос'}: {t}"
-                     for ts, n, _, _, t in RECENT if now - ts <= around)[-1500:]
+                     for ts, n, _, _, t, _ in RECENT if now - ts <= around)[-1500:]
 
 
 def _children_near(now, within):
-    return sorted({n for ts, n, _, child, _ in RECENT if child and abs(now - ts) <= within})
+    return sorted({n for ts, n, _, child, _, _ in RECENT if child and abs(now - ts) <= within})
 
 
-def _match(x, ts, text, name, known, child):
+def _match(x, ts, text, name, known, child, label=None):
     """-> (fire?, children near) ; the cheap steps first."""
     on = x.get("on", "any")
     if (on == "known" and not known) or (on == "unknown" and known):
         return False, []
     who = x.get("who", "any")
     if (who == "child" and not child) or (who == "adult" and child):
-        return False, []                      # "adult": anyone but a child of the family (a guest too)
+        return False, []
+    if who not in ("any", "adult", "child") and not (known and who.lower() in {(name or "").lower(), (label or "").lower()}):
+        return False, []                      # one person: only their recognised voice                      # "adult": anyone but a child of the family (a guest too)
     if x.get("_re") is not None and not x["_re"].search(text):
         return False, []
     kids = []
@@ -173,12 +176,12 @@ def _act(x, ts, text, name, kids):
                          f"если делать нечего - ответь <молчу>]"))
 
 
-def _try(x, ts, text, name, known, child, waited=False):
-    ok, kids = _match(x, ts, text, name, known, child)
+def _try(x, ts, text, name, known, child, label=None, waited=False):
+    ok, kids = _match(x, ts, text, name, known, child, label)
     if ok is None:
         if not waited:
             # no child heard yet: a child may answer right after - look again a bit later
-            _later.append((time.time() + float(x["children_within"]) / 4, ts, text, name, known, child, x["id"]))
+            _later.append((time.time() + float(x["children_within"]) / 4, ts, text, name, known, child, label, x["id"]))
         return
     if not ok or time.time() - _state["fired"].get(x["id"], 0) < float(x.get("cooldown") or 0):
         return
@@ -197,10 +200,10 @@ def _try(x, ts, text, name, known, child, waited=False):
         log(f"listener {x['id']}: {e}")
 
 
-def _check(ts, text, name, known, child):
+def _check(ts, text, name, known, child, label):
     for x in load():
         if x.get("enabled"):
-            _try(x, ts, text, name, known, child)
+            _try(x, ts, text, name, known, child, label)
 
 
 _later = []                                   # phrases waiting for a child's voice after them
@@ -209,20 +212,20 @@ _later = []                                   # phrases waiting for a child's vo
 def run():
     while True:
         try:
-            ts, text, name, known, child = _q.get(timeout=1)
-            RECENT.append((ts, name, known, child, text))
+            ts, text, name, known, child, label = _q.get(timeout=1)
+            RECENT.append((ts, name, known, child, text, label))
             while RECENT and ts - RECENT[0][0] > KEEP:
                 RECENT.popleft()
-            _check(ts, text, name, known, child)
+            _check(ts, text, name, known, child, label)
         except queue.Empty:
             pass
         now = time.time()
         for w in [w for w in _later if w[0] <= now]:
             _later.remove(w)
-            _, ts, text, name, known, child, xid = w
+            _, ts, text, name, known, child, label, xid = w
             x = next((x for x in load() if x["id"] == xid and x.get("enabled")), None)
             if x:
-                _try(x, ts, text, name, known, child, waited=True)
+                _try(x, ts, text, name, known, child, label, waited=True)
 
 
 def start():

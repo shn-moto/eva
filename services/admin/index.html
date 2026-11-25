@@ -834,7 +834,8 @@ $("#cal-next").onclick = () => { CAL.month = new Date(CAL.month.getFullYear(), C
 // ---- listeners (the brain's app/core/listeners.py) ----
 const LS = { items: [], log: {}, cur: 0 };
 const ON = { any: "любой голос", known: "известный голос (семья)", unknown: "неизвестный голос" };
-const WHO = { any: "любой", adult: "взрослый или незнакомый", child: "ребёнок из семьи" };
+const WHO = { any: "любой", adult: "взрослый или незнакомый", child: "любой ребёнок из семьи" };
+let VOICES = [];                        // the family's voices with samples (who speaks: one person)
 const LACT = { say: "сказать вслух", telegram: "в Телеграм", eva: "поручение Еве (Claude)", log: "только в лог" };
 const opts = (o, v) => Object.entries(o).map(([k, t]) => `<option value="${k}"${k === v ? " selected" : ""}>${t}</option>`).join("");
 function lsRender() {
@@ -849,19 +850,23 @@ function lsRender() {
     <span>Название</span><input data-k="name" value="${esc(x.name || "")}">
     <span>Включён</span><label class="tog"><input type="checkbox" data-k="enabled"${x.enabled ? " checked" : ""}> да</label>
     <span>Событие</span><select data-k="on">${opts(ON, x.on || "any")}</select>
-    <span>Кто говорит</span><select data-k="who">${opts(WHO, x.who || "any")}</select>
+    <span>Кто говорит</span><select data-k="who">${opts(WHO, x.who || "any")}<optgroup label="конкретный голос">${
+      [...new Set([...VOICES, ...(x.who && !WHO[x.who] ? [x.who] : [])])].map(v => `<option value="${esc(v)}"${v === x.who ? " selected" : ""}>${esc(v)}</option>`).join("")}</optgroup></select>
     <span>Слова</span><input data-k="words" value="${esc(x.words || "")}" placeholder="регулярное выражение; пусто — любая фраза" style="font-family:var(--mono);font-size:12px">
     <span>Дети рядом, с</span><input data-k="children_within" type="number" min="0" value="${x.children_within || 0}">
     <span class="full help">«Кто говорит» и «дети рядом» — по голосам семьи; дети рядом — голос ребёнка в пределах N секунд до или после фразы (0 — не проверять).</span>
     <span>Вопрос модели</span><textarea data-k="prompt" placeholder="необязательно: вопрос да/нет локальной модели, например «Человек злится или ругается?»">${esc(x.prompt || "")}</textarea>
     <span>Действие</span><select data-k="action">${opts(LACT, x.action || "say")}</select>
     <span>Текст</span><textarea data-k="text" placeholder="что сказать / написать / поручить; подстановки {phrase} {who} {children}">${esc(x.text || "")}</textarea>
-    <span>Кому (Телеграм)</span><input data-k="to" value="${esc(x.to || "")}" placeholder="имя из семьи">
+    <span class="tg">Кому написать</span><input class="tg" data-k="to" value="${esc(x.to || "")}" placeholder="имя из семьи — ему в Телеграм">
     <span>Пауза, с</span><input data-k="cooldown" type="number" min="0" value="${x.cooldown ?? 600}">
     <span class="full" style="margin-top:8px;font-weight:600">Проверить на фразе</span>
     <input class="full" id="ls-sample" placeholder="фраза, как её распознала бы Ева">
     <span></span><span><button class="btn" id="ls-test">Проверить</button> <button class="btn" id="ls-del" style="color:var(--danger)">Удалить слушателя</button> <span id="ls-res" class="help"></span></span>
   </div><div class="lg">${lg ? "Последние срабатывания:\n" + esc(lg) : "Срабатываний за 14 дней нет."}</div>`;
+  const tg = () => document.querySelectorAll("#ls-edit .tg").forEach(e => e.style.display =
+    document.querySelector('#ls-edit [data-k="action"]').value === "telegram" ? "" : "none");
+  document.querySelector('#ls-edit [data-k="action"]').onchange = tg; tg();
   $("#ls-test").onclick = async () => {
     lsGrab();
     const r = await api("/api/listeners/test", { listener: LS.items[LS.cur], text: $("#ls-sample").value });
@@ -879,7 +884,8 @@ function lsGrab() {                     // the form into the current listener
 }
 $("#ls-open").onclick = async () => {
   $("#ls").hidden = false;
-  const r = await api("/api/listeners"); LS.items = r.listeners; LS.log = r.log; LS.cur = 0; lsRender();
+  const [r, v] = await Promise.all([api("/api/listeners"), api("/api/voices")]);
+  VOICES = v; LS.items = r.listeners; LS.log = r.log; LS.cur = 0; lsRender();
 };
 $("#ls-close").onclick = () => { $("#ls").hidden = true; };
 $("#ls-new").onclick = () => {

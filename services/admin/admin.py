@@ -828,6 +828,17 @@ async def listeners_post(request: Request):
     return listeners_get()
 
 
+@app.get("/api/voices")
+def voices_list():
+    """The family's voices with samples in the base (services/stt/voices.py) - for "who speaks"."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(VOICES_URL + "/export", timeout=10) as r:
+            return sorted(json.load(r).get("profiles", {}))
+    except Exception:
+        return []
+
+
 @app.post("/api/listeners/test")
 async def listeners_test(request: Request):
     """A listener over a sample phrase: the words, then the local model's yes/no."""
