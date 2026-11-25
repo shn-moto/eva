@@ -168,7 +168,7 @@ def mark_echo(days=30):
             if not words or info.get("echo") or info.get("correct") or (info.get("duration") or 99) > 4:
                 continue
             t = datetime.datetime.strptime(day + fn[:6], "%Y-%m-%d%H%M%S").timestamp()
-            near = set().union(*[w for ts, w in replies if -30 <= ts - t <= 120] or [set()])
+            near = set().union(*[w for ts, w in replies if -180 <= ts - t <= 120] or [set()])
             if near and sum(w in near for w in words) / len(words) >= 0.7:
                 info["echo"] = True
                 info.pop("who", None)
