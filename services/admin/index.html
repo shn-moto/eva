@@ -232,7 +232,8 @@ function hl(text) {
 const colors = {};
 function who(r) {
   if (r.role === "assistant") return "Ева";
-  if (r.role === "heard") return "услышано";
+  // a heard clip shows whose voice it is (a stranger's group: «Неизвестный N»), if known
+  if (r.role === "heard") return r.speaker || "услышано";
   return r.speaker || "?";
 }
 // speakers: a fixed palette of well-told-apart colours, given out by how often
@@ -312,7 +313,7 @@ function render(keepSel) {
     const canPlay = r.has_audio, canKeep = r.role !== "assistant" && (r.id || r.audio);
     html += `<div class="row ${r.role}${r.keep ? " keep" : ""}" data-i="${i}">
       <span class="t">${r.t}</span>
-      <span class="who" style="${r.role === "user" ? `color:${color(r.speaker)}` : ""}">${esc(who(r))}</span>
+      <span class="who" style="${r.role === "user" || (r.role === "heard" && r.speaker) ? `color:${color(r.speaker)}` : ""}">${esc(who(r))}</span>
       <span class="txt">${hl(r.text)}${tagHtml ? `<span class="tags">${tagHtml}</span>` : ""}${was}</span>
       <span class="acts">
         <button class="i play" title="Слушать (пробел)" ${canPlay ? "" : "disabled"}>▶</button>
