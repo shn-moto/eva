@@ -186,8 +186,19 @@ def info(args, person):
     if not image_id:
         return "Не понятно, какое фото: назови номер на экране."
     m = photolib.meta(image_id)
-    return ("Метаданные фото из архива (gps - назови место, если узнаёшь): "
-            + json.dumps(m, ensure_ascii=False))
+    return Result("Метаданные фото из архива (gps - назови место, если узнаёшь): "
+                  + json.dumps(m, ensure_ascii=False), show=_pin(image_id, person))
+
+
+def _pin(image_id, person):
+    """Asked about the slide on the TV: it stays there, as a photo view (the
+    slideshow had held it while she answered)."""
+    import slideshow
+    h = slideshow.held_photo()
+    if person.channel != "voice" or not h or h.get("id") != image_id:
+        return None
+    slideshow.release_held()
+    return {"kind": "photo", "id": image_id, "caption": h.get("title", "")}
 
 
 def look(args, person):
@@ -196,6 +207,7 @@ def look(args, person):
     image_id = _which(args, person)
     if not image_id:
         return "Не понятно, какое фото: назови номер на экране."
+    pin = _pin(image_id, person)
     jpeg = photolib.image(image_id, size=0 if args.get("detail") else 800)
     m = photolib.meta(image_id)
     data = base64.b64encode(jpeg).decode("ascii")
@@ -203,7 +215,7 @@ def look(args, person):
         skills.HISTORY_IMAGES[data] = base64.b64encode(photolib.image(image_id, size=512)).decode("ascii")
     except OSError:
         pass
-    return Result("", blocks=[
+    return Result("", show=pin, blocks=[
         {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}},
         {"type": "text", "text": "Это фото #" + str(image_id) + ". Метаданные из архива: "
                                  + json.dumps(m, ensure_ascii=False)}])

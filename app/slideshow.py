@@ -44,7 +44,13 @@ MONTHS = ("января", "февраля", "марта", "апреля", "ма�
 WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
 SEASONS = ("зима", "весна", "лето", "осень")      # by (month % 12) // 3
 
-state = {"on": False, "playlist": None, "current": None}
+state = {"on": False, "playlist": None, "current": None, "held": None}
+# When she is called, the slide stays on the TV while she answers: the question
+# may be about it («что на этом фото?» - the slideshow went back to the face at
+# once and she talked about a photo nobody saw any more, 2026-11-25). A photo
+# tool on it pins it as a photo view (skills/photos); otherwise the face comes
+# back once she has answered.
+HOLD_AFTER = profile.tune("slideshow.hold_after", 3.0)      # s after her answer: then the face
 _lock = threading.Lock()
 
 
@@ -247,6 +253,8 @@ def describe():
     it stops as soon as she is called, so «кто это было?» comes after it - or None."""
     if state["on"] and state["current"]:
         c, lead = state["current"], "На экране заставка из семейных фото"
+    elif state.get("held"):
+        c, lead = state["held"], "На экране сейчас фото из заставки (стоит, пока ты отвечаешь)"
     elif state.get("last") and time.time() - state["last"][1] < 60:
         c, lead = state["last"][0], "Только что на экране была заставка из семейных фото"
     else:
@@ -281,12 +289,22 @@ def reshow():
     return False
 
 
-def stop(why=""):
+def stop(why="", hold=False):
     with _lock:
         if not state["on"]:
             return
-        state.update(on=False, current=None, last=(state["current"], time.time()))
-    log(f"slideshow: stop ({why})")
+        state.update(on=False, current=None, last=(state["current"], time.time()),
+                     held=state["current"] if hold else None)
+    log(f"slideshow: stop ({why}{', the photo stays while she answers' if hold else ''})")
+
+
+def held_photo():
+    """The slide that stayed on the TV when she was called (or None)."""
+    return state.get("held")
+
+
+def release_held():
+    state["held"] = None
 
 
 def run(busy, last_activity, screen_free, restore=None):
@@ -304,8 +322,18 @@ def run(busy, last_activity, screen_free, restore=None):
         try:
             idle = not busy() and screen_free() and time.time() - last_activity() >= IDLE_AFTER
             if state["on"] and not idle:
-                stop("she is wanted" if busy() else "the screen is used")
+                if busy():
+                    stop("she is wanted", hold=True)          # the slide stays: the question may be about it
+                    continue
+                stop("the screen is used")
                 if screen_free():                 # nothing else took the screen: player or face again
+                    (restore or (lambda: ui({"type": "view", "kind": "close"})))()
+                continue
+            if state.get("held"):
+                if not screen_free():
+                    state["held"] = None          # a tool took the screen (the photo pinned, another view)
+                elif not busy() and time.time() - last_activity() >= HOLD_AFTER:
+                    state["held"] = None          # she has answered, not about the photo: the face again
                     (restore or (lambda: ui({"type": "view", "kind": "close"})))()
                 continue
             if not idle:
