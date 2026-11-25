@@ -124,6 +124,21 @@ def days():
     return sorted(out.values(), key=lambda x: x["day"], reverse=True)
 
 
+def _who(info):
+    """The voice(s) of a heard clip as kept by the hub ("who"): a guest group
+    «гость-N» is shown as «Неизвестный N» - the same stranger, the same name."""
+    names = []
+    for w in info.get("who") or []:
+        lab = w.get("label")
+        if not lab or lab == "unknown":
+            continue
+        if lab.startswith("гость-"):
+            lab = "Неизвестный " + lab.split("-", 1)[1]
+        if lab not in names:
+            names.append(lab)
+    return " / ".join(names) or None
+
+
 def _heard(day, linked):
     """STT-log clips of the day that no phrase in the memory points to (guests,
     the TV, children's chatter, phrases not to her)."""
@@ -151,7 +166,7 @@ def _heard(day, linked):
             if isinstance(fix, list):
                 fix = next((f for f in fix if not f.get("span")), fix[-1] if fix else {})
             out.append({"id": None, "t": f"{hh[:2]}:{hh[2:4]}:{hh[4:6]}", "day": day, "role": "heard",
-                        "speaker": fix.get("speaker"), "text": fix.get("text") or info.get("text") or "",
+                        "speaker": fix.get("speaker") or _who(info), "text": fix.get("text") or info.get("text") or "",
                         "text_heard": info.get("text") if fix else None, "speaker_heard": None,
                         "corrected": bool(fix), "audio": base, "frag": "",
                         "has_audio": os.path.exists(os.path.join(d, fn[:-5] + ".wav")),

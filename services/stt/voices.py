@@ -317,6 +317,13 @@ class VoiceBase:
             self._save_guest(g)
             return g, 0.0, False
 
+    def guest_of(self, emb):
+        """The guest group a voice belongs to (no new group made): label or None."""
+        e = _unit(emb)
+        with self.lock:
+            g, gsim = self._best(e, ((k, v["embs"]) for k, v in self.clusters.items()))
+        return (g, round(gsim, 3)) if g is not None and gsim >= CLUSTER_MATCH else (None, round(gsim, 3))
+
     def claim(self, emb, name, lead=ID_MARGIN):
         """Is a voice saying «я <name>» likely that person? Its own profile must
         lead the others by `lead`: clearly for an unrecognised voice in other

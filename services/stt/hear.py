@@ -431,6 +431,8 @@ class Hearing:
         if v and vb is not None and not window and text:
             label, sim, known = vb.identify(v, meta.get("dur", 0), learn=not self.dry)
             meta["speaker"] = {"label": label, "sim": sim, "known": known}
+            if not self.dry and meta.get("audio"):
+                note_who(meta["audio"], meta.get("audio_span"), label, sim)
         log(f"#{meta.get('seq')} {'window' if window else 'phrase'} {meta['dur']:.1f}s playback {meta.get('playback', 0):.0%} "
             f"residual {meta.get('residual')} stt {meta.get('stt_ms')}ms self {meta.get('self_sim')} "
             f"fam {meta.get('fam_sim')} {(meta.get('speaker') or {}).get('label', '')}: {text!r}")
@@ -446,6 +448,23 @@ class Hearing:
             self.utterance(meta)
         elif not window:
             self.ui("none")
+
+
+def note_who(audio, span, label, sim):
+    """Who said it, kept with the clip in the STT log ("who": per part): the
+    admin page shows the voices she did not know by their group - the same
+    stranger's phrases under one «Неизвестный N» (2026-11-25)."""
+    import os
+    p = os.path.join(S().LOG_DIR, audio.split("#")[0] + ".json")
+    try:
+        info = json.load(open(p, encoding="utf-8"))
+        who = [w for w in info.get("who", []) if w.get("from") != (span or [0])[0]]
+        who.append({"from": (span or [0, None])[0], "to": (span or [0, None])[1], "label": label, "sim": sim})
+        info["who"] = sorted(who, key=lambda w: w.get("from") or 0)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False)
+    except (OSError, ValueError) as e:
+        log("note_who:", e)
 
 
 def joined_into(piece, whole):

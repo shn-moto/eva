@@ -567,7 +567,9 @@ for _path, _fn, _m in (("/voices/identify", _identify, "POST"), ("/voices/claim"
                        ("/voices/export", lambda v, b: v.export(), "GET"),
                        # who said what, read again with what the voices know now (proposals only)
                        ("/voices/rescan", lambda v, b: _rescan.start(b.get("days", 30)), "POST"),
-                       ("/voices/rescan/status", lambda v, b: _rescan.status(), "GET")):
+                       ("/voices/rescan/status", lambda v, b: _rescan.status(), "GET"),
+                       ("/voices/label-heard", lambda v, b: _rescan.label_heard(int(b.get("days", 30))), "POST"),
+                       ("/voices/label-heard/status", lambda v, b: dict(_rescan.LABEL), "GET")):
     app.add_api_route(_path, _voice_call(_fn), methods=[_m])
 
 

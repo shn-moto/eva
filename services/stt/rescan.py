@@ -37,6 +37,50 @@ def start(days):
     return status()
 
 
+LABEL = {"state": "idle", "done": 0, "total": 0, "labelled": 0}
+
+
+def label_heard(days=30):
+    """Once, for the clips heard before their group was kept with them: the
+    guest group each heard-only clip belongs to (existing groups only)."""
+    if LABEL["state"] == "running":
+        return dict(LABEL)
+    LABEL.update(state="running", done=0, total=0, labelled=0)
+
+    def run():
+        import hear
+        st, vb = S(), S().VOICES
+        todo = []
+        for day in sorted(os.listdir(st.LOG_DIR))[-days - 1:]:
+            d = os.path.join(st.LOG_DIR, day)
+            for fn in sorted(os.listdir(d)):
+                if not fn.endswith(".json") or "-raw" in fn:
+                    continue
+                try:
+                    info = json.load(open(os.path.join(d, fn), encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if (info.get("text") or "").strip() and not info.get("who") and not info.get("record"):
+                    todo.append(f"{day}/{fn[:-5]}")
+        LABEL["total"] = len(todo)
+        for base in todo:
+            e = st.clip_emb(base)
+            LABEL["done"] += 1
+            if "error" in e:
+                continue
+            label, sim, known = vb.identify(e["emb"], e["dur"], learn=False, skip_same=None)
+            if not known:
+                g, gsim = vb.guest_of(e["emb"])
+                if g:
+                    label, sim = g, gsim
+            if label and label != "unknown":
+                hear.note_who(base, None, label, sim)
+                LABEL["labelled"] += 1
+        LABEL["state"] = "done"
+    threading.Thread(target=run, daemon=True).start()
+    return dict(LABEL)
+
+
 def status():
     with _lock:
         return dict(JOB, proposals=list(JOB["proposals"]))
