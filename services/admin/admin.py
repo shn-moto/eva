@@ -446,6 +446,22 @@ def rescan_status():
         raise HTTPException(502, f"hub: {e}")
 
 
+@app.post("/api/voice-skip")
+async def voice_skip(request: Request):
+    """A clip (or a part) not to be used for voices: several voices, noise, the TV.
+    The rescan never proposes it again."""
+    b = await request.json()
+    audio = (b.get("audio") or "").strip()
+    if not audio or not _clip(audio)[0]:
+        raise HTTPException(400)
+    with db() as c:
+        if b.get("skip", True):
+            c.execute("INSERT INTO voice_skip (audio) VALUES (%s) ON CONFLICT DO NOTHING", (audio,))
+        else:
+            c.execute("DELETE FROM voice_skip WHERE audio = %s", (audio,))
+    return {"ok": True}
+
+
 @app.post("/api/rescan/apply")
 async def rescan_apply(request: Request):
     """The proposals a person kept: a phrase she labelled herself gets the voice

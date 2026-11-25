@@ -106,7 +106,10 @@ def _scan(days):
         linked = {a.split("#")[0] for (a,) in c.execute(
             "SELECT audio FROM utterances WHERE audio IS NOT NULL AND ts > now() - make_interval(days => %s)",
             (days + 1,)).fetchall()}
-    heard = [(b, i) for b, i in _heard_clips(days, linked) if not i.get("correct")]
+        # marked «не размечать» on the admin page: several voices, noise, the TV
+        skip = {a for (a,) in c.execute("SELECT audio FROM voice_skip").fetchall()}
+    rows = [r for r in rows if r[3] not in skip]
+    heard = [(b, i) for b, i in _heard_clips(days, linked) if not i.get("correct") and b not in skip]
     keys = [r[3] for r in rows] + [b for b, _ in heard]
     JOB["total"] = len(keys)
 

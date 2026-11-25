@@ -72,7 +72,7 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .rs-note { padding: 8px 14px; color: var(--mute); font-size: 12.5px; border-bottom: 1px solid var(--line); }
 .rs-group { padding: 10px 14px 4px; font-weight: 600; display: flex; gap: 10px; align-items: baseline; }
 .rs-group .sub { color: var(--mute); font-weight: 400; font-size: 12px; }
-.rs-row { display: grid; grid-template-columns: 26px 30px 150px 190px 1fr; gap: 8px; align-items: start; padding: 5px 14px;
+.rs-row { display: grid; grid-template-columns: 26px 30px 150px 240px 1fr; gap: 8px; align-items: start; padding: 5px 14px;
           border-bottom: 1px solid var(--line); }
 .rs-row:hover { background: var(--sel); }
 .rs-row .t { font-family: var(--mono); font-size: 12px; color: var(--mute); padding-top: 2px; }
@@ -81,6 +81,11 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .rs-row .who s { color: var(--faint); }
 .rs-row .sim { color: var(--faint); font-size: 11px; margin-left: 4px; }
 .rs-row button.p { border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 13px; padding: 0; }
+.rs-row input.to { width: 120px; font: inherit; font-weight: 600; padding: 1px 5px; border: 1px solid var(--line);
+                   border-radius: 5px; background: var(--bg); color: var(--ink); }
+.rs-row button.skip { margin-left: 8px; border: 1px solid var(--line); border-radius: 5px; background: none; color: var(--mute);
+                      font-size: 11px; padding: 0 6px; cursor: pointer; }
+.rs-row button.skip:hover { color: var(--danger); border-color: var(--danger); }
 .row.assistant .who { color: var(--her); font-weight: 400; }
 .row.assistant .txt { color: var(--her); }
 .row.heard .who, .row.heard .txt { color: var(--heard); font-style: italic; font-weight: 400; }
@@ -612,11 +617,14 @@ function rsRender(st) {
   const retag = RS.items.map((p, i) => [p, i]).filter(([p]) => p.kind === "retag");
   const heard = RS.items.map((p, i) => [p, i]).filter(([p]) => p.kind === "heard");
   $("#rs-sub").textContent = `проверено ${st.total}: сменить подпись ${retag.length}, в память ${heard.length}`;
-  const row = ([p, i]) => `<div class="rs-row"><input type="checkbox" data-i="${i}" checked>
+  // the proposed voice can be changed (a sister for a sister): then it is applied as
+  // your correction and teaches the voice; «не размечать» - several voices, noise, the TV:
+  // never proposed again
+  const row = ([p, i]) => `<div class="rs-row" data-row="${i}"><input type="checkbox" data-i="${i}" checked>
       <button class="p" data-i="${i}" title="слушать">▶</button>
       <span class="t">${esc(p.ts)}</span>
-      <span class="who">${p.old ? `<s>${esc(p.old)}</s> → ` : "не узнан → "}<b>${esc(p.new)}</b><span class="sim">${(+p.sim).toFixed(2)}</span></span>
-      <span>${esc(p.text || "")}</span></div>`;
+      <span class="who">${p.old ? `<s>${esc(p.old)}</s> → ` : "не узнан → "}<input class="to" data-i="${i}" list="speakers" value="${esc(p.new)}"><span class="sim">${(+p.sim).toFixed(2)}</span></span>
+      <span>${esc(p.text || "")} <button class="skip" data-i="${i}" title="несколько голосов, шум, телевизор - не предлагать больше">не размечать</button></span></div>`;
   list.innerHTML =
     `<div class="rs-group">Сменить подпись <span class="sub">фразы в памяти, которые Ева подписала сама</span></div>` +
     (retag.length ? retag.map(row).join("") : `<div class="rs-note">нет</div>`) +
@@ -637,7 +645,14 @@ $("#rs-run").onclick = async () => {
   try { await api("/api/rescan", { days: +$("#rs-days").value }); } catch (e) { toast("Не запустилось: " + e.message); return; }
   rsPoll();
 };
-$("#rs-list").addEventListener("click", e => {
+$("#rs-list").addEventListener("click", async e => {
+  const sk = e.target.closest("button.skip");
+  if (sk) {
+    const p = RS.items[+sk.dataset.i];
+    try { await api("/api/voice-skip", { audio: p.audio }); } catch (err) { toast("Не отметилось: " + err.message); return; }
+    sk.closest(".rs-row").remove(); toast("Больше не предложу");
+    return;
+  }
   const b = e.target.closest("button.p"); if (!b) return;
   const p = RS.items[+b.dataset.i];
   const [base, frag] = p.audio.split("#");
@@ -646,11 +661,19 @@ $("#rs-list").addEventListener("click", e => {
   RS.audio.play().catch(err => toast("Не играет: " + err.message));
 });
 $("#rs-apply").onclick = async () => {
-  const items = [...document.querySelectorAll("#rs-list input[type=checkbox]:checked")].map(c => RS.items[+c.dataset.i]);
-  if (!items.length) { toast("Ничего не отмечено"); return; }
+  const items = [], fixes = [];
+  for (const c of document.querySelectorAll("#rs-list input[type=checkbox]:checked")) {
+    const p = RS.items[+c.dataset.i];
+    const to = (document.querySelector(`#rs-list input.to[data-i="${c.dataset.i}"]`)?.value || "").trim();
+    if (to && to !== p.new) fixes.push(Object.assign({}, p, { new: to }));   // you named another: your correction
+    else items.push(p);
+  }
+  if (!items.length && !fixes.length) { toast("Ничего не отмечено"); return; }
   try {
-    const r = await api("/api/rescan/apply", { items });
-    toast(`Подписи: ${r.retag}, в память: ${r.heard}` + (r.skipped ? `, пропущено ${r.skipped}` : ""));
+    const r = items.length ? await api("/api/rescan/apply", { items }) : { retag: 0, heard: 0, skipped: 0 };
+    for (const p of fixes)
+      await api("/api/correct", p.kind === "retag" ? { id: p.id, text: p.text, speaker: p.new } : { audio: p.audio, text: p.text, speaker: p.new });
+    toast(`Подписи: ${r.retag}, в память: ${r.heard}, исправлено тобой: ${fixes.length}` + (r.skipped ? `, пропущено ${r.skipped}` : ""));
   } catch (e) { toast("Не применилось: " + e.message); return; }
   rsShow(false);
   if (S.day && !S.search) openDay(S.day, true);
