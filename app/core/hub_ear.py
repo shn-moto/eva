@@ -4,6 +4,7 @@ brain runs too (docs/BRAIN-PLAN.md): no trip to the Station and back. Also
 sends a request away, and the hearing states for the screen.
 """
 import json
+import queue
 import threading
 import time
 import urllib.request
@@ -13,6 +14,19 @@ from core.util import log
 
 URL = profile.service("stt").rsplit("/", 1)[0] + "/hear/events"
 STATE = {"on": False, "at": 0.0, "active": False}
+_phrases = queue.Queue()
+
+
+def _worker(on_phrase):
+    """The utterances one after another, in the order the ear made them: a thread
+    each let the second part of a split phrase into the memory before the first
+    (a book read aloud, 2026-11-25)."""
+    while True:
+        item = _phrases.get()
+        try:
+            on_phrase(item)
+        except Exception as e:
+            log(f"phrase failed: {e!r}")
 
 
 def hearing():
@@ -33,7 +47,7 @@ def listen(on_phrase):
                     ev = json.loads(line[6:])
                     kind = ev.get("type")
                     if kind == "utterance":
-                        threading.Thread(target=on_phrase, args=(ev["item"],), daemon=True).start()
+                        _phrases.put(ev["item"])
                     elif kind == "hearing":
                         STATE.update(on=bool(ev.get("on")), at=time.time())
                     elif kind == "ui" and ev.get("state") != "stt":
@@ -47,4 +61,5 @@ def listen(on_phrase):
 
 
 def start(on_phrase):
+    threading.Thread(target=_worker, args=(on_phrase,), daemon=True).start()
     threading.Thread(target=listen, args=(on_phrase,), daemon=True).start()
