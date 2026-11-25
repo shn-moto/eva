@@ -9,7 +9,9 @@ prompt: adaptive came first 0.8-0.96 s vs 1.4 s, and counted ages right.
 Thinking of a finished turn is not kept in the history (see _stored). A
 refusal is logged.
 """
+import contextlib
 import os
+import threading
 import time
 
 import anthropic
@@ -37,7 +39,11 @@ AGENT_EFFORT = profile.tune("llm.agent_effort", "medium")
 LIGHT_TOOLS = profile.tune("llm.light_tools", {"music_play", "music_control", "screen", "panel", "avatar", "say_at_home", "send_message",
                "eva_spend", "photo_indexing", "show_html", "show_feed", "weather",
                "home_api_index", "home_api_get",
-               "file_print", "print_photos", "print_text", "print_url", "printer_status", "print_cancel"})
+               "file_print", "print_photos", "print_text", "print_url", "printer_status", "print_cancel",
+               "print_page", "print_screen",
+               # drawing: she sees the picture and says one phrase - Sonnet is enough; after
+               # picture_draw Opus came in with a cold cache and spent the day's limit (2026-11-25)
+               "picture_draw", "picture_redraw", "picture_save"})
 
 
 def _escalate(message, params):
@@ -321,10 +327,18 @@ def stream(system, history, person, on_chunk, on_show=None, on_tool=None, max_to
     keeping the room in silence while the tool and the next round run.
     record: gets the tool rounds (calls and results) for the history.
     -> {"final": Message|None, "cut": bool, "first": seconds to first text}"""
-    msgs, t0, first = prepare(history, person), time.time(), None
+    msgs, t0 = prepare(history, person), time.time()
     params = _params(system, person, max_tokens)
+    # the limit is checked when a turn begins, not between its rounds: a turn
+    # cut after its tool ran printed a photo and never said a word (2026-11-25)
+    cost.check()
+    with _turn():
+        return _stream(msgs, params, person, on_chunk, on_show, on_tool, trace, record, t0)
+
+
+def _stream(msgs, params, person, on_chunk, on_show, on_tool, trace, record, t0):
+    first = None
     for _ in range(ROUNDS):
-        cost.check()
         with CLIENT.messages.stream(messages=msgs, **params) as s:
             for ev in s:
                 if ev.type == "content_block_start" and ev.content_block.type in ("tool_use", "server_tool_use"):
@@ -363,16 +377,37 @@ def stream(system, history, person, on_chunk, on_show=None, on_tool=None, max_to
     return {"final": final, "cut": False, "first": first}
 
 
+ACTIVE = [0]          # turns being answered now: a deploy waits for 0 (brain /health "busy")
+_ACTIVE_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _turn():
+    with _ACTIVE_LOCK:
+        ACTIVE[0] += 1
+    try:
+        yield
+    finally:
+        with _ACTIVE_LOCK:
+            ACTIVE[0] -= 1
+
+
 def final_text(message):
     return "".join(b.text for b in message.content if b.type == "text").strip()
 
 
 def complete(system, history, person, on_show=None, max_tokens=2048, trace=None, record=None):
     """The whole answer as text (text channels)."""
-    msgs, parts = prepare(history, person), []
+    msgs = prepare(history, person)
     params = _params(system, person, max_tokens)          # Sonnet; Opus only when there is data to weigh
+    cost.check()                                          # at the start of a turn only (see stream)
+    with _turn():
+        return _complete(msgs, params, person, on_show, trace, record)
+
+
+def _complete(msgs, params, person, on_show, trace, record):
+    parts = []
     for _ in range(ROUNDS):
-        cost.check()
         r = CLIENT.messages.create(messages=msgs, **params)
         usd = cost.add(params["model"], r.usage, "chat")
         log(f"cost {params['model'].replace('claude-', '')} ${usd:.4f}: read {r.usage.cache_read_input_tokens} "

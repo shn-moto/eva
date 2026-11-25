@@ -10,6 +10,8 @@ The brain keeps what is on screen (so «дальше», «открой трет�
 presentation) and sends the page a ready-to-draw "view" event; the page only
 draws it, with the face in a corner. Images come through ui_server (/img, /face).
 """
+import json
+import os
 import threading
 import time
 
@@ -22,6 +24,33 @@ IDLE_CLOSE = profile.tune("screen.idle_close", 180)             # s without a wo
 
 _lock = threading.Lock()
 state = {"p": None, "page": 0, "open": None, "touched": 0.0}
+# what is on the TV survives a restart of the brain: the TV keeps showing it, and
+# «распечатай это» after a restart printed an old photo instead (2026-11-25)
+STATE_FILE = os.environ.get("EVA_SCREEN_STATE", "/var/lib/eva/screen.json")
+
+
+def _save():
+    try:
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+        os.replace(tmp, STATE_FILE)
+    except OSError as e:
+        log(f"screen: state not saved: {e}")
+
+
+def _restore():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            s = json.load(f)
+    except (OSError, ValueError):
+        return
+    if s.get("p") and time.time() - s.get("touched", 0) < IDLE_CLOSE:
+        state.update(s)
+        log(f"screen: restored {s['p'].get('kind')} after a restart")
+
+
+_restore()
 
 
 def present(p):
@@ -72,6 +101,7 @@ def music_closed():
 
 
 def _send():
+    _save()
     p, items = state["p"], _items()
     if p is None:
         _back()
@@ -103,6 +133,15 @@ def _send():
     else:
         ui({"type": "view", "kind": "photos", "title": p.get("title", ""), "items": grid,
             "page": page + 1, "pages": pages, "total": len(items)})
+
+
+def redraw():
+    """At the brain's start: the restored view again, or the face."""
+    with _lock:
+        if state["p"] is None:
+            ui({"type": "view", "kind": "close"})
+        else:
+            _send()
 
 
 def item(n=None):

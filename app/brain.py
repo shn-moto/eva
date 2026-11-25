@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -52,7 +53,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            return self._json(200, {"ok": True, "model": llm.MODEL})
+            # busy: answering, a tool (a picture) running, or speaking - deploy/linux.sh waits for it
+            busy = llm.ACTIVE[0] > 0 or dialog.VOICE.busy_until > time.time()
+            return self._json(200, {"ok": True, "model": llm.MODEL, "busy": busy})
         self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -116,7 +119,7 @@ if __name__ == "__main__":
     if os.environ.get("EVA_HEAR_EVENTS"):
         hub_ear.start(dialog.on_phrase)
     music._flag(False)
-    speech.ui({"type": "view", "kind": "close"})
+    screen.redraw()                    # what was on the TV before a restart (screen.json), else the face
     # the music goes down when she is called by name, answers or talks
     music.PLAYER.busy = dialog.music_down
     # the status bar on the TV: the numbers after every Claude call, and now

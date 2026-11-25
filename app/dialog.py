@@ -331,6 +331,14 @@ def local(text, person, r):
             reply = None
         elif intent == "time":
             reply = f"Сейчас {ru_now()}."
+        elif intent == "print_screen":
+            # done here, without Claude: printing is not a "smart answer" and works
+            # past the day's limit too (2026-11-25)
+            from importlib import import_module
+            if not person.may("screen"):
+                raise PermissionError("screen")
+            out = import_module("skills.print").print_screen({}, person)
+            reply = "Печатаю." if out.startswith("Отправила") else out
     except Exception as e:
         log(f"local {intent} failed: {e} - to Claude")
         answer(text, person)

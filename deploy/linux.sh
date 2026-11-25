@@ -81,6 +81,11 @@ router)
 esac
 
 echo "deploying $svc at $short ($(git log -1 --format=%s "$sha"))"
+if [ "$svc" = brain ]; then
+    # never in the middle of her answer: a restart lost a drawn picture and the turn
+    # with it, and the next «распечатай» printed an old photo (2026-11-25)
+    "${SSH[@]}" 'for i in $(seq 90); do curl -sf localhost:8081/health | grep -q "\"busy\": true" || exit 0; sleep 2; done; echo "brain still busy after 3 min - deploying anyway"'
+fi
 git archive "$sha" "$src" | "${SSH[@]}" "rm -rf ~/eva-src/$svc && mkdir -p ~/eva-src/$svc && tar -x -C ~/eva-src/$svc --strip-components=$(echo "$src" | tr -cd / | wc -c | awk '{print $1+1}')"
 "${SSH[@]}" "cd ~/eva-src/$svc && echo $sha > DEPLOYED && docker build -q -f ${dockerfile:-Dockerfile} -t $image:$short -t $image:latest . >/dev/null \
 && docker rm -f $name >/dev/null 2>&1; docker run -d --name $name --restart unless-stopped $run $image:$short $cmd >/dev/null \
