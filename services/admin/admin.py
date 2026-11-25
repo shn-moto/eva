@@ -503,8 +503,18 @@ async def correct(request: Request):
     speaker = (b.get("speaker") or "").strip() or None
     if not text:
         raise HTTPException(400, "empty text: delete the phrase instead")
+    taught = None
     if b.get("id"):
         uid = int(b["id"])
+        if speaker == "-":
+            # «-»: not who she said, somebody unknown - the hub gives the voice a
+            # stranger's name (its guest group's number, or a new one) and learns it
+            with db() as c:
+                r0 = c.execute("SELECT speaker, speaker_heard, audio FROM utterances WHERE id = %s", (uid,)).fetchone()
+            if not r0 or not r0[2]:
+                raise HTTPException(400, "no sound to tell the voice by")
+            taught = _teach_voice(uid, "-", r0[1] or r0[0], r0[2])
+            speaker = (taught or {}).get("profile") or "Неизвестный"
         with db() as c:
             with c.transaction():
                 r = c.execute("SELECT text, speaker, text_heard, speaker_heard, audio FROM utterances WHERE id = %s",
@@ -524,8 +534,10 @@ async def correct(request: Request):
                 _forget(c, uid, drop=False)
         base, frag = _clip(audio)
         _mark_clip(base, text, speaker, heard, frag)
-        out = {"ok": True}
-        if speaker and speaker != old_speaker and audio:
+        out = {"ok": True, "speaker": speaker}
+        if taught is not None:
+            out["voice"] = taught
+        elif speaker and speaker != old_speaker and audio:
             out["voice"] = _teach_voice(uid, speaker, heard_speaker or old_speaker, audio)
         if speaker and STRANGER.match(speaker):
             # somebody outside the family: the voice is learnt under that name (above),
@@ -546,9 +558,14 @@ async def correct(request: Request):
             heard = json.load(open(p, encoding="utf-8")).get("text")
         except (OSError, ValueError):
             pass
+    if speaker == "-":
+        taught = _teach_voice(None, "-", None, base)
+        speaker = (taught or {}).get("profile") or "Неизвестный"
     _mark_clip(base, text, speaker, heard)
-    out = {"ok": True}
-    if speaker and STRANGER.match(speaker):
+    out = {"ok": True, "speaker": speaker}
+    if taught is not None:
+        out["voice"] = taught
+    elif speaker and STRANGER.match(speaker):
         # a stranger named: the voice learns it (not taken for family again), the memory does not
         out["voice"] = _teach_voice(None, speaker, None, base)
     elif speaker:

@@ -483,6 +483,8 @@ class VoiceBase:
         «запомни мой голос»: her voice is learnt from the phrases marked as hers.
         -> (profile, samples, merged clusters), or None for a guest."""
         e = _unit(emb).round(6).tolist()
+        if name.strip() == "-":
+            name = self.stranger_name(e)      # «-»: not who she said, somebody unknown
         with self.lock:
             prof = self._profile_for(name)
             if heard:
@@ -496,6 +498,20 @@ class VoiceBase:
                 return None                   # a guest without a name to learn: only the wrong copies went
             return self._enroll(prof, [e], "correction", trusted=True,
                                 meta=[{"audio": audio, "utterance_id": utterance_id}])
+
+    def stranger_name(self, emb):
+        """«-» on the admin page: an unknown voice, not the one she said. Its guest
+        group, if the voice is one (it becomes a lasting «Неизвестный N» of the same
+        number), else the next free number."""
+        g, _ = self.guest_of(emb)
+        if g and g.split("-")[-1].isdigit():
+            return f"Неизвестный {g.split('-')[-1]}"
+        with self.lock:
+            nums = [int(k.split("-")[-1]) for k in self.clusters if k.split("-")[-1].isdigit()]
+            nums += [int(m.group(1)) for m in (re.search(r"(\d+)\s*$", k) for k in self.profiles if is_stranger(k)) if m]
+        n = max(nums + [self.next_guest - 1, 0]) + 1
+        self.next_guest = n + 1
+        return f"Неизвестный {n}"
 
     # --- for the ear (its split check, till it moves here too) ---
     def export(self):
