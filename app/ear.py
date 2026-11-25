@@ -230,6 +230,11 @@ def ui(state, text=None):
     threading.Thread(target=post, daemon=True).start()
 
 
+# ---- to the hub ----
+_out = queue.Queue()
+SEQ = [0]
+
+
 def send(seg, raw7, meta):
     """A fragment to the hub, in order (one sender). seg: float mono, raw7:
     samples x 7 float or None. A fragment is tried again while the hub comes
