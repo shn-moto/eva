@@ -317,6 +317,81 @@ class VoiceBase:
             self._save_guest(g)
             return g, 0.0, False
 
+    # --- many prints at once (a rescan): numpy, no Python loop over prints ---
+    def store_print(self, audio, emb, dur):
+        """A phrase's voice print, kept (voice_clip_prints): computed once, read by every rescan."""
+        self._exec("INSERT INTO voice_clip_prints (audio, dur, emb) VALUES (%s,%s,%s) ON CONFLICT (audio)"
+                   " DO UPDATE SET dur = EXCLUDED.dur, emb = EXCLUDED.emb",
+                   (audio, float(dur or 0), [float(x) for x in emb]))
+
+    @staticmethod
+    def _rows(embs):
+        E = np.asarray(embs, dtype=np.float32).reshape(len(embs), -1)
+        return E / (np.linalg.norm(E, axis=1, keepdims=True) + 1e-9)
+
+    def _best_per(self, E, groups, skip_same=None, chunk=4000):
+        """E (n x 192), groups {label: [prints]} -> (labels, B: n x labels, the best similarity in each)."""
+        names, P, lab = [], [], []
+        for k, v in groups.items():
+            if v:
+                names.append(k)
+                P.extend(v)
+                lab.extend([len(names) - 1] * len(v))
+        if not names:
+            return names, np.full((len(E), 0), -1.0, np.float32)
+        P, lab = np.asarray(P, dtype=np.float32), np.asarray(lab)
+        B = np.full((len(E), len(names)), -1.0, np.float32)
+        for i in range(0, len(E), chunk):
+            Sm = E[i:i + chunk] @ P.T
+            if skip_same:
+                Sm[Sm >= skip_same] = -1.0
+            for k in range(len(names)):
+                B[i:i + chunk, k] = Sm[:, lab == k].max(1)
+        return names, B
+
+    def identify_many(self, embs, durs, skip_same=None):
+        """identify(learn=False) for many prints: [(label, sim, known)], the same rules."""
+        if not len(embs):
+            return []
+        E = self._rows(embs)
+        with self.lock:
+            voices = self._voices()
+        names, B = self._best_per(E, voices, skip_same)
+        out = []
+        for i in range(len(E)):
+            if not names:
+                out.append(("unknown", 0.0, False))
+                continue
+            order = np.argsort(-B[i])
+            name, sim = names[order[0]], float(B[i, order[0]])
+            second = float(B[i, order[1]]) if len(names) > 1 else -1.0
+            if (durs[i] or 0) < SHORT_SEC and not (sim >= SHORT_MIN and sim - second >= LOW_MARGIN):
+                out.append(("unknown", round(sim, 3), False))
+            elif sim >= LOW_THRESHOLD and sim - second >= (ID_MARGIN if sim >= THRESHOLD else LOW_MARGIN):
+                out.append((name, round(sim, 3), self.family(name)))
+            else:
+                out.append(("unknown", round(sim, 3), False))
+        return out
+
+    def guests_of(self, embs):
+        """guest_of() for many prints: [(group or None, sim)]."""
+        if not len(embs):
+            return []
+        with self.lock:
+            groups = {k: v["embs"] for k, v in self.clusters.items()}
+        names, B = self._best_per(self._rows(embs), groups)
+        if not names:
+            return [(None, 0.0)] * len(embs)
+        k = B.argmax(1)
+        return [(names[j], round(float(B[i, j]), 3)) if B[i, j] >= CLUSTER_MATCH else (None, round(float(B[i, j]), 3))
+                for i, j in enumerate(k)]
+
+    def self_sims(self, embs):
+        """Likeness to her own voice for many prints (her echo)."""
+        if not len(embs) or not self.self_:
+            return [0.0] * len(embs)
+        return list((self._rows(embs) @ np.asarray(self.self_, dtype=np.float32).T).max(1))
+
     def guest_of(self, emb):
         """The guest group a voice belongs to (no new group made): label or None."""
         e = _unit(emb)

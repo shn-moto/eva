@@ -433,6 +433,15 @@ class Hearing:
             meta["speaker"] = {"label": label, "sim": sim, "known": known}
             if not self.dry and meta.get("audio"):
                 note_who(meta["audio"], meta.get("audio_span"), label, sim)
+                # the phrase's print, whole, kept once: a rescan reads it instead of the sound
+                try:
+                    full = v
+                    if seg is not None and len(seg) > SR * (SPK_SECONDS + 0.5):
+                        p0 = float(np.abs(seg).max()) or 1.0
+                        full = S().spk_emb((seg / p0 * 0.9).astype(np.float32)).round(5).tolist()
+                    vb.store_print(memory_key(meta["audio"], meta.get("audio_span")), full, meta.get("dur", 0))
+                except Exception as e:
+                    log("print not kept:", e)
         log(f"#{meta.get('seq')} {'window' if window else 'phrase'} {meta['dur']:.1f}s playback {meta.get('playback', 0):.0%} "
             f"residual {meta.get('residual')} stt {meta.get('stt_ms')}ms self {meta.get('self_sim')} "
             f"fam {meta.get('fam_sim')} {(meta.get('speaker') or {}).get('label', '')}: {text!r}")
@@ -448,6 +457,15 @@ class Hearing:
             self.utterance(meta)
         elif not window:
             self.ui("none")
+
+
+def memory_key(audio, span):
+    """The clip as the memory names it (app/memory.py write): <day>/<time>[#t=from[,to]]."""
+    if span and span[1]:
+        return audio + f"#t={span[0]:g},{span[1]:g}"
+    if span and span[0]:
+        return audio + f"#t={span[0]:g}"
+    return audio
 
 
 def note_who(audio, span, label, sim):

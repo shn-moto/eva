@@ -7,9 +7,11 @@ at them and the admin page applies the ones he keeps.
 - a heard-only clip (a voice she did not know then, so not in the memory) that
   is now surely a family member's.
 
-Same base and thresholds as the live recognition (voices.identify, learn=False:
-nothing is learnt, no guest clusters). The print is made of the whole phrase
-(or its part), not of its first 3 s as live.
+Same base and thresholds as the live recognition (voices.identify_many: no
+learning, no guest groups). Each phrase's print is computed once - when the
+hub hears it (hear.py), or here the first time it is missing - and kept in
+voice_clip_prints: a rescan is then matrix arithmetic, not audio work (it took
+a minute for 3 days and would have taken hours for a year, 2026-11-25).
 """
 import json
 import os
@@ -19,7 +21,8 @@ import time
 SAME = 0.98          # a print this like the phrase is the phrase itself
 SELF_MAX = 0.4       # this like Eva's own voice: her echo, not a person (the live echo rule: 0.45)
 HEARD_MIN = 0.5      # a clip to bring into the memory: a sure match only, not the weaker "another room" one
-JOB = {"state": "idle", "done": 0, "total": 0, "proposals": [], "started": None, "error": None}
+JOB = {"state": "idle", "done": 0, "total": 0, "proposals": [], "started": None, "error": None, "secs": None}
+LABEL = {"state": "idle", "done": 0, "total": 0, "labelled": 0}
 _lock = threading.Lock()
 
 
@@ -32,53 +35,9 @@ def start(days):
     with _lock:
         if JOB["state"] == "running":
             return status()
-        JOB.update(state="running", done=0, total=0, proposals=[], started=time.time(), error=None)
+        JOB.update(state="running", done=0, total=0, proposals=[], started=time.time(), error=None, secs=None)
     threading.Thread(target=_run, args=(int(days),), daemon=True).start()
     return status()
-
-
-LABEL = {"state": "idle", "done": 0, "total": 0, "labelled": 0}
-
-
-def label_heard(days=30):
-    """Once, for the clips heard before their group was kept with them: the
-    guest group each heard-only clip belongs to (existing groups only)."""
-    if LABEL["state"] == "running":
-        return dict(LABEL)
-    LABEL.update(state="running", done=0, total=0, labelled=0)
-
-    def run():
-        import hear
-        st, vb = S(), S().VOICES
-        todo = []
-        for day in sorted(os.listdir(st.LOG_DIR))[-days - 1:]:
-            d = os.path.join(st.LOG_DIR, day)
-            for fn in sorted(os.listdir(d)):
-                if not fn.endswith(".json") or "-raw" in fn:
-                    continue
-                try:
-                    info = json.load(open(os.path.join(d, fn), encoding="utf-8"))
-                except (OSError, ValueError):
-                    continue
-                if (info.get("text") or "").strip() and not info.get("who") and not info.get("record"):
-                    todo.append(f"{day}/{fn[:-5]}")
-        LABEL["total"] = len(todo)
-        for base in todo:
-            e = st.clip_emb(base)
-            LABEL["done"] += 1
-            if "error" in e:
-                continue
-            label, sim, known = vb.identify(e["emb"], e["dur"], learn=False, skip_same=None)
-            if not known:
-                g, gsim = vb.guest_of(e["emb"])
-                if g:
-                    label, sim = g, gsim
-            if label and label != "unknown":
-                hear.note_who(base, None, label, sim)
-                LABEL["labelled"] += 1
-        LABEL["state"] = "done"
-    threading.Thread(target=run, daemon=True).start()
-    return dict(LABEL)
 
 
 def status():
@@ -89,22 +48,14 @@ def status():
 def _run(days):
     try:
         _scan(days)
-        JOB["state"] = "done"
+        JOB.update(state="done", secs=round(time.time() - JOB["started"], 1))
     except Exception as e:
         JOB.update(state="error", error=repr(e))
 
 
-def _scan(days):
-    import psycopg
-    st, vb = S(), S().VOICES
-    with psycopg.connect(st.VOICE_DSN, connect_timeout=5) as c:
-        rows = c.execute(
-            "SELECT id, ts, speaker, audio, text FROM utterances WHERE role = 'user' AND audio IS NOT NULL"
-            " AND corrected_at IS NULL AND ts > now() - make_interval(days => %s) ORDER BY ts", (days,)).fetchall()
-        linked = {a.split("#")[0] for (a,) in c.execute(
-            "SELECT audio FROM utterances WHERE audio IS NOT NULL AND ts > now() - make_interval(days => %s)",
-            (days + 1,)).fetchall()}
-    heard = []
+def _heard_clips(days, linked):
+    """The STT log's clips of these days that no memory row points to."""
+    st, out = S(), []
     for day in sorted(os.listdir(st.LOG_DIR))[-days - 1:]:
         d = os.path.join(st.LOG_DIR, day)
         for fn in sorted(os.listdir(d)):
@@ -117,30 +68,94 @@ def _scan(days):
                 info = json.load(open(os.path.join(d, fn), encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if (info.get("text") or "").strip() and not info.get("joined_into") and not info.get("correct") \
-                    and not info.get("record"):
-                heard.append((base, info))
-    JOB["total"] = len(rows) + len(heard)
-    for uid, ts, speaker, audio, text in rows:
-        e = st.clip_emb(audio)
-        JOB["done"] += 1
-        if "error" in e:
+            if (info.get("text") or "").strip() and not info.get("joined_into") and not info.get("record"):
+                out.append((base, info))
+    return out
+
+
+def prints(keys, progress=None):
+    """{audio key: (emb, dur)} from voice_clip_prints; the missing ones computed
+    from the sound once and kept."""
+    import psycopg
+    st, vb = S(), S().VOICES
+    have = {}
+    with psycopg.connect(st.VOICE_DSN, connect_timeout=5) as c:
+        for i in range(0, len(keys), 5000):
+            for a, dur, emb in c.execute("SELECT audio, dur, emb FROM voice_clip_prints WHERE audio = ANY(%s)",
+                                         (keys[i:i + 5000],)):
+                have[a] = (emb, dur or 0.0)
+    for k in keys:
+        if k in have:
             continue
-        # its own print (learnt from this very phrase) does not count: a match of 1.0 proves nothing
-        label, sim, known = vb.identify(e["emb"], e["dur"], learn=False, skip_same=SAME)
+        e = st.clip_emb(k)
+        if progress:
+            progress()
+        if "error" not in e:
+            have[k] = (e["emb"], e["dur"])
+            vb.store_print(k, e["emb"], e["dur"])
+    return have
+
+
+def _scan(days):
+    import psycopg
+    st, vb = S(), S().VOICES
+    with psycopg.connect(st.VOICE_DSN, connect_timeout=5) as c:
+        rows = c.execute(
+            "SELECT id, ts, speaker, audio, text FROM utterances WHERE role = 'user' AND audio IS NOT NULL"
+            " AND corrected_at IS NULL AND ts > now() - make_interval(days => %s) ORDER BY ts", (days,)).fetchall()
+        linked = {a.split("#")[0] for (a,) in c.execute(
+            "SELECT audio FROM utterances WHERE audio IS NOT NULL AND ts > now() - make_interval(days => %s)",
+            (days + 1,)).fetchall()}
+    heard = [(b, i) for b, i in _heard_clips(days, linked) if not i.get("correct")]
+    keys = [r[3] for r in rows] + [b for b, _ in heard]
+    JOB["total"] = len(keys)
+
+    def tick():
+        JOB["done"] += 1
+    have = prints(keys, tick)
+    JOB["done"] = JOB["total"]
+    # one matrix pass over all of them
+    rk = [r for r in rows if r[3] in have]
+    hk = [(b, i) for b, i in heard if b in have]
+    res = vb.identify_many([have[r[3]][0] for r in rk] + [have[b][0] for b, _ in hk],
+                           [have[r[3]][1] for r in rk] + [have[b][1] for b, _ in hk], skip_same=SAME)
+    selfs = vb.self_sims([have[b][0] for b, _ in hk])
+    for (uid, ts, speaker, audio, text), (label, sim, known) in zip(rk, res[:len(rk)]):
         if known and label != speaker:
             JOB["proposals"].append({"kind": "retag", "id": uid, "ts": ts.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
                                      "old": speaker, "new": label, "sim": sim, "text": text, "audio": audio})
-    for base, info in heard:
-        e = st.clip_emb(base)
-        JOB["done"] += 1
-        if "error" in e:
-            continue
-        # her own voice (her echo, «сейчас посмотрю») is not a family member's
-        if vb.self_sim(e["emb"]) >= SELF_MAX:
-            continue
-        label, sim, known = vb.identify(e["emb"], e["dur"], learn=False, skip_same=SAME)
-        if known and sim >= HEARD_MIN:
+    for ((base, info), (label, sim, known)), ss in zip(zip(hk, res[len(rk):]), selfs):
+        if known and sim >= HEARD_MIN and ss < SELF_MAX:     # her own voice (echo) is not a family member's
             day, name = base.split("/")
             JOB["proposals"].append({"kind": "heard", "audio": base, "old": None, "new": label, "sim": sim,
                                      "ts": f"{day} {name[:2]}:{name[2:4]}:{name[4:6]}", "text": info.get("text")})
+
+
+def label_heard(days=30):
+    """The voice group of every heard-only clip with none kept yet (existing
+    groups only): the admin page shows strangers as «Неизвестный N»."""
+    if LABEL["state"] == "running":
+        return dict(LABEL)
+    LABEL.update(state="running", done=0, total=0, labelled=0)
+
+    def run():
+        import hear
+        vb = S().VOICES
+        todo = [b for b, i in _heard_clips(days, set()) if not i.get("who")]
+        LABEL["total"] = len(todo)
+
+        def tick():
+            LABEL["done"] += 1
+        have = prints(todo, tick)
+        keys = [b for b in todo if b in have]
+        res = vb.identify_many([have[b][0] for b in keys], [have[b][1] for b in keys])
+        guests = vb.guests_of([have[b][0] for b in keys])
+        for b, (label, sim, known), (g, gsim) in zip(keys, res, guests):
+            if not known and g:
+                label, sim = g, gsim
+            if label and label != "unknown":
+                hear.note_who(b, None, label, sim)
+                LABEL["labelled"] += 1
+        LABEL.update(state="done", done=LABEL["total"])
+    threading.Thread(target=run, daemon=True).start()
+    return dict(LABEL)
