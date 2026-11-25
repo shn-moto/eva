@@ -23,7 +23,7 @@ import wave
 import numpy as np
 from core import profile
 
-SECRETS = "/etc/eva/secrets.env"
+SECRETS = os.environ.get("EVA_SECRETS", "/etc/eva/secrets.env")
 CACHE = "/var/cache/eva/tts"
 STATE = "/var/lib/eva/lipsync.json"           # {"latency_ms": ...} from --calibrate
 UI = "http://127.0.0.1:8080/api/event"

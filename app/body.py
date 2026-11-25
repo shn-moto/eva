@@ -3,7 +3,7 @@
 the ring and the keys are (docs/BRAIN-PLAN.md, stage 1). The brain - wherever
 it runs - sends commands here and listens to the events.
 
-    POST /speech?gen=&id=&text=   body: wav   her sentence: queued, lips, played in order
+    POST /speech {"gen", "id", "text", "frames", "wav"}   her sentence (base64 wav + its lips): played in order
     POST /speech/stop {"gen"}      cut her now; queued sentences of older replies go
     POST /music {"cmd"}            a command to mpg123 (remote mode); its lines come as events
     POST /flag {"name": "music", "on"}   /run/eva/music for the ear (listen in windows)
@@ -15,6 +15,7 @@ it runs - sends commands here and listens to the events.
 Timestamps in the events are this device's clock - the ear's clock, so "was
 she speaking when this phrase began" compares like with like.
 """
+import base64
 import http.server
 import ipaddress
 import json
@@ -106,14 +107,14 @@ class Speaker:
         flag(SPEAKING_FLAG, False)
         threading.Thread(target=self._player, daemon=True).start()
 
-    def put(self, gen, sid, text, wav_bytes):
+    def put(self, gen, sid, text, wav_bytes, frames):
+        """frames: the lips (visemes per 20 ms), made by the brain from this sound."""
         if gen < self.min_gen:
             return False
         path = os.path.join(WAV_DIR, f"{sid}.wav")
         with open(path, "wb") as f:
             f.write(wav_bytes)
-        track = say.visemes(path)          # lips from the sound itself, before it plays
-        self.q.put((gen, sid, text, path, track))
+        self.q.put((gen, sid, text, path, frames))
         return True
 
     def busy(self):
@@ -366,11 +367,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n) if n else b""
         try:
-            if u.path == "/speech":
-                qs = urllib.parse.parse_qs(u.query)
-                ok = SPEAKER.put(int(qs["gen"][0]), qs["id"][0], qs.get("text", [""])[0], body)
-                return self._json(200, {"queued": ok})
             b = json.loads(body or b"{}")
+            if u.path == "/speech":
+                ok = SPEAKER.put(int(b["gen"]), str(b["id"]), b.get("text", ""), base64.b64decode(b["wav"]),
+                                 b.get("frames") or [])
+                return self._json(200, {"queued": ok})
             if u.path == "/speech/stop":
                 SPEAKER.stop(b.get("gen"))
                 return self._json(200, {"ok": True})

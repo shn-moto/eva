@@ -72,10 +72,11 @@ git archive "$sha" "$ROOTFS" | "${SSH[@]}" "tar -x -C / --strip-components=3 --n
 
 # restart what the change touches
 units=()
-echo "$changed" | grep -q "/opt/eva/app/" && units+=(eva-brain eva-ear eva-telegram eva-logship)
+# the brain and Telegram run on shn-linux (deploy/linux.sh brain); here only the ear,
+# the body (below) and the log shipper
+echo "$changed" | grep -q "/opt/eva/app/" && units+=(eva-ear eva-logship)
 # the body only when its own code changed: a restart of it cuts her voice and the music
 echo "$changed" | grep -q "/opt/eva/app/body.py\|/opt/eva/app/say.py\|/opt/eva/app/core/util.py\|/opt/eva/app/core/profile.py" && units+=(eva-body)
-echo "$changed" | grep -q "/opt/eva/eva/" && units+=(eva-brain eva-telegram)
 echo "$changed" | grep -q "/opt/eva/ui/spike/ui_server.py" && units+=(eva-ui-http)
 echo "$changed $rootfs_changed" | grep -q "/opt/eva/ui/spike/\|eva-ui" && ui_reload=1 || ui_reload=0
 echo "$rootfs_changed" | grep -q "station-mics-init\|station-audio-init" && echo "note: audio init changed - applied at the next boot"
@@ -87,4 +88,4 @@ fi
 # the TV page: reload without blocking (eva-ui waits for HDMI and never "starts" with the TV off)
 [ "$ui_reload" = 1 ] && "${SSH[@]}" "systemctl restart --no-block eva-ui" && echo "TV page reloading"
 sleep 5
-"${SSH[@]}" "systemctl is-active eva-body eva-brain eva-ear eva-telegram eva-logship eva-ui-http | paste -sd' '; cat /opt/eva/DEPLOYED"
+"${SSH[@]}" "systemctl is-active eva-body eva-ear eva-logship eva-ui-http | paste -sd' '; cat /opt/eva/DEPLOYED"

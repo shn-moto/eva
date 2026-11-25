@@ -17,7 +17,7 @@ import numpy as np
 import memory
 import music
 import voices
-from core import cost, identity, llm, profile, router, screen
+from core import cost, hub_ear, identity, llm, profile, router, screen
 from core.prompt import SILENT, system
 from core.speech import Voice, ui
 from core.util import log, ru_now
@@ -628,7 +628,7 @@ def _pending_watch():
         time.sleep(0.1)
         with PENDING_LOCK:
             now = time.time()
-            heard = os.path.exists(HEARING_FLAG) and now - PENDING["since"] < GRACE_MAX
+            heard = (hub_ear.hearing() if hub_ear.STATE["active"] else os.path.exists(HEARING_FLAG))                 and now - PENDING["since"] < GRACE_MAX
             if now < PENDING["until"] or heard:
                 continue
             text, person, note = PENDING["text"], PENDING["person"], PENDING["note"]

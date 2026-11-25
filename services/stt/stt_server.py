@@ -811,6 +811,8 @@ async def hear_fragment(request: Request):
         h = _hear.Hearing("replay", dry=True)
         await run_in_threadpool(h.fragment, a, mics, meta)
         return JSONResponse({"events": h.out})
+    if not meta.get("window"):
+        _hear.EVENTS.publish({"type": "hearing", "on": False, "source": "station"})   # the phrase ended
     threading.Thread(target=_hear.STATION.fragment, args=(a, mics, meta), daemon=True).start()
     return JSONResponse({"ok": True}, status_code=202)
 
@@ -821,6 +823,8 @@ async def hear_start(request: Request):
     b = await request.json()
     _hear.STATION.clock(b.get("now"))
     _hear.STATION.started(float(b["t"]))
+    # someone is talking: the brain waits with a request until they are done
+    _hear.EVENTS.publish({"type": "hearing", "on": True, "source": "station"})
     return {"ok": True}
 
 

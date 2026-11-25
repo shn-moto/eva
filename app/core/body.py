@@ -2,6 +2,7 @@
 events in. The brain may run anywhere (docs/BRAIN-PLAN.md); the speaker, the
 screen, the ring and the keys are there.
 """
+import base64
 import json
 import queue
 import os
@@ -60,11 +61,12 @@ def ui(event):
 threading.Thread(target=_ui_sender, daemon=True).start()
 
 
-def speech(gen, sid, text, wav_path):
+def speech(gen, sid, text, wav_path, frames):
+    """A sentence to play: the sound and its lips (visemes), both made here."""
     with open(wav_path, "rb") as f:
         data = f.read()
-    q = urllib.parse.urlencode({"gen": gen, "id": sid, "text": text})
-    return post("/speech?" + q, data=data, timeout=10)
+    return post("/speech", {"gen": gen, "id": sid, "text": text, "frames": frames,
+                            "wav": base64.b64encode(data).decode()}, timeout=10)
 
 
 def listen():

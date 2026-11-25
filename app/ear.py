@@ -15,8 +15,8 @@ allowed length is PLAYBACK_WINDOW, so a «стоп» over her is heard.
 Each fragment (mono + the 7 raw mics + its timeline and the canceller's
 measures) goes to shn-linux (services/stt/hear.py), which decides everything
 else - echo, text, direction, who, where one person ends and another begins,
-which fragments are one sentence - and sends the utterances back on an event
-stream; they go to the brain (127.0.0.1:8081) as before.
+which fragments are one sentence - and hands the utterances to the brain,
+which runs there too (docs/BRAIN-PLAN.md).
 """
 import collections
 import json
@@ -59,7 +59,6 @@ def unpack(raw):
     mics = np.stack([half[h][:, k] for k, h in MIC_SLOTS], axis=1).astype(np.float64) / 32768.0
     return mics, half[REF_SLOT[1]][:, REF_SLOT[0]].astype(np.float64) / 32768.0
 HUB = profile.service("stt").rsplit("/", 1)[0] + "/hear"
-BRAIN_URL = os.environ.get("EVA_BRAIN_URL", "http://127.0.0.1:8081/utterance")
 UI_URL = "http://127.0.0.1:8080/api/event"    # the screen (and the LED ring): "I hear you"
 VAD_MODEL = "/opt/eva/models/silero_vad.onnx"
 GAIN = profile.tune("ear.ref_gain", 32.0)      # the reference tap (PGA 0.5 dB)
@@ -231,23 +230,6 @@ def ui(state, text=None):
     threading.Thread(target=post, daemon=True).start()
 
 
-def send_brain(item):
-    item = {k: v for k, v in item.items() if not k.startswith("_")}     # "_mics": not for the brain
-    req = urllib.request.Request(BRAIN_URL, data=json.dumps(item, ensure_ascii=False).encode(),
-                                 headers={"Content-Type": "application/json"})
-    try:
-        urllib.request.urlopen(req, timeout=3).read()
-    except OSError as e:
-        log("brain not reachable:", e)
-
-
-
-
-# ---- to the hub and back ----
-_out = queue.Queue()
-SEQ = [0]
-
-
 def send(seg, raw7, meta):
     """A fragment to the hub, in order (one sender). seg: float mono, raw7:
     samples x 7 float or None. A fragment is tried again while the hub comes
@@ -289,33 +271,9 @@ def sender():
                 time.sleep(w)
 
 
-def events():
-    """The hub's decisions: utterances -> the brain, hearing states -> the screen."""
-    while True:
-        try:
-            with urllib.request.urlopen(HUB + "/events", timeout=40) as r:
-                log("hub events: connected")
-                for line in r:
-                    line = line.decode("utf-8", "replace").strip()
-                    if not line.startswith("data: "):
-                        continue
-                    ev = json.loads(line[6:])
-                    if ev.get("type") == "utterance":
-                        it = ev["item"]
-                        log(f"{'window' if it.get('window') else 'phrase'} {it.get('dur')}s "
-                            f"{(it.get('speaker') or {}).get('label', '')}: {it.get('text')!r}")
-                        send_brain(it)
-                    elif ev.get("type") == "ui" and ev.get("state") != "stt":
-                        ui(ev["state"], ev.get("text"))
-        except Exception as e:
-            log("hub events:", e)
-            time.sleep(3)
-
-
 def main():
     vad, aec = Vad(), EchoCanceller(adapt_floor=1e-6)   # scaled signals: tested 21 dB steady
     threading.Thread(target=sender, daemon=True).start()
-    threading.Thread(target=events, daemon=True).start()
 
     proc = subprocess.Popen(["arecord", "-q", "-D", "hw:snddaudio0,0", "-c", "5", "-f", "S32_LE",
                              "-r", str(SR), "--period-size=256", "-t", "raw"],

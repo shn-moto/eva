@@ -102,7 +102,12 @@ class Voice:
                 continue
             sid = str(next(_ids))
             self.pending.add(sid)
-            r = body.speech(gen, sid, s, wav)
+            try:
+                frames = say.visemes(wav)          # the lips, from the sound itself
+            except Exception as e:
+                log("visemes:", e)
+                frames = []
+            r = body.speech(gen, sid, s, wav, frames)
             if not (r or {}).get("queued"):
                 self.pending.discard(sid)
 

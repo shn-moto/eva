@@ -23,7 +23,7 @@ import music  # noqa: E402
 import photolib  # noqa: E402
 import say  # noqa: E402
 import slideshow  # noqa: E402
-from core import body, cost, identity, llm, screen, skills, speech  # noqa: E402
+from core import body, cost, hub_ear, identity, llm, screen, skills, speech  # noqa: E402
 from core.speech import ui  # noqa: E402
 from core.util import log, secrets  # noqa: E402
 
@@ -49,6 +49,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         self.wfile.write(out)
+
+    def do_GET(self):
+        if self.path == "/health":
+            return self._json(200, {"ok": True, "model": llm.MODEL})
+        self._json(404, {"error": "not found"})
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -106,6 +111,10 @@ if __name__ == "__main__":
     # the TV does not keep showing the player
     body.start()
     body.post("/music", {"cmd": "STOP"})
+    # on the hub (the container) the ear's utterances come straight from the hub's
+    # ear; on the Station the ear posts them to /utterance as before
+    if os.environ.get("EVA_HEAR_EVENTS"):
+        hub_ear.start(dialog.on_phrase)
     music._flag(False)
     speech.ui({"type": "view", "kind": "close"})
     # the music goes down when she is called by name, answers or talks

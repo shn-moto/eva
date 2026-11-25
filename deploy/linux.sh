@@ -2,7 +2,7 @@
 # Deploy Eva's services on shn-linux from git - a commit that is on origin.
 # Run from Git Bash in the repo root:
 #
-#   deploy/linux.sh stt|music|router|gpu-arbiter|admin|print [ref]      # default origin/main
+#   deploy/linux.sh stt|music|router|gpu-arbiter|admin|print|brain [ref]      # default origin/main
 #
 # The source of the service is taken from the commit (git archive), built into
 # an image tagged with the commit, and the container is recreated with the run
@@ -18,7 +18,7 @@ HUB_KEY=${HUB_KEY:?set HUB_KEY in deploy/local.env}
 HUB_KEY=${HUB_KEY/#\~/$HOME}
 SSH=(ssh -i "$HUB_KEY" -o ConnectTimeout=10 "$HOST")
 
-svc=${1:?service: stt | music | router | gpu-arbiter | admin | print}
+svc=${1:?service: stt | music | router | gpu-arbiter | admin | print | brain}
 ref=${2:-origin/main}
 git fetch -q origin
 sha=$(git rev-parse --verify "$ref^{commit}")
@@ -51,6 +51,17 @@ print)
     src=services/print; image=eva-print; name=eva-print; port=8909
     run="--network host -e CUPS_SERVER=127.0.0.1:631 -e PHOTOLIB_URL=http://127.0.0.1:8000 -v /etc/localtime:/etc/localtime:ro -v \$HOME/eva-data/print-inbox:/files"
     cmd=""; health=/health ;;
+brain)
+    # Eva's brain (docs/BRAIN-PLAN.md): app/ in a container, Telegram next to it.
+    # Host network: the hub's services on 127.0.0.1, the Station's body on the LAN.
+    # ~/eva-data/brain/{data,eva,cache,secrets.env} (not in git): the state that
+    # was /var/lib/eva on the Station, the private profile, the TTS cache, secrets.
+    src=app; image=eva-brain; name=eva-brain; port=8081; dockerfile=brain.Dockerfile
+    STATION=${STATION:?set STATION in deploy/local.env}
+    run="--network host -e EVA_BODY_URL=http://${STATION#*@}:8085 -e EVA_HEAR_EVENTS=1 -e EVA_LOG_UNIT=eva-brain \
+-v /etc/localtime:/etc/localtime:ro -v \$HOME/eva-data/brain/data:/var/lib/eva -v \$HOME/eva-data/brain/eva:/opt/eva/eva:ro \
+-v \$HOME/eva-data/brain/cache:/var/cache/eva -v \$HOME/eva-data/brain/secrets.env:/etc/eva/secrets.env:ro"
+    cmd=""; health=/health ;;
 gpu-arbiter)
     # stops eva-router while photolib indexes (indexing gets the whole GPU), starts it after
     src=services/gpu-arbiter; image=eva-gpu-arbiter; name=eva-gpu-arbiter; port=8907
@@ -71,7 +82,7 @@ esac
 
 echo "deploying $svc at $short ($(git log -1 --format=%s "$sha"))"
 git archive "$sha" "$src" | "${SSH[@]}" "rm -rf ~/eva-src/$svc && mkdir -p ~/eva-src/$svc && tar -x -C ~/eva-src/$svc --strip-components=$(echo "$src" | tr -cd / | wc -c | awk '{print $1+1}')"
-"${SSH[@]}" "cd ~/eva-src/$svc && echo $sha > DEPLOYED && docker build -q -t $image:$short -t $image:latest . >/dev/null \
+"${SSH[@]}" "cd ~/eva-src/$svc && echo $sha > DEPLOYED && docker build -q -f ${dockerfile:-Dockerfile} -t $image:$short -t $image:latest . >/dev/null \
 && docker rm -f $name >/dev/null 2>&1; docker run -d --name $name --restart unless-stopped $run $image:$short $cmd >/dev/null \
 && for i in \$(seq 60); do curl -sf localhost:$port$health >/dev/null && echo $name up at $short && exit 0; sleep 2; done; echo $name NOT up; docker logs --tail 20 $name; exit 1"
 
