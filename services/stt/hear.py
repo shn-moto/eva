@@ -146,15 +146,35 @@ def cut_believed(left, right, whole):
             and rl[0][0] - _sim(left, kr, v) >= REL_LEAD and rr[0][0] - _sim(right, kl, v) >= REL_LEAD)
 
 
+# A change of place is believed only when the two parts' angles differ this much.
+# The direction distance alone (DIR_CUT 0.05) cut one person standing still:
+# of 124 direction cuts with both angles (2026-11-24/25) 75 were < 20 degrees
+# apart, 54 < 10 - one place (the test set's places spread 2-9 degrees; places
+# in the room are 30+ apart); the distance itself overlapped for true and false
+# cuts (0.05-0.26 vs 0.05-0.59). A book read aloud from one spot was cut twice
+# at 6 and 0 degrees (2026-11-25).
+DIR_AZ = float(os.environ.get("EVA_HEAR_DIR_AZ", "20"))
+
+
+def _apart(a, b):
+    return abs((a - b + 180) % 360 - 180)
+
+
+def place_changed(prev, part):
+    a, b = prev.get("az"), part.get("az")
+    return a is not None and b is not None and _apart(a, b) >= DIR_AZ
+
+
 def accepted_parts(parts):
-    """The parts with the cuts believed: a change of place always, a change of
-    voice by cut_believed. A cut not believed joins its two parts back."""
+    """The parts with the cuts believed: a change of place when the angles
+    really differ (DIR_AZ), a change of voice by cut_believed. A cut not
+    believed joins its two parts back."""
     if not parts:
         return []
     out = [dict(parts[0])]
     for p in parts[1:]:
         cut = p.get("cut") or {}
-        ok = cut.get("by") == "direction" or (
+        ok = (cut.get("by") == "direction" and place_changed(out[-1], p)) or (
             cut.get("by") == "voice" and cut_believed(out[-1]["emb"], p["emb"], cut.get("whole", 1.0)))
         if ok:
             out.append(dict(p))
