@@ -41,7 +41,8 @@ LIGHT_TOOLS = profile.tune("llm.light_tools", {"music_play", "music_control", "s
                "print_page", "print_screen",
                # drawing: she sees the picture and says one phrase - Sonnet is enough; after
                # picture_draw Opus came in with a cold cache and spent the day's limit (2026-11-25)
-               "picture_draw", "picture_redraw", "picture_save"})
+               "picture_draw", "picture_redraw", "picture_save",
+               "calendar_add", "calendar_list", "calendar_remove"})
 
 
 # Opus does not come in just because a tool brought data: Sonnet (warm cache, ~$0.01 a

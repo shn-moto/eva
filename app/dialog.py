@@ -8,6 +8,7 @@ import os
 import queue
 import random
 import re
+import sys
 import threading
 import time
 import urllib.request
@@ -301,6 +302,10 @@ def local(text, person, r):
                 reply = (f"Включаю {music.clean(t.get('title'))}"
                          + (f", {music.clean(t['artist'])}" if t.get("artist") else "") + ".")
         elif intent == "music_stop":
+            alarm = sys.modules.get("skills.calendar")
+            if alarm and alarm.ALARM["on"]:
+                h = time.localtime().tm_hour
+                reply = "Доброе утро!" if 4 <= h < 12 else "Будильник выключила."
             p.stop()
         elif intent in ("music_pause", "music_resume"):
             p.pause(intent == "music_pause")
