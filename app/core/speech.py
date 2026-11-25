@@ -19,7 +19,26 @@ _ids = itertools.count(int(time.time()))
 
 
 def ui(event):
+    if event.get("type") == "chat" and event.get("text"):
+        event = dict(event, text=say.untag(event["text"]))      # the TV shows words, not [laughs]
+    if event.get("type") == "avatar" and event.get("mode"):
+        _avatar_changed(event["mode"])
     body.ui(event)
+
+
+def _avatar_changed(mode):
+    """Her voice follows her look (say.voice_for): the new voice's short phrases
+    («секунду, посмотрю») are made ahead, so the first one after the change is not late."""
+    old = say.voice_for()
+    say.set_avatar(mode)
+    if say.voice_for() != old:
+        log(f"voice: {say.voice_for()} for the avatar {mode}")
+        try:
+            import dialog
+            fillers = list(dialog.FILLERS)
+        except Exception:
+            fillers = []
+        threading.Thread(target=lambda: [say.tts(f) for f in fillers], daemon=True).start()
 
 
 class Voice:
@@ -49,10 +68,11 @@ class Voice:
         if gen is not None and gen != self.gen:
             return False
         sentence = NOT_SPOKEN.sub("", sentence).strip()     # emoji: nothing to say aloud
-        if not re.search(r"\w", sentence):
+        if not re.search(r"\w", say.untag(sentence)):
             return False
         self.busy_until = time.time() + 2
-        self.recent = [(t, s) for t, s in self.recent if time.time() - t < 60] + [(time.time(), sentence)]
+        # her echo is matched by the words she says, not by the emotion tags she performs
+        self.recent = [(t, s) for t, s in self.recent if time.time() - t < 60] + [(time.time(), say.untag(sentence))]
         self.text_q.put((self.gen, sentence))
         return True
 

@@ -14,6 +14,7 @@ timeline. The speaker's own delay (ALSA buffer + device start) is measured by
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -42,11 +43,77 @@ def env():
     return e
 
 
-def tts(text):
-    """mp3 from xAI (voice from secrets.env), cached, decoded to mono int16 wav."""
+# Her voice follows her look on the TV (user, 2026-11-25): profile.json "voices" maps an
+# avatar (ascii | image | eq | live2d) to a voice; "default" for the rest.
+#     "voices": {"default": {"engine": "xai", "voice": "eve"},
+#                "live2d":  {"engine": "elevenlabs", "voice": "<voice id>", "model": "eleven_v4_turbo"}}
+# xAI's voice id defaults to XAI_VOICE in secrets.env; ElevenLabs needs ELEVENLABS_API_KEY.
+# emotion tags she puts into her spoken text ([laughs], [whispers]...): performed by
+# ElevenLabs (checked 2026-11-25 on v4, v4 Turbo, v3 Conversational: not read aloud),
+# cut out for xAI and everywhere the text is shown or kept
+TAGS = re.compile(r"\s*\[[a-z][a-z ]{1,30}\]\s*")
+
+
+def untag(text):
+    return re.sub(r"\s{2,}", " ", TAGS.sub(" ", text or "")).strip()
+
+
+AVATAR_FILE = "/var/lib/eva/avatar"           # the brain's copy of what the TV shows (core/speech.ui keeps it)
+_avatar = {"mode": None}
+
+
+def avatar():
+    if _avatar["mode"] is None:
+        try:
+            _avatar["mode"] = open(AVATAR_FILE, encoding="utf-8").read().strip() or "ascii"
+        except OSError:
+            _avatar["mode"] = "ascii"
+    return _avatar["mode"]
+
+
+def set_avatar(mode):
+    _avatar["mode"] = mode
+    try:
+        with open(AVATAR_FILE, "w", encoding="utf-8") as f:
+            f.write(mode)
+    except OSError:
+        pass
+
+
+def voice_for(mode=None):
+    """The voice spec of an avatar: {"engine", "voice", "model"}."""
+    v = profile.VOICES.get(mode or avatar()) or profile.VOICES.get("default") or {"engine": "xai"}
+    return dict(v)
+
+
+def _xai(text, voice, e):
+    req = urllib.request.Request(
+        "https://api.x.ai/v1/tts",
+        data=json.dumps({"text": text, "voice_id": voice, "language": "ru"}).encode(),
+        headers={"Authorization": "Bearer " + e["XAI_API_KEY"], "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=40) as r:
+        return r.read()
+
+
+def _elevenlabs(text, voice, model, e):
+    req = urllib.request.Request(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=mp3_44100_128",
+        data=json.dumps({"text": text, "model_id": model or "eleven_v4_turbo", "language_code": "ru"}).encode(),
+        headers={"xi-api-key": e["ELEVENLABS_API_KEY"], "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=40) as r:
+        return r.read()
+
+
+def tts(text, spec=None):
+    """mp3 from the avatar's voice (xAI or ElevenLabs), cached, decoded to mono int16 wav.
+    ElevenLabs away or failing: the phrase in xAI's voice - she never goes silent."""
     e = env()
-    voice = e.get("XAI_VOICE", "eve")
-    key = hashlib.sha1(f"{voice}|{text}".encode()).hexdigest()[:20]
+    spec = spec or voice_for()
+    engine = spec.get("engine", "xai")
+    voice = spec.get("voice") or (e.get("XAI_VOICE", "eve") if engine == "xai" else "")
+    model = spec.get("model", "")
+    tag = f"{voice}|{text}" if engine == "xai" else f"{engine}|{voice}|{model}|{text}"   # old xAI cache stays valid
+    key = hashlib.sha1(tag.encode()).hexdigest()[:20]
     os.makedirs(CACHE, exist_ok=True)
     mp3, wav = os.path.join(CACHE, key + ".mp3"), os.path.join(CACHE, key + ".wav")
     if os.path.exists(wav):
@@ -54,26 +121,28 @@ def tts(text):
             os.utime(wav)                 # used: the newest in the cache, pruned last
         except OSError:
             pass
+        return wav
+    if engine == "elevenlabs":
+        try:
+            data = _elevenlabs(text, voice, model, e)
+        except Exception as ex:
+            print(f"tts: elevenlabs failed ({ex}) - xAI this time", file=sys.stderr, flush=True)
+            return tts(untag(text), {"engine": "xai"})
     else:
-        req = urllib.request.Request(
-            "https://api.x.ai/v1/tts",
-            data=json.dumps({"text": text, "voice_id": voice, "language": "ru"}).encode(),
-            headers={"Authorization": "Bearer " + e["XAI_API_KEY"], "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=40) as r:
-            data = r.read()
-        # written under a temporary name and renamed: a power cut mid-write
-        # must not leave a truncated phrase in the cache for good
-        tmp_mp3, tmp_wav = mp3 + ".part", wav + ".part.wav"
-        with open(tmp_mp3, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        subprocess.run(["mpg123", "-q", "-m", "-w", tmp_wav, tmp_mp3], check=True)
-        with open(tmp_wav, "rb") as f:
-            os.fsync(f.fileno())
-        os.remove(tmp_mp3)                # the wav is what is played; the mp3 doubled the cache
-        os.replace(tmp_wav, wav)
-        prune()
+        data = _xai(untag(text), voice, e)
+    # written under a temporary name and renamed: a power cut mid-write
+    # must not leave a truncated phrase in the cache for good
+    tmp_mp3, tmp_wav = mp3 + ".part", wav + ".part.wav"
+    with open(tmp_mp3, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    subprocess.run(["mpg123", "-q", "-m", "-w", tmp_wav, tmp_mp3], check=True)
+    with open(tmp_wav, "rb") as f:
+        os.fsync(f.fileno())
+    os.remove(tmp_mp3)                    # the wav is what is played; the mp3 doubled the cache
+    os.replace(tmp_wav, wav)
+    prune()
     return wav
 
 

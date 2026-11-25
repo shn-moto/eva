@@ -5,6 +5,7 @@ import os
 import threading
 
 import memory
+import say  # noqa: E402
 from core import cost, llm
 from core.prompt import SILENT, system
 from core.util import log, ru_now
@@ -59,7 +60,7 @@ def reply(text, person, key):
         with LOCK:
             CHATS[key].pop()
         return "На сегодня я исчерпала лимит на умные ответы. Завтра снова буду на связи.", []
-    out = out.replace(SILENT, "").strip()
+    out = say.untag(out.replace(SILENT, ""))      # voice emotion tags never into a chat
     with LOCK:
         CHATS[key].extend(rounds)
     save()

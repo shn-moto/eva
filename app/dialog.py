@@ -17,6 +17,7 @@ import numpy as np
 
 import memory
 import music
+import say
 import voices
 from core import cost, hub_ear, identity, listeners, llm, profile, router, screen
 from core.prompt import SILENT, system
@@ -264,7 +265,7 @@ def answer(text, person, owner=None, note=None):
     state["last_spoke"] = time.time()
     ui({"type": "chat", "who": "eva", "text": reply})
     if person.known:
-        memory.write("assistant", reply, speaker=person.profile, stt="voice")
+        memory.write("assistant", say.untag(reply), speaker=person.profile, stt="voice")
     u = r["final"].usage
     log(f"reply: first token {int(1000 * (r['first'] or 0))}ms, "
         f"cache read {u.cache_read_input_tokens} / written {u.cache_creation_input_tokens}, "

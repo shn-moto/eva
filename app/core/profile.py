@@ -49,6 +49,8 @@ SKILLS = set(_P["skills"]) if isinstance(_P.get("skills"), list) else None   # N
 DOCUMENT_TAGS = tuple(_H.get("document_tags", []))
 # databases Eva may read (skill "data"): [{name, dsn: <secret key>, needs, about}]
 DATABASES = list(_P.get("databases", []))
+# her voice per avatar (say.voice_for): {"default": {...}, "live2d": {...}}
+VOICES = {k: v for k, v in dict(_P.get("voices", {})).items() if not k.startswith("_")}
 # skill artist: which pictures API she draws with (skills/artist: the defaults and what each key means)
 ARTIST = {k: v for k, v in dict(_P.get("artist", {})).items() if not k.startswith("_")}
 # where the home is, roughly: web search answers for this place (prices, shops,

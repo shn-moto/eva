@@ -140,5 +140,16 @@
     },
     "album": "Картинки от Евы",
     "folder": "_EVA"
+  },
+  "voices": {
+    "_comment": "Her voice per avatar (app/say.py): ascii | image | eq | live2d, default for the rest. engine xai (XAI_API_KEY, voice = XAI_VOICE) or elevenlabs (ELEVENLABS_API_KEY, voice id, model).",
+    "default": {
+      "engine": "xai"
+    },
+    "live2d": {
+      "engine": "elevenlabs",
+      "voice": "<ElevenLabs voice id>",
+      "model": "eleven_v4_turbo"
+    }
   }
 }
