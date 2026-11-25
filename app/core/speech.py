@@ -35,6 +35,8 @@ class Voice:
         self.on_stopped = None
         self.lock = threading.Lock()
         self._spans = {}                  # id -> its [start, end] in plays
+        self._first = set()               # replies whose first sound has played
+        self.on_first = None              # (gen, t): the first sound of a reply (the reaction time)
         body.on("speech", self._event)
         threading.Thread(target=self._synth, daemon=True).start()
 
@@ -121,6 +123,10 @@ class Voice:
                 self.played = {g: v for g, v in self.played.items() if g >= gen - 5}
                 self.played.setdefault(gen, []).append(ev.get("text", ""))
                 self.play = sid
+                first = gen not in self._first
+                self._first.add(gen)
+            if first and self.on_first:
+                self.on_first(gen, ev["t"])
         elif ev.get("state") == "end":
             with self.lock:
                 span = self._spans.pop(sid, None)

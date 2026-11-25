@@ -432,10 +432,24 @@ def _listen_finish(why):
 
 
 # ----------------------------------------------------------------- phrases --
+LATENCY = {"end": None}
+
+
+def _first_sound(gen, t):
+    """The reaction time: from the end of the last phrase heard to her first sound
+    (both on the Station's clock: the ear's phrase end, the body's playback)."""
+    end = LATENCY["end"]
+    if end and 0 < t - end < 60:
+        log(f"latency: phrase end -> first sound {t - end:.2f}s")
+
+
 def on_phrase(item):
     text = item.get("text", "").strip()
     if len(text) < 2:
         return
+    if item.get("end") and not item.get("window"):
+        LATENCY["end"] = item["end"]
+    VOICE.on_first = _first_sound
     words = re.findall(r"\w+", text.lower())
     with LISTEN_LOCK:
         if LISTEN["active"]:
