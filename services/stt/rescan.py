@@ -68,7 +68,8 @@ def _heard_clips(days, linked):
                 info = json.load(open(os.path.join(d, fn), encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if (info.get("text") or "").strip() and not info.get("joined_into") and not info.get("record"):
+            if (info.get("text") or "").strip() and not info.get("joined_into") and not info.get("record") \
+                    and not info.get("window") and not info.get("echo"):
                 out.append((base, info))
     return out
 
@@ -99,6 +100,7 @@ def prints(keys, progress=None):
 def _scan(days):
     import psycopg
     st, vb = S(), S().VOICES
+    mark_echo(days)
     with psycopg.connect(st.VOICE_DSN, connect_timeout=5) as c:
         rows = c.execute(
             "SELECT id, ts, speaker, audio, text FROM utterances WHERE role = 'user' AND audio IS NOT NULL"
@@ -134,6 +136,48 @@ def _scan(days):
                                      "ts": f"{day} {name[:2]}:{name[2:4]}:{name[4:6]}", "text": info.get("text")})
 
 
+def _words(t):
+    import re
+    return re.findall(r"\w+", (t or "").lower().replace("ё", "е"))
+
+
+def mark_echo(days=30):
+    """Her own voice caught in the log (a window over her speech, an echo after
+    it): a short clip whose words are her reply's words of the same minutes ->
+    "echo" in its json (not labelled, not proposed, «Ева (эхо)» on the page).
+    New windows are marked as they are heard; this finds the older ones."""
+    import psycopg
+    import datetime
+    st = S()
+    with psycopg.connect(st.VOICE_DSN, connect_timeout=5) as c:
+        replies = c.execute("SELECT ts, text FROM utterances WHERE role = 'assistant'"
+                            " AND ts > now() - make_interval(days => %s)", (days + 1,)).fetchall()
+    replies = [(ts.timestamp(), set(_words(t))) for ts, t in replies]
+    n = 0
+    for day in sorted(os.listdir(st.LOG_DIR))[-days - 1:]:
+        d = os.path.join(st.LOG_DIR, day)
+        for fn in sorted(os.listdir(d)):
+            if not fn.endswith(".json") or "-raw" in fn:
+                continue
+            p = os.path.join(d, fn)
+            try:
+                info = json.load(open(p, encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            words = _words(info.get("text"))
+            if not words or info.get("echo") or info.get("correct") or (info.get("duration") or 99) > 4:
+                continue
+            t = datetime.datetime.strptime(day + fn[:6], "%Y-%m-%d%H%M%S").timestamp()
+            near = set().union(*[w for ts, w in replies if -30 <= ts - t <= 120] or [set()])
+            if near and sum(w in near for w in words) / len(words) >= 0.7:
+                info["echo"] = True
+                info.pop("who", None)
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump(info, f, ensure_ascii=False)
+                n += 1
+    return n
+
+
 def label_heard(days=30):
     """The voice group of every heard-only clip with none kept yet (existing
     groups only): the admin page shows strangers as «Неизвестный N»."""
@@ -144,6 +188,7 @@ def label_heard(days=30):
     def run():
         import hear
         vb = S().VOICES
+        mark_echo(days)
         todo = [b for b, i in _heard_clips(days, set()) if not i.get("who")]
         LABEL["total"] = len(todo)
 

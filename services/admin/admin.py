@@ -161,6 +161,10 @@ def _heard(day, linked):
                 continue                  # noise the STT made nothing of
             if info.get("joined_into"):
                 continue                  # a piece glued with its rest: the whole is shown
+            if info.get("echo"):
+                info["who"] = [{"label": "Ева (эхо)"}]       # her own voice, caught in the log
+            elif info.get("window") and not info.get("who"):
+                info["who"] = [{"label": "во время речи Евы"}]
             hh = fn[:6]
             fix = info.get("correct") or {}
             if isinstance(fix, list):

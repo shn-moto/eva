@@ -391,6 +391,10 @@ class Hearing:
         split = not meta.get("window") and not record and meta["dur"] >= SPLIT_MIN
         text, letters = st.decode(norm)
         out = st._place_and_split(norm, text, letters, mics if not meta.get("window") else None, split)
+        if meta.get("window"):
+            # heard over her own voice (a window to catch «стоп»): kept as such - most
+            # of it is her echo, and it was taken for a family voice (2026-11-25 10:09)
+            out["window"], out["playback"] = True, meta.get("playback")
         if not self.dry:
             out = st._finish(norm, out, mics, record, t)
             if record and mics is not None:
