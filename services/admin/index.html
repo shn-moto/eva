@@ -214,7 +214,7 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
           <span>Действие</span><select id="cf-action"><option value="remind">напомнить</option><option value="music">музыка</option><option value="alarm">будильник</option><option value="task">поручение Еве</option></select>
           <span>Когда</span><input id="cf-when" type="datetime-local">
           <span>Повтор</span><select id="cf-every"><option value="">один раз</option><option value="day">каждый день</option><option value="weekdays">по будням</option><option value="weekend">по выходным</option><option value="week">по дням недели</option><option value="month">каждый месяц</option><option value="year">каждый год</option></select>
-          <span></span><span class="days" id="cf-days"></span>
+          <span id="cf-days-l"></span><span class="days" id="cf-days"></span>
           <span>Текст / запрос</span><input id="cf-text" placeholder="что сказать / что включить / что сделать">
           <span>Куда</span><select id="cf-notify"><option value="home">вслух дома</option><option value="telegram">в Телеграм</option><option value="both">и то, и другое</option></select>
           <span>Для кого</span><input id="cf-who" placeholder="имя (для Телеграма)">
@@ -813,7 +813,8 @@ function calRender() {
 }
 async function calLoad() { CAL.data = await api("/api/calendar"); calRender(); }
 $("#cf-days").innerHTML = CWD.map((w, i) => `<label><input type="checkbox" value="${i}">${w}</label>`).join("");
-$("#cf-every").onchange = () => { $("#cf-days").style.display = $("#cf-every").value === "week" ? "" : "none"; };
+$("#cf-every").onchange = () => {       // the weekdays row (with its empty label cell) only for "по дням недели"
+  const d = $("#cf-every").value === "week" ? "" : "none"; $("#cf-days").style.display = d; $("#cf-days-l").style.display = d; };
 $("#cf-every").onchange();
 $("#cf-add").onclick = async () => {
   const every = $("#cf-every").value, act = $("#cf-action").value, txt = $("#cf-text").value.trim();
