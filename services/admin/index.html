@@ -91,6 +91,8 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .form textarea { min-height: 54px; resize: vertical; }
 .form .full { grid-column: 1 / -1; }
 .days label { margin-right: 6px; font-size: 12px; color: var(--mute); }
+.form input.num { width: 2.8em; text-align: center; font-variant-numeric: tabular-nums; padding: 4px 2px; }
+.form input.bad { border-color: var(--danger); outline: 1px solid var(--danger); }
 /* listeners */
 #ls-body { display: grid; grid-template-columns: 240px 1fr; min-height: 0; flex: 1; }
 #ls-body > div { min-height: 0; overflow: auto; padding: 10px 14px; }
@@ -213,7 +215,7 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
           <span>Что</span><input id="cf-title" placeholder="таблетки, подъём, Наутилус - Крылья">
           <span>Действие</span><select id="cf-action"><option value="remind">напомнить</option><option value="music">музыка</option><option value="alarm">будильник</option><option value="task">поручение Еве</option></select>
           <span>Когда</span><span style="display:flex;gap:6px;align-items:center"><input id="cf-date" type="date" style="width:128px;min-width:0">
-            <select id="cf-hh" style="width:auto"></select>:<select id="cf-mm" style="width:auto"></select></span>
+            <input id="cf-hh" class="num" inputmode="numeric" maxlength="2" title="часы 0-23: цифры, колесо, ↑↓">:<input id="cf-mm" class="num" inputmode="numeric" maxlength="2" title="минуты 0-59: цифры, колесо, ↑↓"></span>
           <span>Повтор</span><select id="cf-every"><option value="">один раз</option><option value="day">каждый день</option><option value="weekdays">по будням</option><option value="weekend">по выходным</option><option value="week">по дням недели</option><option value="month">каждый месяц</option><option value="year">каждый год</option></select>
           <span id="cf-days-l"></span><span class="days" id="cf-days"></span>
           <span>Текст / запрос</span><input id="cf-text" placeholder="что сказать / что включить / что сделать">
@@ -814,14 +816,45 @@ function calRender() {
   });
 }
 async function calLoad() { CAL.data = await api("/api/calendar"); calRender(); }
-// when: a date and two lists (hours, minutes by 5) - the native datetime field moved a
-// minute per wheel click and the time ran away under the mouse
+// when: a date and two number fields. The native datetime field moved a minute per wheel
+// event (a touchpad sends dozens) - here the wheel accumulates: one step per notch, smooth on
+// a touchpad; digits are typed (two hour digits jump to the minutes), ↑↓ by 1, PgUp/PgDn by 10,
+// checked: hours 0-23, minutes 0-59, a wrong one is red
 const pad2 = n => String(n).padStart(2, "0");
-$("#cf-hh").innerHTML = [...Array(24).keys()].map(h => `<option>${pad2(h)}</option>`).join("");
-$("#cf-mm").innerHTML = [...Array(12).keys()].map(m => `<option>${pad2(m * 5)}</option>`).join("");
-(() => {                                // now + 10 min, rounded up to 5
-  const d = new Date(Date.now() + 10 * 60000); d.setMinutes(Math.ceil(d.getMinutes() / 5) * 5, 0, 0);
-  $("#cf-date").value = isoDay(d); $("#cf-hh").value = pad2(d.getHours()); $("#cf-mm").value = pad2(d.getMinutes() % 60);
+function numField(el, max, next) {
+  let acc = 0;
+  const val = () => (/^\d{1,2}$/.test(el.value) ? +el.value : NaN);
+  const check = () => { const v = val(); const ok = !isNaN(v) && v <= max; el.classList.toggle("bad", !ok); return ok; };
+  const set = v => { el.value = pad2(((v % (max + 1)) + (max + 1)) % (max + 1)); check(); };
+  el.addEventListener("input", () => {
+    el.value = el.value.replace(/\D/g, "").slice(0, 2);
+    check();
+    if (next && el.value.length === 2 && check()) { next.focus(); next.select(); }
+  });
+  el.addEventListener("blur", () => { if (check()) el.value = pad2(val()); });
+  el.addEventListener("focus", () => el.select());
+  el.addEventListener("keydown", e => {
+    const step = { ArrowUp: 1, ArrowDown: -1, PageUp: 10, PageDown: -10 }[e.key];
+    if (step) { e.preventDefault(); set((isNaN(val()) ? 0 : val()) + step); }
+  });
+  el.addEventListener("wheel", e => {
+    e.preventDefault();
+    acc += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;      // lines -> pixels
+    const notch = 100;                                        // a mouse notch is ~100 px in Chrome / Firefox
+    while (Math.abs(acc) >= notch) {
+      const dir = acc > 0 ? -1 : 1;                          // wheel up = more
+      set((isNaN(val()) ? 0 : val()) + dir);
+      acc += dir * notch;
+    }
+  }, { passive: false });
+  el.check = check;
+  return el;
+}
+numField($("#cf-hh"), 23, $("#cf-mm"));
+numField($("#cf-mm"), 59, null);
+(() => {                                // now + 10 min
+  const d = new Date(Date.now() + 10 * 60000);
+  $("#cf-date").value = isoDay(d); $("#cf-hh").value = pad2(d.getHours()); $("#cf-mm").value = pad2(d.getMinutes());
 })();
 $("#cf-date").addEventListener("wheel", e => e.preventDefault(), { passive: false });
 $("#cf-days").innerHTML = CWD.map((w, i) => `<label><input type="checkbox" value="${i}">${w}</label>`).join("");
@@ -830,7 +863,10 @@ $("#cf-every").onchange = () => {       // the weekdays row (with its empty labe
 $("#cf-every").onchange();
 $("#cf-add").onclick = async () => {
   const every = $("#cf-every").value, act = $("#cf-action").value, txt = $("#cf-text").value.trim();
-  const when = $("#cf-date").value ? `${$("#cf-date").value}T${$("#cf-hh").value}:${$("#cf-mm").value}` : "";
+  if (!$("#cf-date").value) return toast("Выбери дату");
+  if (!$("#cf-hh").check() || !$("#cf-mm").check()) return toast("Время: часы 0–23, минуты 0–59");
+  const when = `${$("#cf-date").value}T${pad2(+$("#cf-hh").value)}:${pad2(+$("#cf-mm").value)}`;
+  if (every === "" && new Date(when) < new Date(Date.now() - 60000)) return toast("Это время уже прошло");
   const b = { title: $("#cf-title").value.trim(), action: act, when,
               notify: act === "remind" ? $("#cf-notify").value : undefined, who: $("#cf-who").value.trim() || undefined };
   if (act === "music" || act === "alarm") b.query = txt || undefined; else b.text = txt || undefined;
