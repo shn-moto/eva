@@ -41,8 +41,11 @@ ui/spike/face-gen/
 docs/claude_api_cost_*.csv
 
 # --- the household profile: family, address, names, health, money -----------
-# lives in /opt/eva/eva on the Station; eva.example/ shows the format
-eva/
+# lives in /opt/eva/eva on the Station; eva.example/ shows the format.
+# Anchored to the root: a bare "eva/" also hid os/rootfs/files/usr/local/lib/eva/ (the
+# Station's audio and boot scripts) from git and the deploy - the mics stayed at an
+# experimental 36 dB on the Station and came back after a reboot (2026-11-26)
+/eva/
 docs/claude_family_context.md
 docs/gemini_family_context.md
 docs/BACKLOG.md
