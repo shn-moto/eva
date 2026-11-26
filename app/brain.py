@@ -52,6 +52,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(out)
 
     def do_GET(self):
+        if self.path == "/debug/threads":
+            # where every thread stands (127.0.0.1 only): the first look when she hangs
+            import traceback
+            names = {t.ident: t.name for t in threading.enumerate()}
+            out = {f"{names.get(i, '?')} {i}": "".join(traceback.format_stack(f)[-6:])
+                   for i, f in sys._current_frames().items()}
+            out["speech"] = {"queue": dialog.VOICE.text_q.qsize(), "step": dialog.VOICE.synth_step,
+                             "since": round(time.time() - dialog.VOICE.synth_at, 1), "gen": dialog.VOICE.gen,
+                             "speaking": dialog.VOICE.speaking(), "pending": len(dialog.VOICE.pending)}
+            return self._json(200, out)
         if self.path == "/health":
             # busy: answering, a tool (a picture) running, or speaking - deploy/linux.sh waits for it
             busy = llm.ACTIVE[0] > 0 or dialog.VOICE.busy_until > time.time()
@@ -60,6 +70,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if self.path == "/debug/say":
+            # a sentence through the whole voice path (127.0.0.1 only): the check after a fix
+            dialog.VOICE.say(json.loads(body).get("text") or "Проверка связи.")
+            return self._json(200, {"ok": True})
         if self.path == "/chat":
             try:
                 req = json.loads(body)

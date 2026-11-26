@@ -565,7 +565,16 @@ def on_phrase(item):
     # who is it
     label, sim, known = who_said(item)
     person = identity.from_voice(label, known)
-    log(f"voice: {label} ({sim})")
+    near = (item.get("speaker") or {}).get("nearest") if not known else None
+    if near and near.get("sim", 0) >= GUESS_SIM and near["label"] in VOICES.names():
+        # a short phrase the voice base left unsigned, but plainly a family voice («ева ты тут»
+        # at 0.68 went unanswered, 2026-11-26): she answers it as that person, guessed - no
+        # private notes, no acting in the house on a guess
+        person = identity.from_voice(near["label"], True)
+        person.guessed = True
+        log(f"voice: {label} ({sim}) - taken for {person.name} by the nearest voice {near['sim']}")
+    else:
+        log(f"voice: {label} ({sim})")
     if introduction(text, item, label, sim, known, person):
         return
     if CALL_ONLY.match(" ".join(words)):
@@ -987,6 +996,7 @@ def introduction(text, item, label, sim, known, person):
 # the TV - and each such request cost a cache of its own. The router's commands (music,
 # volume, screen, print) and «запомни мой голос» stay for every voice: they are free.
 UNKNOWN_TO_CLAUDE = profile.tune("dialog.unknown_to_claude", False)
+GUESS_SIM = profile.tune("dialog.guess_sim", 0.55)     # an unsigned phrase this close to a family voice is that person
 UNKNOWN_SAY = profile.tune("dialog.unknown_say_every", 120.0)   # s between two «я тебя не узнала»
 _unknown_said = [0.0]
 

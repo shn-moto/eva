@@ -44,7 +44,11 @@ def _avatar_changed(mode):
 class Voice:
     def __init__(self):
         self.text_q = queue.Queue()
-        self.gen = 0                      # bumped by stop(): stale work is dropped
+        # bumped by stop(): stale work is dropped. Starts from the clock, not 0: the body on
+        # the Station remembers the highest reply number it was told to drop below, and after
+        # a restart of the brain every new sentence was "older" and silently not played
+        # (2026-11-26, after many deploys - she went mute)
+        self.gen = int(time.time())
         self.play = None                  # the sentence the body plays now (its id)
         self.pending = set()              # sent to the body, not ended yet
         self.busy_until = 0.0
@@ -57,7 +61,25 @@ class Voice:
         self._first = set()               # replies whose first sound has played
         self.on_first = None              # (gen, t): the first sound of a reply (the reaction time)
         body.on("speech", self._event)
+        self.synth_at, self.synth_step, self.synth_thread = time.time(), "idle", None
         threading.Thread(target=self._synth, daemon=True).start()
+        threading.Thread(target=self._watch, daemon=True).start()
+
+    def _watch(self):
+        """A sentence waiting > 20 s while the synthesis thread does not move: where it
+        stands goes to the log (she went mute for hours, 2026-11-26, nothing said why)."""
+        import sys
+        import traceback
+        told = 0.0
+        while True:
+            time.sleep(5)
+            stuck = time.time() - self.synth_at
+            if self.text_q.empty() or stuck < 20 or time.time() - told < 60:
+                continue
+            told = time.time()
+            frame = sys._current_frames().get(self.synth_thread)
+            where = "".join(traceback.format_stack(frame)[-4:]) if frame else "no thread"
+            log(f"speech stuck {stuck:.0f}s at {self.synth_step!r}, {self.text_q.qsize()} waiting:\n{where}")
 
     def speaking(self):
         return self.play is not None or bool(self.pending) or not self.text_q.empty()             or time.time() < self.busy_until
@@ -111,9 +133,13 @@ class Voice:
 
     def _synth(self):
         """TTS in order; each sentence goes to the body as soon as it is made."""
+        self.synth_thread = threading.get_ident()
         while True:
+            self.synth_at, self.synth_step = time.time(), "idle"
             gen, s = self.text_q.get()
+            self.synth_at, self.synth_step = time.time(), f"tts {s[:40]!r}"
             if gen != self.gen:
+                log(f"speech: dropped (reply {gen}, now {self.gen}): {s!r}")
                 continue
             try:
                 wav = say.tts(s)
@@ -129,9 +155,11 @@ class Voice:
             except Exception as e:
                 log("visemes:", e)
                 frames = []
+            self.synth_step = f"to the body {s[:40]!r}"
             r = body.speech(gen, sid, s, wav, frames)
             if not (r or {}).get("queued"):
                 self.pending.discard(sid)
+                log(f"the body did not take the sentence (gen {gen}): {s!r} -> {r}")
 
     def _event(self, ev):
         sid, gen = ev.get("id"), ev.get("gen")

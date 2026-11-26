@@ -45,7 +45,7 @@ KEEP = 600                                    # s of phrases remembered for the 
 # nearest family voice at least this close is taken as a guess (the base's "another room" level)
 GUESS_SIM = 0.42
 # the obscene roots at a word's start (STT writes them in full); editable on the admin page
-SWEAR = (r"(?<![а-яё])(ху[йеёяи]|пизд|бля|муда|мудил|пид[оа]р|залуп|гандон|долбо[её]б|ублюд|шлюх|"
+SWEAR = (r"(?<![а-яё])([оа]?курв|kurw|ху[йеёяи]|пизд|бля|муда|мудил|пид[оа]р|залуп|гандон|долбо[её]б|ублюд|шлюх|"
          r"[её]б[аилнуыё]|въеб|заеб|уеб|выеб|отъеб|наеб|поеб|разъеб|охуе|нахуй|похуй|сука|суки|сучк)")
 DEFAULTS = [{
     "id": "swearing", "name": "Ругань при детях", "enabled": True,

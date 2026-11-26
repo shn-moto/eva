@@ -21,6 +21,7 @@ class Person:
     permissions: set = field(default_factory=set)   # photolib sections
     channel: str = "voice"           # voice | telegram
     telegram_id: str | None = None   # the account writing, when channel is telegram
+    guessed: bool = False            # by the nearest voice only (a short phrase left unsigned): no private, no control
 
     @property
     def known(self):
@@ -42,6 +43,8 @@ class Person:
         """Access check for a tool's `needs` (docs/ARCHITECTURE.md, Access policy)."""
         if need is None:
             return True
+        if self.guessed and need in ("private", "control", "admin"):
+            return False                  # a guess is enough to talk, not for health, money or the house
         if need == "screen":
             return self.channel == "voice"     # the TV is in the room: anybody there may say «дальше»
         if not self.known:
