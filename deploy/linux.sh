@@ -37,7 +37,7 @@ stt)
 voice-events)
     # what a sound is (docs/EMOTION-PLAN.md): PANNs CNN14 on the CPU, its checkpoint in the cache
     src=services/voice-events; image=eva-voice-events; name=eva-voice-events; port=8911
-    run="-p 8911:8911 --memory 2g -e THREADS=4 -v \$HOME/eva-data/bench-cache:/root/.cache:ro"
+    run="-p 8911:8911 --memory 4g -e THREADS=4 -v \$HOME/eva-data/bench-cache:/root/.cache:ro"
     cmd=""; health=/health ;;
 music)
     src=services/music; image=newalisa-music; name=newalisa-music; port=8904

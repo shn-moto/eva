@@ -13,6 +13,9 @@ voice   - the highest of the voice classes (speech, singing, laughter, crying, s
 kinds   - the classes the scenarios care about: cry, laugh, scream, shout, singing, music,
           bird, tv
 verdict - "noise" | "cry" | "scream" | "laugh" | "speech"
+emotion - speech emotion (GigaAM-Emo, Dusha: angry / sad / neutral / positive), only for a voice
+          of at least EMO_MIN s: on one short word it is confident nonsense («так» = angry 0.98,
+          stage 1 of the plan); {"label", "score", "probs"}
 
     MODELS   the cache with panns_data/Cnn14_mAP=0.431.pth (~/eva-data/bench-cache)
     THREADS  torch threads (4)
@@ -34,6 +37,14 @@ app = FastAPI()
 MODEL = AudioTagging(checkpoint_path=None, device="cpu")
 L = list(labels)
 NOISE_VOICE = float(os.environ.get("NOISE_VOICE", "0.15"))
+EMO_MIN = float(os.environ.get("EMO_MIN", "2.0"))           # s of a voice before its emotion is asked
+EMO = None
+if os.environ.get("EMOTION", "1") == "1":
+    try:
+        import gigaam
+        EMO = gigaam.load_model("emo", device="cpu")   # its checkpoint in the cache volume (gigaam/emo.ckpt)
+    except Exception as e:  # the model away: the sound alone
+        print("emotion model not loaded:", e, flush=True)
 
 GROUPS = {
     "voice": ["Speech", "Child speech, kid speaking", "Male speech, man speaking", "Female speech, woman speaking",
@@ -86,8 +97,34 @@ def classify(body):
     else:
         verdict = "speech"
     top = sorted(range(len(L)), key=lambda i: -p[i])[:3]
-    return {"voice": round(voice, 3), "kinds": kinds, "verdict": verdict,
-            "top": [[L[i], round(float(p[i]), 3)] for i in top], "ms": int(1000 * (time.time() - t))}
+    out = {"voice": round(voice, 3), "kinds": kinds, "verdict": verdict,
+           "top": [[L[i], round(float(p[i]), 3)] for i in top]}
+    if EMO is not None and voice >= 0.5 and len(a) >= EMO_MIN * 32000:
+        out["emotion"] = emotion(a)
+    out["ms"] = int(1000 * (time.time() - t))
+    return out
+
+
+def emotion(a32):
+    """GigaAM-Emo on a 16 kHz wav (it reads files)."""
+    import tempfile
+    a16 = a32[::2]
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        path = f.name
+    try:
+        with wave.open(path, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes((np.clip(a16, -1, 1) * 32767).astype("<i2").tobytes())
+        with torch.no_grad():
+            p = EMO.get_probs(path)
+        top = max(p, key=p.get)
+        return {"label": top, "score": round(float(p[top]), 3), "probs": {k: round(float(v), 3) for k, v in p.items()}}
+    except Exception as e:
+        return {"error": str(e)[:200]}
+    finally:
+        os.remove(path)
 
 
 @app.post("/classify")
@@ -97,4 +134,4 @@ async def classify_route(request: Request):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "model": "PANNs CNN14", "noise_voice": NOISE_VOICE}
+    return {"ok": True, "model": "PANNs CNN14", "emotion": EMO is not None, "noise_voice": NOISE_VOICE}

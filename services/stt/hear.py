@@ -145,7 +145,7 @@ def mark_sound(audio, sound):
     p = os.path.join(S().LOG_DIR, audio.split("#")[0] + ".json")
     try:
         info = json.load(open(p, encoding="utf-8"))
-        info["sound"] = {k: sound[k] for k in ("voice", "verdict", "kinds", "top") if k in sound}
+        info["sound"] = {k: sound[k] for k in ("voice", "verdict", "kinds", "top", "emotion") if k in sound}
         with open(p, "w", encoding="utf-8") as f:
             json.dump(info, f, ensure_ascii=False)
     except (OSError, ValueError) as e:
@@ -500,9 +500,13 @@ class Hearing:
             if snd.get("r"):
                 meta["sound"] = snd["r"]
                 s_ = snd["r"]
-                if s_["verdict"] != "speech" or max(s_["kinds"].get(k, 0) for k in ("cry", "scream", "shout", "laugh")) >= 0.3:
+                emo = s_.get("emotion") or {}
+                loud = emo.get("label") not in (None, "neutral") and (emo.get("score") or 0) >= 0.7
+                if loud or s_["verdict"] != "speech" or max(s_["kinds"].get(k, 0) for k in ("cry", "scream", "shout", "laugh")) >= 0.3:
                     # stage 2 of the emotion plan: every event logged, no action yet
-                    log(f"sound: {s_['verdict']} voice {s_['voice']} {s_['kinds']} top {s_['top'][:2]}: {text!r}")
+                    log(f"sound: {s_['verdict']} voice {s_['voice']} "
+                        + (f"emotion {emo.get('label')} {emo.get('score')} " if emo else "")
+                        + f"{s_['kinds']} top {s_['top'][:2]}: {text!r}")
         if out.get("audio"):
             meta["audio"] = out["audio"]
             if meta.get("sound"):
