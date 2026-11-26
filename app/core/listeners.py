@@ -11,6 +11,8 @@ costs nothing:
      "on":       "known" | "unknown" | "any"     whose voice: a family voice or not
      "who":      "any" | "adult" (not a child of the family: a guest too) | "child" (a family child)
                  | a voice profile of the family ("Аэлита"; its label or how she calls them)
+     "guess":    true - also a voice the base left unsigned (one short word) whose nearest
+                 family voice is that person, sim >= GUESS_SIM (default true)
      "words":    a regular expression over the phrase ("" - every phrase)
      "children_within": N  - fires only if a child's voice was heard N s around it
      "prompt":   a yes/no question for the local model (router's Qwen, on the hub's GPU,
@@ -38,6 +40,9 @@ from core.util import log
 
 FILE = os.environ.get("EVA_LISTENERS", "/var/lib/eva/listeners.json")
 KEEP = 600                                    # s of phrases remembered for the context
+# a short word is left "unknown" by the voice base (services/stt/voices.py SHORT_SEC): its
+# nearest family voice at least this close is taken as a guess (the base's "another room" level)
+GUESS_SIM = 0.42
 # the obscene roots at a word's start (STT writes them in full); editable on the admin page
 SWEAR = (r"(?<![а-яё])(ху[йеёяи]|пизд|бля|муда|мудил|пид[оа]р|залуп|гандон|долбо[её]б|ублюд|шлюх|"
          r"[её]б[аилнуыё]|въеб|заеб|уеб|выеб|отъеб|наеб|поеб|разъеб|охуе|нахуй|похуй|сука|суки|сучк)")
@@ -90,11 +95,11 @@ def save(items):
     os.replace(tmp, FILE)
 
 
-def feed(item, name, known, child, label=None):
+def feed(item, name, known, child, label=None, near=None):
     """Every logged phrase comes here (dialog.on_phrase); checked in a thread of
     its own so that the dialog never waits for a listener."""
     try:
-        _q.put_nowait((time.time(), item.get("text", "").strip(), name, known, child, label))
+        _q.put_nowait((time.time(), item.get("text", "").strip(), name, known, child, label, near))
     except queue.Full:
         pass
 
@@ -127,7 +132,11 @@ def _children_near(now, within):
     return sorted({n for ts, n, _, child, _, _ in RECENT if child and abs(now - ts) <= within})
 
 
-def _match(x, ts, text, name, known, child, label=None):
+def _guess(near):
+    return near if near and near.get("sim", 0) >= GUESS_SIM else None
+
+
+def _match(x, ts, text, name, known, child, label=None, near=None):
     """-> (fire?, children near) ; the cheap steps first."""
     on = x.get("on", "any")
     if (on == "known" and not known) or (on == "unknown" and known):
@@ -135,8 +144,15 @@ def _match(x, ts, text, name, known, child, label=None):
     who = x.get("who", "any")
     if (who == "child" and not child) or (who == "adult" and child):
         return False, []
-    if who not in ("any", "adult", "child") and not (known and who.lower() in {(name or "").lower(), (label or "").lower()}):
-        return False, []                      # one person: only their recognised voice                      # "adult": anyone but a child of the family (a guest too)
+    if who not in ("any", "adult", "child"):
+        me = who.lower()
+        if known:
+            if me not in {(name or "").lower(), (label or "").lower()}:
+                return False, []              # one person: only their voice
+        else:
+            g = _guess(near) if x.get("guess", True) else None
+            if not (g and me in {g["name"].lower(), g["label"].lower()}):
+                return False, []                      # "adult": anyone but a child of the family (a guest too)
     if x.get("_re") is not None and not x["_re"].search(text):
         return False, []
     kids = []
@@ -176,12 +192,12 @@ def _act(x, ts, text, name, kids):
                          f"если делать нечего - ответь <молчу>]"))
 
 
-def _try(x, ts, text, name, known, child, label=None, waited=False):
-    ok, kids = _match(x, ts, text, name, known, child, label)
+def _try(x, ts, text, name, known, child, label=None, near=None, waited=False):
+    ok, kids = _match(x, ts, text, name, known, child, label, near)
     if ok is None:
         if not waited:
             # no child heard yet: a child may answer right after - look again a bit later
-            _later.append((time.time() + float(x["children_within"]) / 4, ts, text, name, known, child, label, x["id"]))
+            _later.append((time.time() + float(x["children_within"]) / 4, ts, text, name, known, child, label, near, x["id"]))
         return
     if not ok or time.time() - _state["fired"].get(x["id"], 0) < float(x.get("cooldown") or 0):
         return
@@ -194,16 +210,18 @@ def _try(x, ts, text, name, known, child, label=None, waited=False):
     _state["fired"][x["id"]] = time.time()
     st["fired"] += 1
     st["last"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    if not known and _guess(near) and x.get("who") not in ("any", "adult", "child", None):
+        name = f"{_guess(near)['name']} (вероятно, {near['sim']:.2f})"
     try:
         _act(x, ts, text, name, kids)
     except Exception as e:
         log(f"listener {x['id']}: {e}")
 
 
-def _check(ts, text, name, known, child, label):
+def _check(ts, text, name, known, child, label, near):
     for x in load():
         if x.get("enabled"):
-            _try(x, ts, text, name, known, child, label)
+            _try(x, ts, text, name, known, child, label, near)
 
 
 _later = []                                   # phrases waiting for a child's voice after them
@@ -212,20 +230,22 @@ _later = []                                   # phrases waiting for a child's vo
 def run():
     while True:
         try:
-            ts, text, name, known, child, label = _q.get(timeout=1)
-            RECENT.append((ts, name, known, child, text, label))
+            ts, text, name, known, child, label, near = _q.get(timeout=1)
+            g = _guess(near)
+            # a child's short word left unsigned still counts as "a child near" when its voice is nearest
+            RECENT.append((ts, name or (g["name"] if g else None), known, child or bool(g and g.get("child")), text, label))
             while RECENT and ts - RECENT[0][0] > KEEP:
                 RECENT.popleft()
-            _check(ts, text, name, known, child, label)
+            _check(ts, text, name, known, child, label, near)
         except queue.Empty:
             pass
         now = time.time()
         for w in [w for w in _later if w[0] <= now]:
             _later.remove(w)
-            _, ts, text, name, known, child, label, xid = w
+            _, ts, text, name, known, child, label, near, xid = w
             x = next((x for x in load() if x["id"] == xid and x.get("enabled")), None)
             if x:
-                _try(x, ts, text, name, known, child, label, waited=True)
+                _try(x, ts, text, name, known, child, label, near, waited=True)
 
 
 def start():

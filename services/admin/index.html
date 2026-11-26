@@ -852,6 +852,7 @@ function lsRender() {
     <span>Событие</span><select data-k="on">${opts(ON, x.on || "any")}</select>
     <span>Кто говорит</span><span style="display:flex;gap:6px"><select id="ls-who">${opts({ ...WHO, person: "конкретный человек…" }, WHO[x.who || "any"] ? (x.who || "any") : "person")}</select>
       <input id="ls-who-name" list="ls-voices" placeholder="имя, как в голосовой базе" value="${WHO[x.who || "any"] ? "" : esc(x.who)}" style="flex:1"></span>
+    <span></span><label class="tog" id="ls-guess-l"><input type="checkbox" data-k="guess"${x.guess === false ? "" : " checked"}> и вероятный голос — короткое слово, которое база не подписала, но ближе всего к этому человеку</label>
     <datalist id="ls-voices">${VOICES.map(v => `<option value="${esc(v)}">`).join("")}</datalist>
     <span>Слова</span><input data-k="words" value="${esc(x.words || "")}" placeholder="регулярное выражение; пусто — любая фраза" style="font-family:var(--mono);font-size:12px">
     <span>Дети рядом, с</span><input data-k="children_within" type="number" min="0" value="${x.children_within || 0}">
@@ -866,8 +867,10 @@ function lsRender() {
     <span></span><span><button class="btn" id="ls-test">Проверить</button> <button class="btn" id="ls-del" style="color:var(--danger)">Удалить слушателя</button> <span id="ls-res" class="help"></span></span>
   </div><div class="lg">${lg ? "Последние срабатывания:\n" + esc(lg) : "Срабатываний за 14 дней нет."}</div>`;
   const whoSel = () => { $("#ls-who-name").style.display = $("#ls-who").value === "person" ? "" : "none";
+    $("#ls-guess-l").style.display = $("#ls-who").value === "person" ? "" : "none";
     if ($("#ls-who").value === "person") $("#ls-who-name").focus(); };
-  $("#ls-who").onchange = whoSel; $("#ls-who-name").style.display = $("#ls-who").value === "person" ? "" : "none";
+  $("#ls-who").onchange = whoSel;
+  $("#ls-who-name").style.display = $("#ls-guess-l").style.display = $("#ls-who").value === "person" ? "" : "none";
   const tg = () => document.querySelectorAll("#ls-edit .tg").forEach(e => e.style.display =
     document.querySelector('#ls-edit [data-k="action"]').value === "telegram" ? "" : "none");
   document.querySelector('#ls-edit [data-k="action"]').onchange = tg; tg();

@@ -192,6 +192,18 @@ class VoiceBase:
                     best, sim = name, s
         return best, sim
 
+    def nearest(self, emb):
+        """The closest family voice whatever the rules say: (label, sim, lead over the next).
+        For a phrase left "unknown" (one short word): the listeners may take it as a guess."""
+        emb = _unit(emb)
+        with self.lock:
+            voices = self._voices()
+        name, sim = self._best(emb, voices.items())
+        if name is None:
+            return None, 0.0, 0.0
+        _, second = self._best(emb, ((k, v) for k, v in voices.items() if k != name))
+        return name, sim, sim - max(second, 0.0)
+
     def _near_other(self, emb, name):
         e = np.asarray(emb, dtype=np.float32)
         return max((float(e @ np.asarray(p, dtype=np.float32)) for k, v in self.profiles.items() if k != name

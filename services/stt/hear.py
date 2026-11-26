@@ -435,6 +435,11 @@ class Hearing:
         if v and vb is not None and not window and text:
             label, sim, known = vb.identify(v, meta.get("dur", 0), learn=not self.dry)
             meta["speaker"] = {"label": label, "sim": sim, "known": known}
+            if not known:
+                # not signed (too short, too close): the nearest family voice goes along as a guess
+                n, s, lead = vb.nearest(v)
+                if n:
+                    meta["speaker"]["nearest"] = {"label": n, "sim": round(s, 3), "lead": round(lead, 3)}
             if not self.dry and meta.get("audio"):
                 note_who(meta["audio"], meta.get("audio_span"), label, sim)
                 # the phrase's print, whole, kept once: a rescan reads it instead of the sound
