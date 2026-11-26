@@ -231,8 +231,11 @@ def ui(state, text=None):
 
 
 # ---- to the hub ----
+VAD_STUCK = 3.0                       # s of loud sound with no voice at all: the VAD state is reset
+SENDER = None
 _out = queue.Queue()
 SEQ = [0]
+SENT = collections.Counter()          # fragments that reached the hub / failed, this minute
 
 
 def send(seg, raw7, meta):
@@ -264,6 +267,8 @@ def sender():
         while True:
             try:
                 urllib.request.urlopen(urllib.request.Request(HUB + path, data=data, headers=h), timeout=10).read()
+                if path == "/fragment":
+                    SENT["ok"] += 1
                 break
             except OSError as e:
                 if not waits:
@@ -277,8 +282,11 @@ def sender():
 
 
 def main():
+    global SENDER
     vad, aec = Vad(), EchoCanceller(adapt_floor=1e-6)   # scaled signals: tested 21 dB steady
-    threading.Thread(target=sender, daemon=True).start()
+    SENDER = threading.Thread(target=sender, daemon=True)
+    SENDER.start()
+    stuck_n = 0
 
     proc = subprocess.Popen(["arecord", "-q", "-D", "hw:snddaudio0,0", "-c", "5", "-f", "S32_LE",
                              "-r", str(SR), "--period-size=256", "-t", "raw"],
@@ -333,6 +341,20 @@ def main():
         stats["vad_max"] = max(stats["vad_max"], 0)
         e = np.clip(e, -1.0, 1.0).astype(np.float32)
         p = vad(e)
+        # a stuck VAD: loud in the room, no voice for VAD_STUCK s, her speaker silent. The
+        # recurrent state of the VAD went deaf after a very loud moment - «Мама» said loud and
+        # clear at -9 dBFS scored 0.03 for minutes (2026-11-26 14:08) - its state starts over
+        loud_mic = float(np.abs(mics).max()) > 0.1
+        if loud_mic and p < 0.05 and not play_now:
+            stuck_n += 1
+            if stuck_n * CHUNK / SR >= VAD_STUCK:
+                vad.state[:] = 0
+                vad.ctx[:] = 0
+                vad.resets += 1
+                stuck_n = 0
+                log("vad: loud but no voice for 3 s - its state reset")
+        else:
+            stuck_n = 0
         stats["vad_max"] = max(stats["vad_max"], p)
         stats["chunks"] += 1
         stats["speech"] += p > START_P
@@ -401,8 +423,14 @@ def main():
         if now - stats_t > 60:
             log(f"level: speech {stats['speech']}/{stats['chunks']} chunks, playback {stats['play']}, "
                 f"resets aec {aec.resets} vad {vad.resets}, mic peak {20 * np.log10(stats['mic_peak'] + 1e-12):.0f} dBFS, "
-                f"vad max {stats['vad_max']:.2f}")
+                f"vad max {stats['vad_max']:.2f}, sent {SENT['ok']}, queue {_out.qsize()}")
+            if stats["speech"] > 50 and SENT["ok"] == 0 and stats["play"] < stats["speech"]:
+                # voice heard, nothing went to the hub: the ear stood still for minutes on
+                # 2026-11-26 14:07 and nobody knew why - its state, for the next time
+                log(f"WARNING: speech heard, nothing sent: speaking {speaking}, segment {len(seg) * CHUNK / SR:.1f}s, "
+                    f"silence {silence:.2f}s, queue {_out.qsize()}, sender alive {SENDER.is_alive()}")
             stats_t, stats = now, collections.Counter()
+            SENT.clear()
 
 
 if __name__ == "__main__":
