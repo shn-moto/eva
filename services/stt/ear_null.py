@@ -36,8 +36,6 @@ W0[HEAR] = 1 / 3
 LOG_DIR = os.environ.get("STT_LOG_DIR", "/log")
 NULL_FILE = os.path.join(LOG_DIR, "ear-null.npz")
 EPS = float(os.environ.get("EAR_NULL_EPS", "0.1"))
-# off until verified live: on 2026-11-26 21:00 the ear went deaf with it on (VAD 0.05 on speech)
-ENABLED = os.environ.get("EAR_NULL", "off") == "on"
 TOL = 12.0                                    # degrees: a block points at the place
 DAYS = 14                                     # how far back clips are taken from
 MIN_FRAMES = 1500                             # ~24 s of the place's sound at least
@@ -62,24 +60,23 @@ class Null:
         self.prev = np.zeros((HOP, 7))
         self.acc = np.zeros(N)
         self.pend = np.zeros((0, 7))
-        self.load()
 
-    def load(self):
-        if not ENABLED:
-            return
+    def load(self, places):
+        """The saved weights, if they were made for these places. -> True if loaded."""
         try:
             d = np.load(NULL_FILE, allow_pickle=False)
-            W = d["W"]
-            if W.shape == self.W.shape:
-                self.W = W
-                self.info = json.loads(str(d["info"]))
-                log(f"weights loaded: {self.info}")
+            W, info = d["W"], json.loads(str(d["info"]))
         except (OSError, KeyError, ValueError):
-            pass
+            return False
+        if W.shape != self.W.shape or info.get("places") != [n for n, _ in places] \
+                or info.get("az") != [round(a) for _, a in places]:
+            return False
+        self.W, self.info = W, info
+        log(f"weights loaded: {info}")
+        return True
 
     def set(self, W, info):
-        if ENABLED:
-            self.W, self.info = W, info
+        self.W, self.info = W, info
 
     def process(self, mics):
         self.pend = np.concatenate([self.pend, mics])
@@ -198,8 +195,9 @@ def calibrate(places, family):
     return W, info
 
 
-def recalibrate(places, family):
-    """In a thread: new weights for the muted places, saved and put into the running ear."""
+def recalibrate(places, family, wanted=None):
+    """In a thread: new weights for the places, saved and put into the running ear - if they are
+    still wanted when ready (wanted(): the switch may have gone off meanwhile)."""
     def run():
         try:
             W, info = calibrate(places, family)
@@ -209,23 +207,19 @@ def recalibrate(places, family):
         null = STATE["null"]
         if W is None:
             log(f"not calibrated: {info}")
-            if null is not None and not places:
-                null.set(np.tile(W0.astype(complex), (len(F), 1)), None)
             return
         np.savez(NULL_FILE + ".tmp.npz", W=W, info=json.dumps(info, ensure_ascii=False))
         os.replace(NULL_FILE + ".tmp.npz", NULL_FILE)
-        if null is not None:
+        with open(NULL_FILE[:-4] + ".json", "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False)          # for the admin page (no numpy there)
+        if null is not None and (wanted is None or wanted()):
             null.set(W, info)
         log(f"calibrated: {info}")
     threading.Thread(target=run, daemon=True).start()
 
 
 def plain():
-    """No muted place: the plain mono again."""
+    """Off, or no place to null: the plain mono again (the saved weights stay for next time)."""
     null = STATE["null"]
     if null is not None:
         null.set(np.tile(W0.astype(complex), (len(F), 1)), None)
-    try:
-        os.remove(NULL_FILE)
-    except OSError:
-        pass

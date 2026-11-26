@@ -194,7 +194,7 @@ def mark_sound(audio, sound):
 # it - unless her name is in it and the voice is a family one.
 PLACES_FILE = os.environ.get("PLACES_FILE", "/keep/admin-settings.json")
 PLACE_TOL = 15.0                 # degrees around the place's mean (one place's phrases spread 2-9)
-_PLACES = {"mtime": None, "places": []}
+_PLACES = {"mtime": None, "places": [], "null": [], "null_on": False}
 
 
 def _places():
@@ -210,11 +210,20 @@ def _places():
         opts, by = s.get("place_opts") or {}, {}
         for p in s.get("places", []):
             by.setdefault(p["name"], []).append(np.radians(float(p["az"])))
-        _PLACES.update(mtime=m, places=[
-            (n, float(np.degrees(np.arctan2(np.sin(a).sum(), np.cos(a).sum()))) % 360, (opts.get(n) or {}).get("mode"))
-            for n, a in by.items()])
+        means = {n: float(np.degrees(np.arctan2(np.sin(a).sum(), np.cos(a).sum()))) % 360 for n, a in by.items()}
+        _PLACES.update(mtime=m, places=[(n, a, (opts.get(n) or {}).get("mode")) for n, a in means.items()],
+                       # the sound null (ear_null.py) is apart from the logical modes: its own
+                       # checkbox per place and a master switch, so the two can be tested apart
+                       null=[(n, a) for n, a in means.items() if (opts.get(n) or {}).get("null")],
+                       null_on=bool(s.get("null_on")))
         log(f"places: {[(n, round(a), mode) for n, a, mode in _PLACES['places'] if mode]}")
     return _PLACES["places"]
+
+
+def null_places():
+    """-> the places to null by sound [(name, az)], [] when the master switch is off."""
+    _places()
+    return sorted(_PLACES["null"]) if _PLACES["null_on"] else []
 
 
 def muted_place(az):

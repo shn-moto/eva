@@ -435,31 +435,32 @@ def server():
 
 
 def null_watch():
-    """The muted places changed (the «Места» page) -> the null is made again from the STT log."""
-    last = None
-    time.sleep(20)                          # the voice base loads first
+    """The «Места» page: the sound null's switch and its places -> the weights in the running ear
+    (the saved ones if they fit, else made again from the STT log)."""
+    last, ear = None, None
+    time.sleep(15)                          # the voice base loads first
     while True:
         try:
-            muted = sorted((n, round(a)) for n, a, mode in hear._places() if mode == "mute")
-            if muted != last:
-                null = ear_null.STATE["null"]
-                have = (null.info or {}) if null else {}
-                if not muted:
-                    if last is not None or have:
-                        ear_null.plain()
-                        log("no muted place: the plain mono")
-                elif have.get("places") != [n for n, _ in muted] or have.get("az") != [a for _, a in muted]:
+            places = [(n, round(a)) for n, a in hear.null_places()]
+            null = ear_null.STATE["null"]
+            if null is not None and (places != last or null is not ear):
+                if not places:
+                    ear_null.plain()
+                    if last:
+                        log("the sound null is off: the plain mono")
+                elif not null.load(places):
                     vb = hear.V()
                     family = list(vb.profiles) if vb is not None else []
-                    log(f"muted places {muted}: making the null")
-                    ear_null.recalibrate(muted, family)
-                last = muted
+                    log(f"sound null for {places}: making it")
+                    want = list(places)
+                    ear_null.recalibrate(places, family,
+                                         wanted=lambda: [(n, round(a)) for n, a in hear.null_places()] == want)
+                last, ear = places, null
         except Exception as e:
             log("null watch:", e)
-        time.sleep(30)
+        time.sleep(5)
 
 
 def start():
     threading.Thread(target=server, daemon=True).start()
-    if ear_null.ENABLED:
-        threading.Thread(target=null_watch, daemon=True).start()
+    threading.Thread(target=null_watch, daemon=True).start()

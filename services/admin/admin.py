@@ -667,19 +667,42 @@ async def set_settings(request: Request):
         if pl.get("remove"):
             (s.get("place_opts") or {}).pop(pl["name"], None)
     if "place_opt" in b:
-        # per place: "mute" (not listened to: the TV) | "only" (listen only to such places) | "" normal
+        # per place: "mode" - the logical one: "mute" (not listened to: the TV) | "only" (listen only
+        # to such places) | "" normal; "null" - the sound null by the mics (services/stt/ear_null.py)
         o = b["place_opt"]
-        mode = o.get("mode") if o.get("mode") in ("mute", "only") else None
         opts = s.setdefault("place_opts", {})
-        if mode:
-            opts[str(o["name"])[:40]] = {"mode": mode}
+        cur = dict(opts.get(o["name"]) or {})
+        if "mode" in o:
+            if o.get("mode") in ("mute", "only"):
+                cur["mode"] = o["mode"]
+            else:
+                cur.pop("mode", None)
+        if "null" in o:
+            if o.get("null"):
+                cur["null"] = True
+            else:
+                cur.pop("null", None)
+        if cur:
+            opts[str(o["name"])[:40]] = cur
         else:
             opts.pop(o["name"], None)
+    if "null_on" in b:
+        s["null_on"] = bool(b["null_on"])          # the sound null's master switch
     os.makedirs(KEEP_DIR, exist_ok=True)
     with open(SETTINGS + ".tmp", "w", encoding="utf-8") as f:
         json.dump(s, f)
     os.replace(SETTINGS + ".tmp", SETTINGS)
     return s
+
+
+@app.get("/api/null")
+def null_state():
+    """The sound null's weights as the hub saved them (stt-log/ear-null.json): for which places,
+    when, how much they take from the place and from speech elsewhere (its json beside them)."""
+    try:
+        return json.load(open(os.path.join(LOG_DIR, "ear-null.json"), encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
 
 
 def _info(base):

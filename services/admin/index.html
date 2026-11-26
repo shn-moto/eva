@@ -111,6 +111,10 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .pl-row select { padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
 .pl-row.mute b { color: var(--danger); } .pl-row.only b { color: var(--accent); }
 .pl-warn { margin: 10px 0 0; color: var(--accent); font-size: 12.5px; }
+.pl-row { grid-template-columns: 1fr 60px 80px 210px 150px auto; }
+.pl-null { padding: 10px 0 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.pl-null .st { color: var(--mute); margin-left: 8px; font-size: 12.5px; }
+.pl-head { color: var(--faint); font-size: 11.5px; border-bottom: 1px solid var(--line); padding: 6px 0; }
 .rs-note { padding: 8px 14px; color: var(--mute); font-size: 12.5px; border-bottom: 1px solid var(--line); }
 .rs-group { padding: 10px 14px 4px; font-weight: 600; display: flex; gap: 10px; align-items: baseline; }
 .rs-group .sub { color: var(--mute); font-weight: 400; font-size: 12px; }
@@ -249,9 +253,11 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
   <div class="rs-box" style="width:min(820px,100%)">
     <div class="bar"><span class="title">Места</span><span class="sub">откуда приходит звук; новое место — на радаре фразы кнопкой «Отметить место…»</span>
       <span style="flex:1"></span><button class="btn" id="pl-close">Закрыть</button></div>
-    <div class="rs-note">«Подавлять звук отсюда» — это не люди в комнате (телевизор): такие фразы не идут ни Еве, ни слушателям
-      и не учат голоса. «Слушать только отсюда» — подавляется всё из других направлений. Имя «Ева», сказанное узнанным голосом
-      семьи, проходит всегда — себя не отрежешь. Угол места ±15°.</div>
+    <div class="rs-note"><b>Логика</b> (режим места): «подавлять звук отсюда» — это не люди в комнате (телевизор): такие фразы
+      не идут ни Еве, ни слушателям и не учат голоса; «слушать только отсюда» — подавляется всё из других направлений. Имя «Ева»,
+      сказанное узнанным голосом семьи, проходит всегда. Угол места ±15°.<br>
+      <b>Звук</b> (глушить микрофонами): направленный фильтр по 7 микрофонам гасит звук места ещё до распознавания — тише на
+      ~10 дБ, речь поверх него чище. Собирается из записей журнала (~20 с) при смене отмеченных мест. Работает отдельно от логики.</div>
     <div id="pl-list"></div>
   </div>
 </div>
@@ -1013,22 +1019,52 @@ function plRender() {
     return `<div class="pl-row ${mode}"><b>${esc(p.name)}</b><span>${Math.round(scr(p.az))}°</span>
       <span style="color:var(--faint)">${p.n} ${p.n === 1 ? "отметка" : p.n < 5 ? "отметки" : "отметок"}</span>
       <select class="pl-mode" data-n="${esc(p.name)}">${MODES.map(([v, l]) => `<option value="${v}"${v === mode ? " selected" : ""}>${l}</option>`).join("")}</select>
+      <label title="Направленный фильтр по микрофонам гасит звук отсюда"><input type="checkbox" class="pl-nullp" data-n="${esc(p.name)}"${(opts[p.name] || {}).null ? " checked" : ""}> глушить микрофонами</label>
       <button class="btn pl-del" data-n="${esc(p.name)}" title="Забыть это место (все отметки)">Удалить</button></div>`;
   });
   const only = Object.values(opts).some(o => o.mode === "only");
-  $("#pl-list").innerHTML = (rows.join("") || `<p style="color:var(--mute)">Мест пока нет: выбери фразу, на радаре — «Отметить место…».</p>`)
+  const N = PL.null || {}, nullNames = Object.entries(opts).filter(([, o]) => o.null).map(([n]) => n);
+  const fit = N.places && JSON.stringify(N.places) === JSON.stringify([...nullNames].sort());
+  const st = !ROOM.null_on ? "выключено — обычный сигнал"
+    : !nullNames.length ? "включено, но ни одно место не отмечено «глушить микрофонами»"
+    : fit ? `собран ${esc(N.made)}: место ${N.place_db} дБ, речь в других местах ${N.speech_db} дБ (${N.seconds} с звука места)`
+    : "собирается из записей журнала…";
+  const head = `<div class="pl-null"><label><input type="checkbox" id="pl-null-on"${ROOM.null_on ? " checked" : ""}>
+      <b>Звуковое подавление</b> (направленный фильтр по микрофонам)</label><span class="st">${st}</span></div>
+    <div class="pl-row pl-head"><span>место</span><span>угол</span><span></span><span>логика</span><span>звук</span><span></span></div>`;
+  $("#pl-list").innerHTML = head + (rows.join("") || `<p style="color:var(--mute)">Мест пока нет: выбери фразу, на радаре — «Отметить место…».</p>`)
     + (only ? `<p class="pl-warn">Включено «слушать только отсюда»: всё из других направлений подавляется.</p>` : "");
   $("#pl-list").querySelectorAll(".pl-mode").forEach(e => e.onchange = async () => {
     ROOM = await api("/api/settings", { place_opt: { name: e.dataset.n, mode: e.value } });
     toast(e.value ? "Режим места сохранён" : "Место — обычно"); plRender(); radar();
   });
+  $("#pl-list").querySelectorAll(".pl-nullp").forEach(e => e.onchange = async () => {
+    ROOM = await api("/api/settings", { place_opt: { name: e.dataset.n, null: e.checked } });
+    toast(e.checked ? "Место глушится микрофонами" : "Место не глушится"); plRender(); plPoll();
+  });
+  $("#pl-null-on").onchange = async e => {
+    ROOM = await api("/api/settings", { null_on: e.target.checked });
+    toast(e.target.checked ? "Звуковое подавление включено" : "Звуковое подавление выключено"); plRender(); plPoll();
+  };
   $("#pl-list").querySelectorAll(".pl-del").forEach(e => e.onclick = async () => {
     if (!confirm(`Забыть место «${e.dataset.n}»?`)) return;
     ROOM = await api("/api/settings", { place: { name: e.dataset.n, remove: true } });
     plRender(); radar();
   });
 }
-$("#pl-open").onclick = async () => { ROOM = await api("/api/settings"); $("#pl").hidden = false; plRender(); };
+const PL = { null: {}, poll: 0 };
+async function plPoll() {
+  // the hub remakes the null in ~20 s after a change: watch its saved state for a minute
+  clearTimeout(PL.poll);
+  let n = 0;
+  const tick = async () => {
+    PL.null = await api("/api/null").catch(() => ({}));
+    if (!$("#pl").hidden) plRender();
+    if (++n < 15 && !$("#pl").hidden) PL.poll = setTimeout(tick, 4000);
+  };
+  tick();
+}
+$("#pl-open").onclick = async () => { ROOM = await api("/api/settings"); PL.null = await api("/api/null").catch(() => ({})); $("#pl").hidden = false; plRender(); };
 $("#pl-close").onclick = () => { $("#pl").hidden = true; };
 $("#ls-new").onclick = () => {
   lsGrab();
