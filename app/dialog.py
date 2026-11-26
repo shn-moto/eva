@@ -496,6 +496,7 @@ def on_phrase(item):
         # the speaker, so his "стоп" comes inside a phrase of hers.
         if item.get("self_sim", 0) >= SELF_SIM and item["self_sim"] > item.get("fam_sim", 0) + SELF_MARGIN:
             log(f"own voice ({item['self_sim']} / family {item.get('fam_sim')}): {text!r}")
+            hub_ear.mark_echo(item)
             return
         own = VOICE.own_words()
         foreign = [w for w in words if not echo_fragment(w, own)]
@@ -524,6 +525,7 @@ def on_phrase(item):
             return
         if VOICE.is_echo(text):
             log(f"own echo: {text!r}")
+            hub_ear.mark_echo(item)
         return
     # an answer awaited for someone in Telegram (after the echo filter above)
     if relay_take(text, item):

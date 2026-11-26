@@ -836,6 +836,13 @@ async def hear_start(request: Request):
     return {"ok": True}
 
 
+@app.post("/hear/echo")
+async def hear_echo(request: Request):
+    """{"audio": "<day>/<clip>"} - the brain heard her own voice in this clip."""
+    import hear
+    return {"ok": hear.mark_echo((await request.json()).get("audio"))}
+
+
 @app.post("/hear/config")
 async def hear_config(request: Request):
     return _hear.config(await request.json())

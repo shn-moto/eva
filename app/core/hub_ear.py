@@ -29,6 +29,23 @@ def _worker(on_phrase):
             log(f"phrase failed: {e!r}")
 
 
+def mark_echo(item):
+    """Her own voice in this clip (the dialog's verdict): the hub marks the clip, the
+    admin page shows it as «Ева (эхо)» at once. In a thread: the dialog never waits."""
+    audio = item.get("audio")
+    if not audio or not STATE["active"]:
+        return
+
+    def post():
+        try:
+            req = urllib.request.Request(URL.rsplit("/", 1)[0] + "/echo", data=json.dumps({"audio": audio}).encode(),
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=5).read()
+        except Exception as e:
+            log(f"mark echo {audio}: {e}")
+    threading.Thread(target=post, daemon=True).start()
+
+
 def hearing():
     """A phrase is being heard right now (a stale "on" expires: a lost "off")."""
     return STATE["on"] and time.time() - STATE["at"] < 30

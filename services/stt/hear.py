@@ -494,6 +494,26 @@ def note_who(audio, span, label, sim):
         log("note_who:", e)
 
 
+def mark_echo(audio):
+    """The brain took this clip for her own voice: marked at once, as the rescan
+    marks it (rescan.mark_echo) - the admin page shows «Ева (эхо)» right away."""
+    import os
+    if not audio or "/" not in audio or ".." in audio:
+        return False
+    p = os.path.join(S().LOG_DIR, audio.split("#")[0] + ".json")
+    try:
+        info = json.load(open(p, encoding="utf-8"))
+        if info.get("echo"):
+            return True
+        info["echo"] = True
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False)
+        return True
+    except (OSError, ValueError) as e:
+        log("mark_echo:", e)
+        return False
+
+
 def joined_into(piece, whole):
     """A held piece glued with its rest was recognised again as one sound: the
     piece's own clip in the STT log is marked, so the admin page does not show
