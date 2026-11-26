@@ -91,6 +91,7 @@ SYSTEM = ("Ты классификатор фраз для домашнего г
 Примеры (контекст: обращение по имени или разговор, если не сказано иначе):
 "ева включи квин" -> {"to_eva":true,"intent":"music_play","query":"Queen","kind":"selection"}
 "включи Bohemian Rhapsody" -> {"to_eva":true,"intent":"music_play","query":"Bohemian Rhapsody","kind":"track"}
+"включи наутилус казанова" -> {"to_eva":true,"intent":"music_play","query":"Наутилус Помпилиус Казанова","kind":"track"}
 "включи детские песни" -> {"to_eva":true,"intent":"music_play","query":"детские песни","kind":"selection"}
 "хорошо включи ка мне наутилус" -> {"to_eva":true,"intent":"music_play","query":"Наутилус Помпилиус","kind":"selection"}
 "ева включи" -> {"to_eva":true,"intent":"claude"}

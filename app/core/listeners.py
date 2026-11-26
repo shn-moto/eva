@@ -184,6 +184,12 @@ def _act(x, ts, text, name, kids):
             send({"name": x["to"], "text": msg}, Person("Ева"))
         except Exception as e:
             log(f"listener {x['id']}: telegram: {e}")
+    elif action == "music" and msg:
+        # exactly the query written, no interpretation, no Claude: «Наутилус - Казанова»
+        import dialog
+        from core.identity import Person
+        dialog.WORK.put((f"[слушатель «{x.get('name')}»] включи {msg}", Person("Ева", channel="voice"),
+                         {"intent": "music_play", "query": msg, "kind": "track"}))
     elif action == "eva" and msg:
         import dialog
         from core.identity import Person
