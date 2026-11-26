@@ -9,7 +9,8 @@ profile.json "artist" (every key optional, the defaults are SAM Grid):
       "base_url":   "https://api.grid.sam-solutions.net/v1",   an OpenAI-compatible images API:
                     POST /images/generations {model, prompt, size, n}, POST /images/edits (multipart)
       "key":        "GRID_KEY",               the name of its key in /etc/eva/secrets.env
-      "model":      "saipixel-qwen-image-2.1", the best picture (~30 s)
+      "draw_api":   "xai",                    who draws: "xai" (xAI images API) or "openai" (base_url)
+      "model":      "grok-imagine-image-2.0", the best picture (~$0.04)
       "fast_model": "saipixel-krea2-turbo",    a quick one (~10 s)
       "edit_api":   "xai",                    who redraws a picture: "xai" (xAI images API, XAI_API_KEY)
                                                 or "openai" (the base_url above, multipart /images/edits)
@@ -41,7 +42,9 @@ from core.util import log, secrets
 CFG = {
     "base_url": "https://api.grid.sam-solutions.net/v1",
     "key": "GRID_KEY",
-    "model": "saipixel-qwen-image-2.1",
+    # drawing on xAI too (user, 2026-11-26): the SAM Grid models were far below it on the same photo
+    "draw_api": "xai",
+    "model": "grok-imagine-image-2.0",
     "fast_model": "saipixel-krea2-turbo",
     # drawing and editing apart (2026-11-26): on SAM Grid flux2-klein made two-headed wolves of «put her on
     # a wolf» and qwen-image-2.1 a girl grown into a small wolf; xAI's grok-imagine-image-2.0 turned the
@@ -83,7 +86,20 @@ def _images(req, timeout):
     return out[0]
 
 
-def generate(prompt, size, model):
+ASPECT = {"square": "1:1", "portrait": "2:3", "landscape": "16:9"}   # xAI takes aspect ratios, not pixels
+
+
+def generate(prompt, size, model, shape=None):
+    """A picture from words. The fast model always goes to base_url (SAM Grid)."""
+    if CFG.get("draw_api") == "xai" and model == CFG["model"]:
+        k = secrets().get("XAI_API_KEY")
+        if not k:
+            raise RuntimeError("нет ключа xAI (XAI_API_KEY в secrets.env)")
+        body = json.dumps({"model": model, "prompt": prompt, "n": 1, "response_format": "b64_json",
+                           "aspect_ratio": ASPECT.get(shape or "square", "1:1")}).encode()
+        req = urllib.request.Request("https://api.x.ai/v1/images/generations", data=body, method="POST",
+                                     headers={"Authorization": "Bearer " + k, "Content-Type": "application/json"})
+        return _images(req, 300)
     body = json.dumps({"model": model, "prompt": prompt, "size": size, "n": 1}).encode()
     req = urllib.request.Request(CFG["base_url"] + "/images/generations", data=body, method="POST", headers={
         "Authorization": "Bearer " + _key(), "Content-Type": "application/json"})
@@ -177,7 +193,7 @@ def draw(args, person):
     fast = args.get("quality") == "fast"
     model = CFG["fast_model"] if fast else CFG["model"]
     t0 = time.time()
-    raw = generate(args["prompt"], _size(args.get("shape")), model)
+    raw = generate(args["prompt"], _size(args.get("shape")), model, args.get("shape"))
     title = (args.get("title") or "рисунок").strip()
     fid = _keep(raw, f"{title}.png")
     MADE[fid] = {"title": title, "prompt": args["prompt"], "by": getattr(person, "name", None)}
@@ -304,7 +320,7 @@ photo_id и file_id: возьмётся то, что на экране.
   (детская книжка, акварель, аниме, мультфильм, раскраска - чёрные контуры
   на белом), цвета, фон. Надписей на картинке не проси: модели пишут буквы
   с ошибками, особенно по-русски.
-- Рисунок идёт ~30 с (быстрый, quality=fast, ~10 с - когда просят быстро
+- Рисунок идёт ~15-20 с (быстрый, quality=fast, ~10 с и проще - когда просят быстро
   или черновик). Перед рисованием скажи коротко «сейчас нарисую».
 - Посмотри на результат честно, прежде чем говорить. Лишние головы, руки,
   чужие люди, не та сцена или (после переделки) исходное фото не то, о котором
@@ -330,7 +346,7 @@ SKILL = Skill(
                 "properties": {"prompt": {"type": "string", "description": "подробное описание по-английски"},
                                "title": _TITLE, "shape": _SHAPE,
                                "quality": {"type": "string", "enum": ["best", "fast"],
-                                           "description": "best (~30 с, по умолчанию) | fast (~10 с)"}}},
+                                           "description": "best (~15-20 с, по умолчанию) | fast (~10 с, проще)"}}},
         handler=draw, needs="known",
     ), Tool(
         name="picture_redraw",
