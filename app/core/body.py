@@ -69,12 +69,33 @@ def speech(gen, sid, text, wav_path, frames):
                             "wav": base64.b64encode(data).decode()}, timeout=10)
 
 
+BOOT = {"id": None}
+
+
+def _check_boot():
+    """A new boot of the Station (its boot id changed, up < 5 min): the "boot" handlers run once."""
+    h = get("/health") or {}
+    bid = h.get("boot_id")
+    if not bid or bid == BOOT["id"]:
+        return
+    first = BOOT["id"] is None
+    BOOT["id"] = bid
+    if first and (h.get("uptime") or 0) > 300:
+        return                            # the brain started, the Station has been up long
+    if (h.get("uptime") or 0) > 300:
+        return
+    log(f"body: the Station booted {h.get('uptime')} s ago")
+    for fn in _handlers.get("boot", []):
+        threading.Thread(target=fn, args=(h,), daemon=True).start()
+
+
 def listen():
     """The body's events -> the handlers. Runs forever, reconnects."""
     while True:
         try:
             with urllib.request.urlopen(URL + "/events", timeout=40) as r:
                 log("body events: connected")
+                _check_boot()
                 for line in r:
                     line = line.decode("utf-8", "replace").strip()
                     if not line.startswith("data: "):

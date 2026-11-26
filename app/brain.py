@@ -156,6 +156,20 @@ if __name__ == "__main__":
                 cost.on_change()
     threading.Thread(target=new_day, daemon=True).start()
 
+    def station_booted(h):
+        """The Station came up (power, reboot): the face, then the greeting in her current voice -
+        not the Station's own eva-greet (Eve's voice, then the slideshow straight away, 2026-11-26)."""
+        for _ in range(60):               # the TV page first: the greeting comes with the face
+            if (body.get("/health") or {}).get("ui_pages"):
+                break
+            time.sleep(1)
+        slideshow.stop("the Station booted")
+        dialog.state["last_spoke"] = time.time()   # the slideshow waits its usual pause from now
+        screen.redraw()
+        speech.ui({"type": "avatar", "mode": say.avatar()})
+        dialog.VOICE.say("Система загружена. Я готова.")
+    body.on("boot", station_booted)
+
     def warm():
         """The voice cache through a pause (llm.keepalive), while the home is awake."""
         from core import identity

@@ -173,6 +173,21 @@ class Speaker:
 SPEAKER = None
 
 
+def _boot():
+    out = {}
+    try:
+        out["boot_id"] = open("/proc/sys/kernel/random/boot_id").read().strip()
+        out["uptime"] = round(float(open("/proc/uptime").read().split()[0]))
+    except OSError:
+        pass
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8080/api/status", timeout=1) as r:
+            out["ui_pages"] = json.loads(r.read()).get("pages", 0)
+    except Exception:
+        out["ui_pages"] = 0
+    return out
+
+
 # ---- music: one mpg123 in remote mode ----
 class Mpg123:
     def __init__(self):
@@ -337,7 +352,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(403, {"error": "home network only"})
         path = urllib.parse.urlparse(self.path).path
         if path == "/health":
-            return self._json(200, {"ok": True, "speaking": SPEAKER.busy()})
+            # boot: which boot of the Station this is and how long ago (the brain greets once per
+            # boot, in her current voice); ui: the TV page is up (the greeting waits for the face)
+            return self._json(200, {"ok": True, "speaking": SPEAKER.busy(), **_boot()})
         if path == "/volume":
             return self._json(200, {"pct": volume_get()})
         if path == "/events":
