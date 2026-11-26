@@ -677,7 +677,7 @@ function onHear(ev) {
   const busy = hear.state === "think" && Date.now() < hear.until;
   if (ev.state === "on") { if (!busy) setHear("on", "", 15000); }
   else if (ev.state === "stt") { if (!busy) setHear("stt", "", 6000); }
-  else if (ev.state === "held") setHear("held", ev.text, 3000);
+  else if (ev.state === "held") { setHear("held", ev.text, 3000); hear.ear = ev.source === "ear"; }
   else if (ev.state === "text") { if (!busy) setHear("text", ev.text, 6000); }
   else if (ev.state === "called") setHear("called", ev.text, 6000);
   else if (ev.state === "ignored") { if (!busy || hear.text === ev.text) setHear("ignored", ev.text, 2500); }
@@ -713,7 +713,9 @@ function drawStatus(now, t) {
   }
   const left = attn.speaking ? 1 : Math.max(0, (attn.until - now) / (attn.total || 1));
   attnEl.classList.toggle("on", left > 0);
-  attnEl.classList.toggle("live", ["on", "stt", "held"].includes(hear.state));
+  // live only when SHE decided the phrase is for her (the brain's held / called), not on any voice
+  // the ear heard - the TV and talk in the room lit it (user, 2026-11-26)
+  attnEl.classList.toggle("live", (hear.state === "held" && !hear.ear) || hear.state === "called");
   barEl.style.transform = "scaleX(" + Math.min(1, left).toFixed(4) + ")";   // compositor only, no layout
 }
 
