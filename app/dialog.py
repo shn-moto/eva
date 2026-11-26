@@ -32,6 +32,7 @@ HISTORY_FILE = "/var/lib/eva/history.json"
 # how much she keeps: llm.HISTORY_CHARS (by volume, not by time - 2026-11-20)
 CONTINUE = "<продолжи>"
 # said when a tool call begins and she has not said anything yet (sounds cached at start)
+QUIET_TOOLS = {"music_play", "music_control"}   # done without a filler: the player shows it
 FILLERS = profile.tune("dialog.fillers", ["Секунду, сейчас посмотрю.", "Сейчас гляну.", "Погоди, посмотрю.", "Так, сейчас посмотрю."])
 
 # a call is the vocative: «почему ты назвал её Евой» is about her, not to her
@@ -210,7 +211,7 @@ def answer(text, person, owner=None, note=None):
         sent, st["buf"] = st["buf"].strip(), ""
         if sent.startswith(SILENT):
             sent = ""
-        if not sent and st["spoken"]:
+        if not sent and (st["spoken"] or name in QUIET_TOOLS):
             return
         sent = sent or random.choice(FILLERS)
         if not st["spoken"] and text != CONTINUE:
@@ -241,10 +242,18 @@ def answer(text, person, owner=None, note=None):
         return
     rest = st["buf"].strip()
     if rest == SILENT or (not st["spoken"] and rest.startswith(SILENT)):
-        history.pop()
+        if rounds:
+            # done without a word (music on: the player is on the TV) - the calls stay in the
+            # history, else she does not know she did it and does it again (2026-11-26)
+            history.extend(rounds)
+            history.append({"role": "assistant", "content": "(сделано)"})
+            llm.trim(history)
+            ui({"type": "hear", "state": "called", "text": text})
+        else:
+            history.pop()
+            ui({"type": "hear", "state": "ignored", "text": text})
         save_history()
         log(f"silent ({int(1000 * (time.time() - t0))}ms)")
-        ui({"type": "hear", "state": "ignored", "text": text})
         return
     if rest:
         if not st["spoken"] and text != CONTINUE:
@@ -272,8 +281,10 @@ def answer(text, person, owner=None, note=None):
         f"stop {r['final'].stop_reason}: {reply!r}")
 
 
-LOCAL_SAY = {"unclear": "Не расслышала. Повтори, пожалуйста.", "music_stop": "Выключила.",
-             "music_pause": "Пауза.", "music_resume": "Продолжаю.", "screen_close": None}
+# music commands are not confirmed aloud: the player on the TV shows it, and every spoken
+# «Включаю …» costs a TTS call and lies over the first seconds of the music (user, 2026-11-26)
+LOCAL_SAY = {"unclear": "Не расслышала. Повтори, пожалуйста.", "music_stop": None,
+             "music_pause": None, "music_resume": None, "screen_close": None}
 AVATAR_SAY = {"ascii": "Лицо из символов.", "image": "Аниме лицо.", "eq": "Эквалайзер.", "live2d": "Живая модель."}
 
 
@@ -301,8 +312,10 @@ def local(text, person, r):
             else:
                 p.play(found)
                 t = found[0]
-                reply = (f"Включаю {music.clean(t.get('title'))}"
-                         + (f", {music.clean(t['artist'])}" if t.get("artist") else "") + ".")
+                # silent: the history still learns what plays (the call below)
+                result = (f"Включила {music.clean(t.get('title'))}"
+                          + (f", {music.clean(t['artist'])}" if t.get("artist") else "") + ".")
+                reply = None
         elif intent == "music_stop":
             alarm = sys.modules.get("skills.calendar")
             if alarm and alarm.ALARM["on"]:
@@ -383,7 +396,7 @@ def _local_call(intent, r, result, reply):
     if intent == "print_screen":
         return "print_screen", {}, done + (result or reply or "")
     if intent == "music_play" and r.get("query"):
-        return "music_play", {"query": r["query"], "kind": r.get("kind") or "track"}, done + (reply or "Включила.")
+        return "music_play", {"query": r["query"], "kind": r.get("kind") or "track"}, done + (reply or result or "Включила.")
     if intent in MUSIC_ACTION:
         return "music_control", {"action": MUSIC_ACTION[intent]}, done + (reply or music.PLAYER.describe() or "Сделано.")
     if intent.startswith("screen_"):
