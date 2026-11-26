@@ -19,7 +19,8 @@ costs nothing:
                  free): asked only after the steps above passed ("" - not asked)
      "action":   "say"       - text aloud at home (no Claude)
                  "telegram"  - text to `to` (a family name) in Telegram (no Claude)
-                 "eva"       - text as an instruction to her: a turn of the voice
+                 "eva"       - text as an instruction to her: a command of the router's
+                               catalog is done locally (free); otherwise a turn of the voice
                                conversation (Claude), with the phrase and its context
                  "log"       - only the log line
      "text", "to", "cooldown": s between two firings}
@@ -186,6 +187,13 @@ def _act(x, ts, text, name, kids):
     elif action == "eva" and msg:
         import dialog
         from core.identity import Person
+        # the model ladder (core/llm.py): a command from the router's catalog («включи
+        # Наутилус», «громче», «распечатай это») is done locally, free; Claude only for the rest
+        r = router.route(msg, named=True, in_dialog=True)
+        if r and r.get("intent") not in (None, "claude", "ignore", "unclear", "ack"):
+            log(f"listener {x['id']}: by the router: {r['intent']} {({k: v for k, v in r.items() if k not in ('intent', 'ms')})}")
+            dialog.WORK.put((f"[слушатель «{x.get('name')}»] {msg}", Person("Ева", channel="voice"), r))
+            return
         dialog.WORK.put((msg, Person("Ева", channel="voice"), None,
                          f"[система: это сработал слушатель «{x.get('name')}». Услышано: «{text}» "
                          f"({who}). Недавно дома говорили:\n{_context(ts)}\nСделай, что сказано; "
