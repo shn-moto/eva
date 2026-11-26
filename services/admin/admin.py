@@ -141,7 +141,9 @@ def days():
     out = {str(d): {"day": str(d), "n": n, "kept": k, "audio": a} for d, n, k, a in rows}
     if os.path.isdir(LOG_DIR):
         for d in os.listdir(LOG_DIR):
-            out.setdefault(d, {"day": d, "n": 0, "kept": 0, "audio": 0})
+            # only the day folders: the ear keeps its own files there too (ear-null.npz, ear-box/)
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) and os.path.isdir(os.path.join(LOG_DIR, d)):
+                out.setdefault(d, {"day": d, "n": 0, "kept": 0, "audio": 0})
     return sorted(out.values(), key=lambda x: x["day"], reverse=True)
 
 
