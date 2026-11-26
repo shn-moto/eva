@@ -129,6 +129,18 @@ if __name__ == "__main__":
     # the status bar on the TV: the numbers after every Claude call, and now
     cost.on_change = lambda: threading.Thread(target=ui, args=(cost.stats(),), daemon=True).start()
     cost.on_change()
+
+    def new_day():
+        """The status bar's numbers are sent after a Claude call: at midnight nobody called,
+        and the morning TV showed yesterday's spend over the limit (2026-11-26) - a new
+        day's zeros go out by themselves."""
+        day = time.strftime("%Y-%m-%d")
+        while True:
+            time.sleep(30)
+            if time.strftime("%Y-%m-%d") != day:
+                day = time.strftime("%Y-%m-%d")
+                cost.on_change()
+    threading.Thread(target=new_day, daemon=True).start()
     threading.Thread(target=music.PLAYER.duck_watch, daemon=True).start()
     start_slideshow()
     # "секунду, посмотрю" must sound at once: its speech is made now, once, and cached
