@@ -57,6 +57,13 @@ HEAR_MICS = [0, 2, 4]            # mixed for listening: some capsules have the o
 MIC_GAIN = _f("mic_gain", 32.0)  # after the canceller: the levels the VAD and STT were tuned on
 REF_GAIN = _f("ref_gain", 32.0)  # the tap (PGA 0.5 dB) is ~-60 dBFS: up to where AEC3 sees it
 REF_ACTIVE = _f("ref_active", 5e-4) * REF_GAIN
+# The tap always carries the ADC's own noise (~-61 dBFS after REF_GAIN). Given to AEC3 as it is,
+# that noise looked like "the speaker plays" and AEC3 suppressed everything said in the room as
+# echo: on 2026-11-26 21:12 the VAD found 3 speech chunks in a minute where its input had 106.
+# The reference is zero while the speaker is silent (a 10 ms frame below REF_GATE), kept open
+# REF_HOLD frames after the last loud one so her voice's quiet tails still count.
+REF_GATE = _f("ref_gate", 0.003)
+REF_HOLD = int(_f("ref_hold", 20))
 START_P, END_P = _f("start_p", 0.5), _f("end_p", 0.35)
 END_SILENCE = _f("end_silence", 0.8)
 TAIL_KEEP = _f("tail_keep", 0.3)
@@ -150,6 +157,8 @@ class Front:
         self.hp = HighPass()
         self.mic = np.zeros(0, dtype=np.int16)
         self.ref = np.zeros(0, dtype=np.int16)
+        self.hold = 0
+        self.silent = np.zeros(APM_N, dtype=np.int16)
 
     def process(self, mic, ref):
         """mic, ref: int16 at the ADC's level. -> the processed mic (int16), any length."""
@@ -157,7 +166,12 @@ class Front:
         self.ref = np.concatenate([self.ref, np.clip(ref.astype(np.float64) * REF_GAIN, -32768, 32767).astype(np.int16)])
         out = []
         while len(self.mic) >= APM_N:
-            r = rtc.AudioFrame(self.ref[:APM_N].tobytes(), SR, 1, APM_N)
+            rf = self.ref[:APM_N]
+            if float(np.sqrt(np.mean((rf.astype(np.float64) / 32768) ** 2))) > REF_GATE:
+                self.hold = REF_HOLD
+            elif self.hold > 0:
+                self.hold -= 1
+            r = rtc.AudioFrame((rf if self.hold > 0 else self.silent).tobytes(), SR, 1, APM_N)
             self.apm.process_reverse_stream(r)
             f = rtc.AudioFrame(self.mic[:APM_N].tobytes(), SR, 1, APM_N)
             self.apm.process_stream(f)
