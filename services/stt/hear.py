@@ -185,6 +185,65 @@ def mark_sound(audio, sound):
         log("mark_sound:", e)
 
 
+# ---- places: where sound is not listened to (user, 2026-11-26) ----
+# The places are marked on the admin page («Отметить место…», the «Места» page; admin-settings
+# .json). Each has a mode: "mute" - sound from there is not people in the room (the TV behind
+# the Station: a Polish cartoon, Russian-only STT made gibberish of it, guest groups grew from
+# its voices, listeners checked it); "only" - listen only to the places marked so, everything
+# from other directions is muted. A muted phrase teaches the voices nothing and the brain drops
+# it - unless her name is in it and the voice is a family one.
+PLACES_FILE = os.environ.get("PLACES_FILE", "/keep/admin-settings.json")
+PLACE_TOL = 15.0                 # degrees around the place's mean (one place's phrases spread 2-9)
+_PLACES = {"mtime": None, "places": []}
+
+
+def _places():
+    try:
+        m = os.path.getmtime(PLACES_FILE)
+    except OSError:
+        return []
+    if m != _PLACES["mtime"]:
+        try:
+            s = json.load(open(PLACES_FILE, encoding="utf-8"))
+        except (OSError, ValueError):
+            return _PLACES["places"]
+        opts, by = s.get("place_opts") or {}, {}
+        for p in s.get("places", []):
+            by.setdefault(p["name"], []).append(np.radians(float(p["az"])))
+        _PLACES.update(mtime=m, places=[
+            (n, float(np.degrees(np.arctan2(np.sin(a).sum(), np.cos(a).sum()))) % 360, (opts.get(n) or {}).get("mode"))
+            for n, a in by.items()])
+        log(f"places: {[(n, round(a), mode) for n, a, mode in _PLACES['places'] if mode]}")
+    return _PLACES["places"]
+
+
+def muted_place(az):
+    """-> {"place", "why": "mute" | "outside"} when sound from this angle is not listened to."""
+    if az is None:
+        return None
+    places = _places()
+    near = [(n, mode) for n, a, mode in places if abs((float(az) - a + 540) % 360 - 180) <= PLACE_TOL]
+    for n, mode in near:
+        if mode == "mute":
+            return {"place": n, "why": "mute"}
+    only = [n for n, a, mode in places if mode == "only"]
+    if only and not any(mode == "only" for _, mode in near):
+        return {"place": near[0][0] if near else None, "why": "outside"}
+    return None
+
+
+def mark_muted(audio, muted):
+    """The clip came from a muted place: the admin page shows it as who."""
+    p = os.path.join(S().LOG_DIR, audio.split("#")[0] + ".json")
+    try:
+        info = json.load(open(p, encoding="utf-8"))
+        info["muted"] = muted
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False)
+    except (OSError, ValueError) as e:
+        log("mark_muted:", e)
+
+
 # ---- clean phrases: one voice from one place ----
 # The voices learn only from clean phrases (user, 2026-11-26): a phrase where a second
 # place speaks (a sustained other direction) is "mixed" - its speaker is told by its head
@@ -578,9 +637,15 @@ class Hearing:
             meta["self_sim"], meta["fam_sim"] = vb.sims(v)
         window = bool(meta.get("window"))
         meta.update(text=text, raw=raw, voice=None if window else v)
+        muted = None if window else muted_place((meta.get("doa") or {}).get("az"))
+        if muted:
+            meta["muted"] = muted
+            if not self.dry and meta.get("audio") and text:
+                mark_muted(meta["audio"], muted)
         if v and vb is not None and not window and text:
-            # a mixed phrase teaches nothing (mixed_at): it is only recognised
-            label, sim, known = vb.identify(v, meta.get("dur", 0), learn=not self.dry and meta.get("mixed") is None)
+            # a mixed phrase teaches nothing (mixed_at), nor one from a muted place: it is only recognised
+            label, sim, known = vb.identify(v, meta.get("dur", 0),
+                                            learn=not self.dry and meta.get("mixed") is None and not muted)
             meta["speaker"] = {"label": label, "sim": sim, "known": known}
             if not known:
                 # not signed (too short, too close): the nearest family voice goes along as a guess
@@ -602,7 +667,8 @@ class Hearing:
                     log("print not kept:", e)
         log(f"#{meta.get('seq')} {'window' if window else 'phrase'} {meta['dur']:.1f}s playback {meta.get('playback', 0):.0%} "
             f"residual {meta.get('residual')} stt {meta.get('stt_ms')}ms self {meta.get('self_sim')} "
-            f"fam {meta.get('fam_sim')} {(meta.get('speaker') or {}).get('label', '')}: {text!r}")
+            f"fam {meta.get('fam_sim')} {(meta.get('speaker') or {}).get('label', '')}"
+            f"{' [muted: ' + str(muted['place'] or 'outside') + ']' if muted else ''}: {text!r}")
         # her own echo is never held: joined with his next phrase it swallowed his
         # "хорошо" (echo "снова я" held, the merge came out "снова я" again, 2026-11-19)
         echo = meta.get("playback", 0) > SHOW_PLAYBACK or (meta.get("self_sim") or 0) >= 0.45

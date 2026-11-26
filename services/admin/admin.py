@@ -184,6 +184,10 @@ def _heard(day, linked):
                 continue                  # a piece glued with its rest: the whole is shown
             if info.get("echo"):
                 info["who"] = [{"label": "Ева (эхо)"}]       # her own voice, caught in the log
+            elif info.get("muted"):
+                # from a muted place (services/stt/hear.py, the «Места» page)
+                m = info["muted"]
+                info["who"] = [{"label": (m.get("place") or "вне мест") + " (подавлено)"}]
             elif info.get("noise") or (info.get("sound") or {}).get("verdict") == "noise":
                 top = ((info.get("sound") or {}).get("top") or [["", 0]])[0][0]
                 info["who"] = [{"label": "шум" + (f" ({top})" if top else "")}]
@@ -658,6 +662,17 @@ async def set_settings(request: Request):
             places.append({"name": str(pl["name"])[:40], "az": float(pl["az"]) % 360,
                            "audio": pl.get("audio"), "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")})
         s["places"] = places
+        if pl.get("remove"):
+            (s.get("place_opts") or {}).pop(pl["name"], None)
+    if "place_opt" in b:
+        # per place: "mute" (not listened to: the TV) | "only" (listen only to such places) | "" normal
+        o = b["place_opt"]
+        mode = o.get("mode") if o.get("mode") in ("mute", "only") else None
+        opts = s.setdefault("place_opts", {})
+        if mode:
+            opts[str(o["name"])[:40]] = {"mode": mode}
+        else:
+            opts.pop(o["name"], None)
     os.makedirs(KEEP_DIR, exist_ok=True)
     with open(SETTINGS + ".tmp", "w", encoding="utf-8") as f:
         json.dump(s, f)

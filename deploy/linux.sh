@@ -32,7 +32,9 @@ stt)
     # 8912: the Station's raw sound stream (ear_stream.py)
     run="-p 8901:8901 -p 8912:8912 --add-host=host.docker.internal:host-gateway --env-file \$HOME/eva-data/admin.env -e STT_ENGINE=gigaam-rnnt -e GIGAAM_DIR=/models/giga3-rnnt -e STT_THREADS=8 \
 -e STT_LOG_DIR=/log -v /etc/localtime:/etc/localtime:ro \
--v \$HOME/newalisa-stt-v3/models:/models:ro -v \$HOME/eva-data/stt-log:/log"
+-v \$HOME/newalisa-stt-v3/models:/models:ro -v \$HOME/eva-data/stt-log:/log \
+-v \$HOME/eva-data/stt-keep:/keep:ro"
+    # /keep: the admin page's settings - the places marked there (the TV: services/stt/hear.py)
     cmd="uvicorn stt_server:app --host 0.0.0.0 --port 8901"
     health=/health ;;
 voice-events)

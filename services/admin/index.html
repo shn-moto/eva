@@ -104,6 +104,13 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .help { color: var(--mute); font-size: 12px; }
 .rs-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: min(1100px, 100%);
           display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+/* places */
+#pl-list { overflow: auto; padding: 6px 14px 14px; }
+.pl-row { display: grid; grid-template-columns: 1fr 60px 80px 230px auto; gap: 10px; align-items: center;
+          padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.pl-row select { padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.pl-row.mute b { color: var(--danger); } .pl-row.only b { color: var(--accent); }
+.pl-warn { margin: 10px 0 0; color: var(--accent); font-size: 12.5px; }
 .rs-note { padding: 8px 14px; color: var(--mute); font-size: 12.5px; border-bottom: 1px solid var(--line); }
 .rs-group { padding: 10px 14px 4px; font-weight: 600; display: flex; gap: 10px; align-items: baseline; }
 .rs-group .sub { color: var(--mute); font-weight: 400; font-size: 12px; }
@@ -211,6 +218,7 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
   <button id="rs-open" class="btn" title="Прочитать заново, кто что сказал, с тем, что голоса знают теперь">Пересчитать голоса</button>
   <button id="cal-open" class="btn" title="Что Ева сделает по времени: напоминания, музыка, будильники, поручения">Календарь</button>
   <button id="ls-open" class="btn" title="Правила на каждую услышанную фразу">Слушатели</button>
+  <button id="pl-open" class="btn" title="Отмеченные места: откуда звук слушать, а откуда нет">Места</button>
   <datalist id="speakers"></datalist>
 </header>
 <div id="cal" class="modal" hidden>
@@ -235,6 +243,16 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
         </div></div>
       <div id="cal-list"></div>
     </div>
+  </div>
+</div>
+<div id="pl" class="modal" hidden>
+  <div class="rs-box" style="width:min(820px,100%)">
+    <div class="bar"><span class="title">Места</span><span class="sub">откуда приходит звук; новое место — на радаре фразы кнопкой «Отметить место…»</span>
+      <span style="flex:1"></span><button class="btn" id="pl-close">Закрыть</button></div>
+    <div class="rs-note">«Подавлять звук отсюда» — это не люди в комнате (телевизор): такие фразы не идут ни Еве, ни слушателям
+      и не учат голоса. «Слушать только отсюда» — подавляется всё из других направлений. Имя «Ева», сказанное узнанным голосом
+      семьи, проходит всегда — себя не отрежешь. Угол места ±15°.</div>
+    <div id="pl-list"></div>
   </div>
 </div>
 <div id="ls" class="modal" hidden>
@@ -598,8 +616,10 @@ function frame() {
     depth = adiff(p.az, lastAz) < 20 ? depth + 1 : 0;      // close places: their names one under another
     lastAz = p.az;
     const [x1, y1] = xy(p.az, R - 5), [x2, y2] = xy(p.az, R + 5), [tx, ty] = xy(p.az, R - 14 - depth * 12);
-    s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--keep)" stroke-width="2"/>
-          <text class="lbl" x="${tx}" y="${ty + 3}" text-anchor="middle" style="fill:var(--keep)">${esc(p.name)}</text>`;
+    const mode = ((ROOM.place_opts || {})[p.name] || {}).mode;
+    const col = mode === "mute" ? "var(--danger)" : mode === "only" ? "var(--accent)" : "var(--keep)";
+    s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}" stroke-width="2"/>
+          <text class="lbl" x="${tx}" y="${ty + 3}" text-anchor="middle" style="fill:${col}">${esc(p.name)}${mode === "mute" ? " 🔇" : mode === "only" ? " 👂" : ""}</text>`;
   }
   return s + `<rect class="station" x="-7" y="-7" width="14" height="14" rx="3"/>`;
 }
@@ -983,6 +1003,33 @@ $("#ls-open").onclick = async () => {
   VOICES = v; LS.items = r.listeners; LS.log = r.log; LS.cur = 0; lsRender();
 };
 $("#ls-close").onclick = () => { $("#ls").hidden = true; };
+
+/* places: the modes the hub listens by (services/stt/hear.py muted_place) */
+function plRender() {
+  const opts = ROOM.place_opts || {};
+  const MODES = [["", "обычно"], ["mute", "подавлять звук отсюда"], ["only", "слушать только отсюда"]];
+  const rows = placeMeans().sort((a, b) => scr(a.az) - scr(b.az)).map(p => {
+    const mode = (opts[p.name] || {}).mode || "";
+    return `<div class="pl-row ${mode}"><b>${esc(p.name)}</b><span>${Math.round(scr(p.az))}°</span>
+      <span style="color:var(--faint)">${p.n} ${p.n === 1 ? "отметка" : p.n < 5 ? "отметки" : "отметок"}</span>
+      <select class="pl-mode" data-n="${esc(p.name)}">${MODES.map(([v, l]) => `<option value="${v}"${v === mode ? " selected" : ""}>${l}</option>`).join("")}</select>
+      <button class="btn pl-del" data-n="${esc(p.name)}" title="Забыть это место (все отметки)">Удалить</button></div>`;
+  });
+  const only = Object.values(opts).some(o => o.mode === "only");
+  $("#pl-list").innerHTML = (rows.join("") || `<p style="color:var(--mute)">Мест пока нет: выбери фразу, на радаре — «Отметить место…».</p>`)
+    + (only ? `<p class="pl-warn">Включено «слушать только отсюда»: всё из других направлений подавляется.</p>` : "");
+  $("#pl-list").querySelectorAll(".pl-mode").forEach(e => e.onchange = async () => {
+    ROOM = await api("/api/settings", { place_opt: { name: e.dataset.n, mode: e.value } });
+    toast(e.value ? "Режим места сохранён" : "Место — обычно"); plRender(); radar();
+  });
+  $("#pl-list").querySelectorAll(".pl-del").forEach(e => e.onclick = async () => {
+    if (!confirm(`Забыть место «${e.dataset.n}»?`)) return;
+    ROOM = await api("/api/settings", { place: { name: e.dataset.n, remove: true } });
+    plRender(); radar();
+  });
+}
+$("#pl-open").onclick = async () => { ROOM = await api("/api/settings"); $("#pl").hidden = false; plRender(); };
+$("#pl-close").onclick = () => { $("#pl").hidden = true; };
 $("#ls-new").onclick = () => {
   lsGrab();
   LS.items.push({ id: "l" + Date.now().toString(36), name: "Новый слушатель", enabled: false, on: "any", who: "any",

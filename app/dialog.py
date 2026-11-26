@@ -514,6 +514,14 @@ def on_phrase(item):
         hub_ear.mark_echo(item, flag="noise")
         ui({"type": "hear", "state": "ignored", "text": text})
         return
+    if item.get("muted") and not (NAME.search(text) and (item.get("speaker") or {}).get("known")):
+        # from a muted place (the «Места» page: "mute" - the TV; or outside the "only" places):
+        # no listeners, no router, nothing to learn (a Polish cartoon, 2026-11-26). Her name
+        # said by a family voice still counts - nobody can lock themselves out.
+        m = item["muted"]
+        log(f"muted ({m.get('place') or 'outside the listened places'}, {m.get('why')}): {text!r}")
+        ui({"type": "hear", "state": "ignored", "text": text})
+        return
     _to_listeners(item)
     if item.get("end") and not item.get("window"):
         LATENCY["end"] = item["end"]
