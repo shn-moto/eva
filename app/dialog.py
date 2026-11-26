@@ -913,13 +913,21 @@ def _to_listeners(item):
         label, _, known = who_said(item)
     except Exception:
         label, known = "unknown", False
-    name = voices.CALL.get(label, label) if known else None
     near = (item.get("speaker") or {}).get("nearest") if not known else None
+    if near and near.get("sim", 0) >= GUESS_SIM and near["label"] in VOICES.names():
+        # the same guess the dialog makes (on_phrase): a short phrase left unsigned but plainly
+        # a family voice is that person for the listeners too - «немечка хуя» from Аэлита
+        # (0.67) passed as "an unknown adult" and got «не ругайтесь при детях» (2026-11-26)
+        label, known = near["label"], True
+    name = voices.CALL.get(label, label) if known else None
     if near:
         near = dict(near, name=voices.CALL.get(near["label"], near["label"]))
         near["child"] = near["name"] in profile.CHILDREN or near["label"] in profile.CHILDREN
-    listeners.feed(item, name, known, bool(name and (name in profile.CHILDREN or label in profile.CHILDREN)),
-                   label if known else None, near)
+    child = bool(name and (name in profile.CHILDREN or label in profile.CHILDREN))
+    # what the sound says (PANNs): a child's voice, whoever the voice base thinks it is
+    top = (item.get("sound") or {}).get("top") or []
+    child = child or any(l.startswith("Child") and p >= 0.3 for l, p in top)
+    listeners.feed(item, name, known, child, label if known else None, near)
 
 
 def who_said(item):
