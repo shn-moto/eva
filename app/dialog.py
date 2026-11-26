@@ -982,6 +982,23 @@ def introduction(text, item, label, sim, known, person):
     return True
 
 
+# An unrecognised voice never reaches Claude (user, 2026-11-26): at home it is mostly a
+# family member's short phrase the voice base left unsigned, or the canaries, a phone,
+# the TV - and each such request cost a cache of its own. The router's commands (music,
+# volume, screen, print) and «запомни мой голос» stay for every voice: they are free.
+UNKNOWN_TO_CLAUDE = profile.tune("dialog.unknown_to_claude", False)
+UNKNOWN_SAY = profile.tune("dialog.unknown_say_every", 120.0)   # s between two «я тебя не узнала»
+_unknown_said = [0.0]
+
+
+def unknown_voice(text):
+    log(f"unknown voice - not to Claude: {text!r}")
+    ui({"type": "hear", "state": "ignored", "text": text})
+    if NAME.search(text) and time.time() - _unknown_said[0] > UNKNOWN_SAY:
+        _unknown_said[0] = time.time()
+        VOICE.say("Я не узнала твой голос. Скажи: «Ева, запомни мой голос» и своё имя.")
+
+
 def worker():
     while True:
         text, person, owner, *note = WORK.get()
@@ -989,6 +1006,9 @@ def worker():
         try:
             if isinstance(owner, dict):    # a command from the router's catalog: no Claude
                 local(text, person, owner)
+                continue
+            if not person.known and not UNKNOWN_TO_CLAUDE and text != CONTINUE:
+                unknown_voice(text)
                 continue
             answer(text, person, owner, note[0] if note else None)
         except Exception as e:
