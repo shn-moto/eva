@@ -167,7 +167,8 @@ def _heard(day, linked):
                 top = ((info.get("sound") or {}).get("top") or [["", 0]])[0][0]
                 info["who"] = [{"label": "шум" + (f" ({top})" if top else "")}]
             elif info.get("window") and not info.get("who"):
-                info["who"] = [{"label": "во время речи Евы"}]
+                # a window over music (not her voice: the ear's playback share is low) is not "her speech"
+                info["who"] = [{"label": "во время речи Евы" if (info.get("playback") or 0) >= 0.5 else "во время музыки"}]
             hh = fn[:6]
             fix = info.get("correct") or {}
             if isinstance(fix, list):
