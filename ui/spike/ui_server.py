@@ -133,8 +133,11 @@ class LedRing:
                 self.hear = "idle"
             elif t == "hear":
                 st = ev.get("state")
-                if st in ("on", "stt", "held", "called"):
-                    self.hear, self.hear_until = st, now + (15 if st == "on" else 6)
+                # only when she decided it is for her (held: a request is being heard, called:
+                # her name / a command): the raw "a voice began" (on / stt) lit the ring on a
+                # stamp on the floor and not on speech (2026-11-26) - it stays on the screen only
+                if st in ("held", "called"):
+                    self.hear, self.hear_until = st, now + 6
                 elif st in ("none", "text", "ignored"):
                     self.hear = "idle"
                     if st == "ignored":

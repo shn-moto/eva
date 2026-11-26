@@ -868,6 +868,7 @@ def music_command(words, item, addressed=False):
                 return True
             state.update(music_cmd=action, music_cmd_at=time.time())
             state["called_until"] = 0.0        # «Ева… дальше»: done, the music comes back up
+            ui({"type": "hear", "state": "called", "text": " ".join(words)})   # the ring: she took it
             if action == "stop":
                 p.stop()
             elif action in ("pause", "resume"):
