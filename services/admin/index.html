@@ -51,6 +51,7 @@ section:last-child { border-right: 0; }
 label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mute); font-size: 13px; cursor: pointer; user-select: none; }
 .row { display: grid; grid-template-columns: 70px 140px 1fr auto; gap: 10px; align-items: start; padding: 6px 14px;
        border-bottom: 1px solid var(--line); cursor: default; }
+.row.emo { background: var(--emo); }                 /* the emotion's tint, the surer the deeper */
 .row:hover { background: var(--sel); }
 .row.sel { background: var(--accent-soft); }
 .row .t { font-family: var(--mono); font-size: 12px; color: var(--mute); padding-top: 2px; }
@@ -386,7 +387,7 @@ function render(keepSel) {
       if (r.dialog && r.stt !== "telegram") tags.push("в разговоре");
     }
     if (r.dur) tags.push(r.dur.toFixed(1) + " с");
-    let soundHtml = "";
+    let soundHtml = "", rowEmo = "";
     if (r.sound) {
       const EMO = { angry: "злость", sad: "грусть", neutral: "спокойно", positive: "радость" };
       const KIND = { cry: "плач", laugh: "смех", scream: "визг", shout: "крик", singing: "пение", bird: "птицы" };
@@ -394,6 +395,8 @@ function render(keepSel) {
       if (s.emo) {
         const all = Object.entries(s.probs || {}).sort((a, b) => b[1] - a[1])
           .map(([k, v]) => `${EMO[k] || k} ${v.toFixed(2)}`).join(", ");
+        const rgb = { angry: "208, 69, 58", sad: "58, 120, 208", positive: "47, 158, 85" }[s.emo];
+        if (rgb) rowEmo = ` emo" style="--emo: rgba(${rgb}, ${(0.04 + 0.12 * (+s.score || 0)).toFixed(3)})`;
         soundHtml += `<span class="tag emo ${s.emo}" style="--k:${(+s.score || 0).toFixed(2)}" title="эмоция речи: ${all}">${EMO[s.emo] || s.emo} ${(+s.score).toFixed(2)}</span>`;
       }
       for (const [k, v] of Object.entries(s.kinds || {}))
@@ -407,7 +410,7 @@ function render(keepSel) {
       ? `<span class="heardtxt">распознано: ${r.speaker_heard ? esc(r.speaker_heard) + " — " : ""}<s>${hl(r.text_heard || "")}</s></span>`
       : retag ? `<span class="heardtxt">распознано: ${esc(r.speaker_heard)}</span>` : "";
     const canPlay = r.has_audio, canKeep = r.role !== "assistant" && (r.id || r.audio);
-    html += `<div class="row ${r.role}${r.keep ? " keep" : ""}" data-i="${i}">
+    html += `<div class="row ${r.role}${r.keep ? " keep" : ""}${rowEmo}" data-i="${i}">
       <span class="t">${r.t}</span>
       <span class="who" style="${r.role === "user" || (r.role === "heard" && r.speaker) ? `color:${color(r.speaker)}` : ""}">${esc(who(r))}</span>
       <span class="txt">${hl(r.text)}${tagHtml ? `<span class="tags">${tagHtml}</span>` : ""}${was}</span>
