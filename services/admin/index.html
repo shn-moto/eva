@@ -139,6 +139,13 @@ button.i.del:hover { color: var(--danger); }
 .heardtxt { display: block; font-size: 12px; color: var(--faint); margin-top: 2px; }
 .heardtxt s { text-decoration-color: var(--faint); }
 .tag.fix { color: var(--accent); border-color: var(--accent); }
+/* the speech emotion (GigaAM-Emo) and sounds that stood out (PANNs): to judge them by ear */
+.tag.emo { cursor: help; }
+.tag.emo.angry { color: #d0453a; border-color: #d0453a66; }
+.tag.emo.sad { color: #3a78d0; border-color: #3a78d066; }
+.tag.emo.positive { color: #2f9e55; border-color: #2f9e5566; }
+.tag.emo.neutral { opacity: .6; }
+.tag.kind { color: #b06a00; border-color: #b06a0066; }
 .editor { display: grid; grid-template-columns: 1fr 170px auto; gap: 8px; align-items: start; padding: 8px 14px 10px 186px;
           border-bottom: 1px solid var(--line); background: var(--accent-soft); }
 .editor textarea { width: 100%; min-height: 54px; resize: vertical; padding: 6px 9px; border: 1px solid var(--accent);
@@ -377,9 +384,22 @@ function render(keepSel) {
       if (r.dialog && r.stt !== "telegram") tags.push("в разговоре");
     }
     if (r.dur) tags.push(r.dur.toFixed(1) + " с");
+    let soundHtml = "";
+    if (r.sound) {
+      const EMO = { angry: "злость", sad: "грусть", neutral: "спокойно", positive: "радость" };
+      const KIND = { cry: "плач", laugh: "смех", scream: "визг", shout: "крик", singing: "пение", bird: "птицы" };
+      const s = r.sound;
+      if (s.emo) {
+        const all = Object.entries(s.probs || {}).sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `${EMO[k] || k} ${v.toFixed(2)}`).join(", ");
+        soundHtml += `<span class="tag emo ${s.emo}" title="эмоция речи: ${all}">${EMO[s.emo] || s.emo} ${(+s.score).toFixed(2)}</span>`;
+      }
+      for (const [k, v] of Object.entries(s.kinds || {}))
+        soundHtml += `<span class="tag kind" title="звук (PANNs)">${KIND[k] || k} ${v.toFixed(2)}</span>`;
+    }
     // retagged by voice (a new voice print re-scored old phrases), not by a person: speaker_heard without corrected
     const retag = !r.corrected && r.speaker_heard;
-    const tagHtml = tags.map(t => `<span class="tag">${t}</span>`).join("") + (r.corrected ? `<span class="tag fix">исправлено</span>`
+    const tagHtml = tags.map(t => `<span class="tag">${t}</span>`).join("") + soundHtml + (r.corrected ? `<span class="tag fix">исправлено</span>`
       : retag ? `<span class="tag">по голосу</span>` : "");
     const was = r.corrected && (r.text_heard || r.speaker_heard)
       ? `<span class="heardtxt">распознано: ${r.speaker_heard ? esc(r.speaker_heard) + " — " : ""}<s>${hl(r.text_heard || "")}</s></span>`

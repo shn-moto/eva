@@ -82,6 +82,26 @@ def _path(base, ext=".wav"):
     return None
 
 
+def _sound(base, info=None):
+    """What the sound was (services/voice-events, written into the clip's json by the hub):
+    the speech emotion with its probabilities, and the kinds of sound that stood out - shown
+    in the log so it can be told by ear whether they are any good (user, 2026-11-26)."""
+    if info is None:
+        p = base and _path(base, ".json")
+        if not p:
+            return None
+        try:
+            info = json.load(open(p, encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+    s = info.get("sound") or {}
+    emo = s.get("emotion") or {}
+    kinds = {k: v for k, v in (s.get("kinds") or {}).items() if v >= 0.3 and k not in ("music", "tv")}
+    if not emo and not kinds:
+        return None
+    return {"emo": emo.get("label"), "score": emo.get("score"), "probs": emo.get("probs"), "kinds": kinds}
+
+
 def _row(r):
     (uid, ts, role, speaker, text, dialog, woke, stt, audio, keep, text_heard, speaker_heard, corrected_at) = r
     base, frag = _clip(audio)
@@ -98,7 +118,8 @@ def _row(r):
     return {"id": uid, "t": _local(ts), "day": ts.astimezone().strftime("%Y-%m-%d"), "role": role,
             "speaker": speaker, "text": text, "dialog": dialog, "woke": woke, "stt": stt,
             "audio": base, "frag": frag, "has_audio": bool(base and _path(base)), "keep": keep,
-            "text_heard": text_heard, "speaker_heard": speaker_heard, "corrected": corrected_at is not None}
+            "text_heard": text_heard, "speaker_heard": speaker_heard, "corrected": corrected_at is not None,
+            "sound": _sound(base) if base and role == "user" else None}
 
 
 COLS = "id, ts, role, speaker, text, dialog, woke, stt, audio, keep, text_heard, speaker_heard, corrected_at"
@@ -178,7 +199,7 @@ def _heard(day, linked):
                         "text_heard": info.get("text") if fix else None, "speaker_heard": None,
                         "corrected": bool(fix), "audio": base, "frag": "",
                         "has_audio": os.path.exists(os.path.join(d, fn[:-5] + ".wav")),
-                        "keep": root == KEEP_DIR, "dur": info.get("duration")})
+                        "keep": root == KEEP_DIR, "dur": info.get("duration"), "sound": _sound(base, info)})
     return out
 
 
