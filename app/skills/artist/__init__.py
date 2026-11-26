@@ -11,7 +11,8 @@ profile.json "artist" (every key optional, the defaults are SAM Grid):
       "key":        "GRID_KEY",               the name of its key in /etc/eva/secrets.env
       "model":      "saipixel-qwen-image-2.1", the best picture (~30 s)
       "fast_model": "saipixel-krea2-turbo",    a quick one (~10 s)
-      "edit_model": "saipixel-flux2-klein-9b-edit",  redraw a picture ("" - this API cannot)
+      "edit_model": "saipixel-qwen-image-2.1", redraw a picture - the best (~35 s; "" - this API cannot)
+      "fast_edit_model": "saipixel-flux2-klein-9b-edit",  a quick redraw (~15-25 s), weaker on big changes
       "sizes":      {"square": "1024x1024", "portrait": "832x1216", "landscape": "1216x832"},
       "album":      "Картинки от Евы",         the photolib album her saved pictures go to
       "folder":     "_EVA"                     their folder in the archive
@@ -40,7 +41,10 @@ CFG = {
     "key": "GRID_KEY",
     "model": "saipixel-qwen-image-2.1",
     "fast_model": "saipixel-krea2-turbo",
-    "edit_model": "saipixel-flux2-klein-9b-edit",
+    # drawing and editing apart (2026-11-26): the small flux2-klein made two-headed wolves of «put her on
+    # a wolf»; qwen-image-2.1 (the model of the Kalah art) takes /images/edits too and keeps the face
+    "edit_model": "saipixel-qwen-image-2.1",
+    "fast_edit_model": "saipixel-flux2-klein-9b-edit",
     "sizes": {"square": "1024x1024", "portrait": "832x1216", "landscape": "1216x832"},
     "album": "Картинки от Евы",
     "folder": "_EVA",
@@ -82,10 +86,10 @@ def generate(prompt, size, model):
     return _images(req, 300)
 
 
-def edit(png, prompt, size):
+def edit(png, prompt, size, model=None):
     b = uuid.uuid4().hex
     parts = [f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
-             for k, v in {"model": CFG["edit_model"], "prompt": prompt, "size": size, "n": 1}.items()]
+             for k, v in {"model": model or CFG["edit_model"], "prompt": prompt, "size": size, "n": 1}.items()]
     parts.append(f'--{b}\r\nContent-Disposition: form-data; name="image"; filename="in.png"\r\n'
                  f'Content-Type: image/png\r\n\r\n'.encode() + png + b"\r\n")
     parts.append(f"--{b}--\r\n".encode())
@@ -130,11 +134,20 @@ def _file(fid):
         return r.read()
 
 
-def _result(raw, fid, title, note):
-    """The picture for her eyes (small) and the presentation for the channel."""
+def _result(raw, fid, title, note, source=None):
+    """The picture for her eyes (small) and the presentation for the channel. source: the
+    picture it was made from (a redraw) - she sees both and can tell she took the wrong photo
+    (the slideshow had moved on: «Аэлита on a wolf» came out with two men's heads, 2026-11-26)."""
     small = base64.b64encode(_jpeg(raw, 512)).decode("ascii")
     skills.HISTORY_IMAGES[small] = small
-    return Result("", show={"kind": "picture", "file_id": fid, "caption": title}, blocks=[
+    before = []
+    if source is not None:
+        src = base64.b64encode(_jpeg(source, 384)).decode("ascii")
+        skills.HISTORY_IMAGES[src] = src
+        before = [{"type": "text", "text": "Исходная картинка (с неё переделано):"},
+                  {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": src}},
+                  {"type": "text", "text": "Результат:"}]
+    return Result("", show={"kind": "picture", "file_id": fid, "caption": title}, blocks=before + [
         {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": small}},
         {"type": "text", "text": f"{note} Рисунок «{title}», file_id {fid}: показан. Напечатать - file_print, "
                                  f"сохранить в архив - picture_save, переделать - picture_redraw."}])
@@ -171,13 +184,14 @@ def redraw(args, person):
     buf = io.BytesIO()
     img.save(buf, "PNG")
     t0 = time.time()
-    raw = edit(buf.getvalue(), args["prompt"], size)
+    model = CFG.get("fast_edit_model") if args.get("quality") == "fast" and CFG.get("fast_edit_model") else CFG["edit_model"]
+    raw = edit(buf.getvalue(), args["prompt"], size, model)
     title = (args.get("title") or "рисунок").strip()
     fid = _keep(raw, f"{title}.png")
     MADE[fid] = {"title": title, "prompt": args["prompt"], "by": getattr(person, "name", None),
                  "from": args.get("photo_id") or args.get("file_id")}
-    log(f"artist: redrew {args.get('photo_id') or args.get('file_id')} -> {fid} in {time.time() - t0:.0f} s")
-    return _result(raw, fid, title, f"Готово за {time.time() - t0:.0f} с.")
+    log(f"artist: redrew {args.get('photo_id') or args.get('file_id')} -> {fid} in {time.time() - t0:.0f} s ({model})")
+    return _result(raw, fid, title, f"Готово за {time.time() - t0:.0f} с.", source=src)
 
 
 def _on_screen(person):
@@ -247,7 +261,11 @@ photo_id, присланную картинку или свой рисунок �
 открыто на телевизоре («сделай HDR», «изобрази его лысым», «посади их на
 яхту», «нарисуй такую же раскраску, но с собачкой») - picture_redraw без
 photo_id и file_id: возьмётся то, что на экране.
-- Prompt правки - по-английски, повелительно: что изменить и что сохранить.
+- Prompt правки - по-английски, описывай РЕЗУЛЬТАТ, а не операции: что должно
+  быть на картинке («Show the girl from this photo sitting on a big friendly
+  grey wolf in a forest. Keep her face, hair and clothes. Only the girl and the
+  wolf, nobody else.»), а не «remove the man, keep the pose» - так модель
+  рисовала голову папы в руках у дочки и двухголовых волков.
   С людьми всегда: "keep the person's face, identity, pose and clothes
   unchanged". Примеры: HDR - "apply a strong HDR photo effect: bright
   shadows, detailed highlights, vivid colors, keep the composition and
@@ -268,6 +286,10 @@ photo_id и file_id: возьмётся то, что на экране.
   с ошибками, особенно по-русски.
 - Рисунок идёт ~30 с (быстрый, quality=fast, ~10 с - когда просят быстро
   или черновик). Перед рисованием скажи коротко «сейчас нарисую».
+- Посмотри на результат честно, прежде чем говорить. Лишние головы, руки,
+  чужие люди, не та сцена или (после переделки) исходное фото не то, о котором
+  просили, - скажи прямо, что вышло криво или взялось не то фото, и предложи
+  переделать. Не шути над браком и не выдавай его за задумку.
 - Готовый рисунок сам показывается (телевизор или фото в Телеграме), ты его
   видишь. Скажи одной фразой, что получилось, без описания каждой детали.
 - По просьбе: напечатать - file_print с его file_id (принтер чёрно-белый:
@@ -302,6 +324,9 @@ SKILL = Skill(
                                             "без photo_id и file_id - то, что сейчас на телевизоре"},
                                "file_id": {"type": "string"},
                                "title": _TITLE,
+                               "quality": {"type": "string", "enum": ["best", "fast"],
+                                           "description": "best (~35 с, по умолчанию) | fast (~20 с, слабее на "
+                                                          "больших переменах сцены)"},
                                "shape": {"type": "string", "enum": ["auto", "square", "portrait", "landscape"],
                                          "description": "auto - как у исходной (по умолчанию)"}}},
         handler=redraw, needs="known",
