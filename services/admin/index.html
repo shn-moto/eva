@@ -212,7 +212,8 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
           <span class="full" style="font-weight:600">Новое событие</span>
           <span>Что</span><input id="cf-title" placeholder="таблетки, подъём, Наутилус - Крылья">
           <span>Действие</span><select id="cf-action"><option value="remind">напомнить</option><option value="music">музыка</option><option value="alarm">будильник</option><option value="task">поручение Еве</option></select>
-          <span>Когда</span><input id="cf-when" type="datetime-local">
+          <span>Когда</span><span style="display:flex;gap:6px;align-items:center"><input id="cf-date" type="date">
+            <select id="cf-hh"></select>:<select id="cf-mm"></select></span>
           <span>Повтор</span><select id="cf-every"><option value="">один раз</option><option value="day">каждый день</option><option value="weekdays">по будням</option><option value="weekend">по выходным</option><option value="week">по дням недели</option><option value="month">каждый месяц</option><option value="year">каждый год</option></select>
           <span id="cf-days-l"></span><span class="days" id="cf-days"></span>
           <span>Текст / запрос</span><input id="cf-text" placeholder="что сказать / что включить / что сделать">
@@ -813,13 +814,24 @@ function calRender() {
   });
 }
 async function calLoad() { CAL.data = await api("/api/calendar"); calRender(); }
+// when: a date and two lists (hours, minutes by 5) - the native datetime field moved a
+// minute per wheel click and the time ran away under the mouse
+const pad2 = n => String(n).padStart(2, "0");
+$("#cf-hh").innerHTML = [...Array(24).keys()].map(h => `<option>${pad2(h)}</option>`).join("");
+$("#cf-mm").innerHTML = [...Array(12).keys()].map(m => `<option>${pad2(m * 5)}</option>`).join("");
+(() => {                                // now + 10 min, rounded up to 5
+  const d = new Date(Date.now() + 10 * 60000); d.setMinutes(Math.ceil(d.getMinutes() / 5) * 5, 0, 0);
+  $("#cf-date").value = isoDay(d); $("#cf-hh").value = pad2(d.getHours()); $("#cf-mm").value = pad2(d.getMinutes() % 60);
+})();
+$("#cf-date").addEventListener("wheel", e => e.preventDefault(), { passive: false });
 $("#cf-days").innerHTML = CWD.map((w, i) => `<label><input type="checkbox" value="${i}">${w}</label>`).join("");
 $("#cf-every").onchange = () => {       // the weekdays row (with its empty label cell) only for "по дням недели"
   const d = $("#cf-every").value === "week" ? "" : "none"; $("#cf-days").style.display = d; $("#cf-days-l").style.display = d; };
 $("#cf-every").onchange();
 $("#cf-add").onclick = async () => {
   const every = $("#cf-every").value, act = $("#cf-action").value, txt = $("#cf-text").value.trim();
-  const b = { title: $("#cf-title").value.trim(), action: act, when: $("#cf-when").value,
+  const when = $("#cf-date").value ? `${$("#cf-date").value}T${$("#cf-hh").value}:${$("#cf-mm").value}` : "";
+  const b = { title: $("#cf-title").value.trim(), action: act, when,
               notify: act === "remind" ? $("#cf-notify").value : undefined, who: $("#cf-who").value.trim() || undefined };
   if (act === "music" || act === "alarm") b.query = txt || undefined; else b.text = txt || undefined;
   if (every) b.repeat = { every, ...(every === "week" ? { days: [...document.querySelectorAll("#cf-days input:checked")].map(x => +x.value) } : {}) };
