@@ -212,7 +212,8 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
 #radarinfo button:hover { border-color: var(--accent); }
 .az { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-left: 6px; }
 #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
-         padding: 8px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+         padding: 8px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none;
+         z-index: 100; }        /* above the dialogs (z 20): a warning inside the calendar was drawn under it */
 #toast.show { opacity: .92; }
 </style>
 </head>
@@ -919,9 +920,17 @@ $("#cf-days").innerHTML = CWD.map((w, i) => `<label><input type="checkbox" value
 $("#cf-every").onchange = () => {       // the weekdays row (with its empty label cell) only for "по дням недели"
   const d = $("#cf-every").value === "week" ? "" : "none"; $("#cf-days").style.display = d; $("#cf-days-l").style.display = d; };
 $("#cf-every").onchange();
+// a required field left empty: red, focused, and a warning (cleared as soon as it is typed into)
+function need(sel, msg) {
+  const e = $(sel);
+  e.classList.add("bad"); e.focus();
+  e.addEventListener("input", () => e.classList.remove("bad"), { once: true });
+  toast(msg);
+}
 $("#cf-add").onclick = async () => {
   const every = $("#cf-every").value, act = $("#cf-action").value, txt = $("#cf-text").value.trim();
-  if (!$("#cf-date").value) return toast("Выбери дату");
+  if (!$("#cf-title").value.trim()) return need("#cf-title", "Заполни «Что»: как назвать событие");
+  if (!$("#cf-date").value) return need("#cf-date", "Выбери дату");
   if (!$("#cf-hh").check() || !$("#cf-mm").check()) return toast("Время: часы 0–23, минуты 0–59");
   const when = `${$("#cf-date").value}T${pad2(+$("#cf-hh").value)}:${pad2(+$("#cf-mm").value)}`;
   if (every === "" && new Date(when) < new Date(Date.now() - 60000)) return toast("Это время уже прошло");
