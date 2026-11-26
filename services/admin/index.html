@@ -212,8 +212,8 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
           <span class="full" style="font-weight:600">Новое событие</span>
           <span>Что</span><input id="cf-title" placeholder="таблетки, подъём, Наутилус - Крылья">
           <span>Действие</span><select id="cf-action"><option value="remind">напомнить</option><option value="music">музыка</option><option value="alarm">будильник</option><option value="task">поручение Еве</option></select>
-          <span>Когда</span><span style="display:flex;gap:6px;align-items:center"><input id="cf-date" type="date">
-            <select id="cf-hh"></select>:<select id="cf-mm"></select></span>
+          <span>Когда</span><span style="display:flex;gap:6px;align-items:center"><input id="cf-date" type="date" style="width:128px;min-width:0">
+            <select id="cf-hh" style="width:auto"></select>:<select id="cf-mm" style="width:auto"></select></span>
           <span>Повтор</span><select id="cf-every"><option value="">один раз</option><option value="day">каждый день</option><option value="weekdays">по будням</option><option value="weekend">по выходным</option><option value="week">по дням недели</option><option value="month">каждый месяц</option><option value="year">каждый год</option></select>
           <span id="cf-days-l"></span><span class="days" id="cf-days"></span>
           <span>Текст / запрос</span><input id="cf-text" placeholder="что сказать / что включить / что сделать">
