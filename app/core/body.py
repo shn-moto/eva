@@ -80,8 +80,8 @@ def _check_boot():
         return
     first = BOOT["id"] is None
     BOOT["id"] = bid
-    if first and (h.get("uptime") or 0) > 300:
-        return                            # the brain started, the Station has been up long
+    if first and (h.get("uptime") or 0) > 60:
+        return                            # the brain (re)started, the Station has been up a while: no greeting
     if (h.get("uptime") or 0) > 300:
         return
     log(f"body: the Station booted {h.get('uptime')} s ago")
