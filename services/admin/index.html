@@ -837,9 +837,14 @@ function numField(el, max, next) {
     const step = { ArrowUp: 1, ArrowDown: -1, PageUp: 10, PageDown: -10 }[e.key];
     if (step) { e.preventDefault(); set((isNaN(val()) ? 0 : val()) + step); }
   });
+  let last = 0;
   el.addEventListener("wheel", e => {
     e.preventDefault();
-    acc += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;      // lines -> pixels
+    const d = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;  // lines -> pixels
+    // a turn the other way or a pause starts afresh: no leftover eats the first notch
+    if (Math.sign(d) !== Math.sign(acc) || e.timeStamp - last > 400) acc = 0;
+    last = e.timeStamp;
+    acc += d;
     const notch = 100;                                        // a mouse notch is ~100 px in Chrome / Firefox
     while (Math.abs(acc) >= notch) {
       const dir = acc > 0 ? -1 : 1;                          // wheel up = more
