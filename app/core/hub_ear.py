@@ -29,7 +29,7 @@ def _worker(on_phrase):
             log(f"phrase failed: {e!r}")
 
 
-def mark_echo(item):
+def mark_echo(item, flag="echo"):
     """Her own voice in this clip (the dialog's verdict): the hub marks the clip, the
     admin page shows it as «Ева (эхо)» at once. In a thread: the dialog never waits."""
     audio = item.get("audio")
@@ -38,7 +38,7 @@ def mark_echo(item):
 
     def post():
         try:
-            req = urllib.request.Request(URL.rsplit("/", 1)[0] + "/echo", data=json.dumps({"audio": audio}).encode(),
+            req = urllib.request.Request(URL.rsplit("/", 1)[0] + "/echo", data=json.dumps({"audio": audio, "flag": flag}).encode(),
                                          headers={"Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=5).read()
         except Exception as e:

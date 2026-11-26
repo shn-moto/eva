@@ -29,11 +29,16 @@ case "$svc" in
 stt)
     src=services/stt; image=newalisa-stt; name=newalisa-stt; port=8901
     # ~/eva-data/admin.env: ASSISTANT_PG_DSN - the voice base (services/stt/voices.py)
-    run="-p 8901:8901 --env-file \$HOME/eva-data/admin.env -e STT_ENGINE=gigaam-rnnt -e GIGAAM_DIR=/models/giga3-rnnt -e STT_THREADS=8 \
+    run="-p 8901:8901 --add-host=host.docker.internal:host-gateway --env-file \$HOME/eva-data/admin.env -e STT_ENGINE=gigaam-rnnt -e GIGAAM_DIR=/models/giga3-rnnt -e STT_THREADS=8 \
 -e STT_LOG_DIR=/log -v /etc/localtime:/etc/localtime:ro \
 -v \$HOME/newalisa-stt-v3/models:/models:ro -v \$HOME/eva-data/stt-log:/log"
     cmd="uvicorn stt_server:app --host 0.0.0.0 --port 8901"
     health=/health ;;
+voice-events)
+    # what a sound is (docs/EMOTION-PLAN.md): PANNs CNN14 on the CPU, its checkpoint in the cache
+    src=services/voice-events; image=eva-voice-events; name=eva-voice-events; port=8911
+    run="-p 8911:8911 --memory 2g -e THREADS=4 -v \$HOME/eva-data/bench-cache:/root/.cache:ro"
+    cmd=""; health=/health ;;
 music)
     src=services/music; image=newalisa-music; name=newalisa-music; port=8904
     run="-p 8904:8904"; cmd=""; health=/health ;;

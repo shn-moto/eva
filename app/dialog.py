@@ -493,6 +493,14 @@ def on_phrase(item):
     text = item.get("text", "").strip()
     if len(text) < 2:
         return
+    snd = item.get("sound") or {}
+    if snd.get("verdict") == "noise" and not NAME.search(text):
+        # not a voice (PANNs: a bird, a car, music, a door) - the STT made words of it
+        # (todo 1, 2026-11-26: «это» from the canaries); her name in it still counts
+        log(f"noise ({', '.join(f'{l} {p}' for l, p in snd.get('top', [])[:2])}, voice {snd.get('voice')}): {text!r}")
+        hub_ear.mark_echo(item, flag="noise")
+        ui({"type": "hear", "state": "ignored", "text": text})
+        return
     _to_listeners(item)
     if item.get("end") and not item.get("window"):
         LATENCY["end"] = item["end"]

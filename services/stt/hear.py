@@ -120,6 +120,38 @@ class Events:
 EVENTS = Events()
 
 
+# ---- what the sound is (services/voice-events: PANNs) ----
+EVENTS_URL = os.environ.get("EVENTS_URL", "http://host.docker.internal:8911/classify")
+
+
+def sound_of(seg):
+    """-> {"voice", "kinds", "verdict", "top"} or None (the service away, too short)."""
+    import urllib.request
+    if seg is None or len(seg) < SR // 2:
+        return None
+    pcm = (np.clip(seg, -1, 1) * 32767).astype("<i2").tobytes()
+    try:
+        req = urllib.request.Request(EVENTS_URL, data=pcm, headers={"Content-Type": "application/octet-stream"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            out = json.loads(r.read())
+        return None if "error" in out else out
+    except Exception as e:
+        log("voice-events:", e)
+        return None
+
+
+def mark_sound(audio, sound):
+    """The verdict into the clip's json: the admin page shows «шум» / «плач» / «смех»."""
+    p = os.path.join(S().LOG_DIR, audio.split("#")[0] + ".json")
+    try:
+        info = json.load(open(p, encoding="utf-8"))
+        info["sound"] = {k: sound[k] for k in ("voice", "verdict", "kinds", "top") if k in sound}
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False)
+    except (OSError, ValueError) as e:
+        log("mark_sound:", e)
+
+
 # ---- clean phrases: one voice from one place ----
 # The voices learn only from clean phrases (user, 2026-11-26): a phrase where a second
 # place speaks (a sustained other direction) is "mixed" - its speaker is told by its head
@@ -437,6 +469,12 @@ class Hearing:
                 meta["doa"] = {k: d[k] for k in ("lags", "peak", "az", "az_strength") if k in d}
         record = bool(meta.get("record"))
         split = not meta.get("window") and not record and meta["dur"] >= SPLIT_MIN
+        # what the sound is, in parallel with STT (~0.2 s on the CPU, no added wait)
+        snd = {}
+        th = None
+        if not meta.get("window") and not record:
+            th = threading.Thread(target=lambda: snd.update(r=sound_of(seg)), daemon=True)
+            th.start()
         text, letters = st.decode(norm)
         out = st._place_and_split(norm, text, letters, mics if not meta.get("window") else None, split)
         mix = mixed_at((out.get("doa") or {}).get("blocks"))
@@ -457,8 +495,18 @@ class Hearing:
             log(f"recorded for the test set: {out.get('text')!r}")
             return
         meta["stt_ms"] = int(1000 * (time.time() - t))
+        if th is not None:
+            th.join(timeout=3)
+            if snd.get("r"):
+                meta["sound"] = snd["r"]
+                s_ = snd["r"]
+                if s_["verdict"] != "speech" or max(s_["kinds"].get(k, 0) for k in ("cry", "scream", "shout", "laugh")) >= 0.3:
+                    # stage 2 of the emotion plan: every event logged, no action yet
+                    log(f"sound: {s_['verdict']} voice {s_['voice']} {s_['kinds']} top {s_['top'][:2]}: {text!r}")
         if out.get("audio"):
             meta["audio"] = out["audio"]
+            if meta.get("sound"):
+                mark_sound(out["audio"], meta["sound"])
             if meta.get("_joined_from"):
                 joined_into(meta["_joined_from"], out["audio"])
         parts = accepted_parts(out.get("parts"))
@@ -551,7 +599,7 @@ def note_who(audio, span, label, sim):
         log("note_who:", e)
 
 
-def mark_echo(audio):
+def mark_echo(audio, flag="echo"):
     """The brain took this clip for her own voice: marked at once, as the rescan
     marks it (rescan.mark_echo) - the admin page shows «Ева (эхо)» right away."""
     import os
@@ -560,9 +608,11 @@ def mark_echo(audio):
     p = os.path.join(S().LOG_DIR, audio.split("#")[0] + ".json")
     try:
         info = json.load(open(p, encoding="utf-8"))
-        if info.get("echo"):
+        if flag not in ("echo", "noise"):
+            return False
+        if info.get(flag):
             return True
-        info["echo"] = True
+        info[flag] = True
         with open(p, "w", encoding="utf-8") as f:
             json.dump(info, f, ensure_ascii=False)
         return True

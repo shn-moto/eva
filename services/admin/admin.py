@@ -163,6 +163,9 @@ def _heard(day, linked):
                 continue                  # a piece glued with its rest: the whole is shown
             if info.get("echo"):
                 info["who"] = [{"label": "Ева (эхо)"}]       # her own voice, caught in the log
+            elif info.get("noise") or (info.get("sound") or {}).get("verdict") == "noise":
+                top = ((info.get("sound") or {}).get("top") or [["", 0]])[0][0]
+                info["who"] = [{"label": "шум" + (f" ({top})" if top else "")}]
             elif info.get("window") and not info.get("who"):
                 info["who"] = [{"label": "во время речи Евы"}]
             hh = fn[:6]
