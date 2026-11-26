@@ -6,7 +6,9 @@ go there straight away (the Station's disk is small), each with an id she sees
 in the conversation as «[прислан файл: … file_id=…]». A print job is made a PDF
 there and sent to the home's CUPS."""
 import base64
+import hashlib
 import json
+import time
 import urllib.error
 import urllib.request
 
@@ -70,38 +72,60 @@ def view(args, person):
         return _err(e)
 
 
-def _print(body):
+# the same thing sent again within this many seconds is not printed: she once took her own
+# «Печатаю.» for an empty promise and printed the page twice (2026-11-26); again=true when
+# the person really asks for one more
+REPEAT_S = 180
+RECENT = {}                                 # key -> (time, the answer of that job)
+
+
+def _key(body):
+    kind = body.get("kind")
+    what = {"file": body.get("file_id"), "photos": tuple(body.get("photo_ids") or ()), "url": body.get("url"),
+            "text": hashlib.sha1((body.get("text") or "").encode()).hexdigest(),
+            "html": hashlib.sha1((body.get("html") or "").encode()).hexdigest()}.get(kind)
+    return f"{kind}:{what}"
+
+
+def _print(args, body):
+    key, now = _key(body), time.time()
+    last = RECENT.get(key)
+    if last and now - last[0] < REPEAT_S and not args.get("again"):
+        return (f"Это уже ушло на принтер {int(now - last[0])} с назад ({last[1]}) - второй раз не отправляю. "
+                "Ещё раз - только если человек прямо просит повторить: тогда again=true.")
     try:
         r = _req("/print", body, timeout=120)
     except Exception as e:
         return _err(e)
     pages = r.get("pages")
-    return (f"Отправила на принтер: задание {r['job']}, "
-            + (f"страниц {pages}, " if pages else "") + f"копий {r['copies']}.")
+    out = (f"Отправила на принтер: задание {r['job']}, "
+           + (f"страниц {pages}, " if pages else "") + f"копий {r['copies']}.")
+    RECENT[key] = (now, out)
+    return out
 
 
 def print_file(args, person):
-    return _print({"kind": "file", "file_id": args["file_id"], "copies": args.get("copies", 1),
+    return _print(args, {"kind": "file", "file_id": args["file_id"], "copies": args.get("copies", 1),
                    "pages": args.get("pages") or None, "fit": args.get("fit")})
 
 
 def print_photos(args, person):
-    return _print({"kind": "photos", "photo_ids": args["photo_ids"], "copies": args.get("copies", 1),
+    return _print(args, {"kind": "photos", "photo_ids": args["photo_ids"], "copies": args.get("copies", 1),
                    "fit": args.get("fit")})
 
 
 def print_text(args, person):
-    return _print({"kind": "text", "title": args.get("title", ""), "text": args["text"],
+    return _print(args, {"kind": "text", "title": args.get("title", ""), "text": args["text"],
                    "copies": args.get("copies", 1)})
 
 
 def print_url(args, person):
-    return _print({"kind": "url", "url": args["url"], "copies": args.get("copies", 1),
+    return _print(args, {"kind": "url", "url": args["url"], "copies": args.get("copies", 1),
                    "pages": args.get("pages") or None})
 
 
 def print_page(args, person):
-    return _print({"kind": "html", "title": args.get("title", ""), "html": args["html"],
+    return _print(args, {"kind": "html", "title": args.get("title", ""), "html": args["html"],
                    "layout": args.get("layout") or "document", "copies": args.get("copies", 1)})
 
 
@@ -114,18 +138,18 @@ def print_screen(args, person):
     if not s:
         return "На экране сейчас ничего для печати (только лицо или плеер)."
     if s.get("photo"):
-        return _print({"kind": "photos", "photo_ids": [s["photo"]], "copies": copies, "fit": args.get("fit")})
+        return _print(args, {"kind": "photos", "photo_ids": [s["photo"]], "copies": copies, "fit": args.get("fit")})
     if s.get("file"):
-        return _print({"kind": "file", "file_id": s["file"], "copies": copies, "fit": args.get("fit"),
+        return _print(args, {"kind": "file", "file_id": s["file"], "copies": copies, "fit": args.get("fit"),
                        "title": s.get("title")})
     if s.get("html"):
-        return _print({"kind": "html", "html": s["html"], "title": s.get("title", ""), "layout": "screen",
+        return _print(args, {"kind": "html", "html": s["html"], "title": s.get("title", ""), "layout": "screen",
                        "copies": copies})
     if s.get("photos"):
         if len(s["photos"]) > 1 and not args.get("all"):
             return (f"На экране {len(s['photos'])} фото: каждое печатается на своём листе. Уточни, какие "
                     "(print_photos по номерам) или все (print_screen all=true).")
-        return _print({"kind": "photos", "photo_ids": s["photos"], "copies": copies, "fit": args.get("fit")})
+        return _print(args, {"kind": "photos", "photo_ids": s["photos"], "copies": copies, "fit": args.get("fit")})
     return "Не поняла, что на экране печатать."
 
 
@@ -145,6 +169,7 @@ def cancel(args, person):
 
 
 _COPIES = {"type": "integer", "minimum": 1, "maximum": 5}
+_AGAIN = {"type": "boolean", "description": "печатать то же самое ещё раз (только если человек прямо просит повторить)"}
 _PAGES = {"type": "string", "description": "страницы, например 1-3,5; пусто - все"}
 
 SKILL = Skill(
@@ -187,7 +212,7 @@ docx, xlsx и др., другие файлы), лежит у тебя
         name="file_print",
         description="Напечатать присланный файл (PDF, картинку, офисный документ) на домашнем принтере.",
         schema={"type": "object", "additionalProperties": False, "required": ["file_id"],
-                "properties": {"file_id": {"type": "string"}, "copies": _COPIES, "pages": _PAGES,
+                "properties": {"again": _AGAIN, "file_id": {"type": "string"}, "copies": _COPIES, "pages": _PAGES,
                                "fit": {"type": "string", "enum": ["fit", "fill"],
                                        "description": "картинка: fit - целиком с полями, fill - на весь лист с обрезкой"}}},
         handler=print_file, needs="known",
@@ -195,7 +220,7 @@ docx, xlsx и др., другие файлы), лежит у тебя
         name="print_photos",
         description="Напечатать фото из домашнего архива (номера из поиска фото), каждое на своём листе A4.",
         schema={"type": "object", "additionalProperties": False, "required": ["photo_ids"],
-                "properties": {"photo_ids": {"type": "array", "items": {"type": "integer"}, "maxItems": 20},
+                "properties": {"again": _AGAIN, "photo_ids": {"type": "array", "items": {"type": "integer"}, "maxItems": 20},
                                "copies": _COPIES, "fit": {"type": "string", "enum": ["fit", "fill"]}}},
         handler=print_photos, needs="known",
     ), Tool(
@@ -203,13 +228,13 @@ docx, xlsx и др., другие файлы), лежит у тебя
         description="Напечатать текст, который ты составила (список, рецепт, заметка). Строки «# » - заголовки, "
                     "«- » и «1. » - пункты.",
         schema={"type": "object", "additionalProperties": False, "required": ["text"],
-                "properties": {"title": {"type": "string"}, "text": {"type": "string"}, "copies": _COPIES}},
+                "properties": {"again": _AGAIN, "title": {"type": "string"}, "text": {"type": "string"}, "copies": _COPIES}},
         handler=print_text, needs="known",
     ), Tool(
         name="print_url",
         description="Напечатать PDF или картинку по ссылке (из поиска в интернете). Веб-страницы не печатаются.",
         schema={"type": "object", "additionalProperties": False, "required": ["url"],
-                "properties": {"url": {"type": "string"}, "copies": _COPIES, "pages": _PAGES}},
+                "properties": {"again": _AGAIN, "url": {"type": "string"}, "copies": _COPIES, "pages": _PAGES}},
         handler=print_url, needs="known",
     ), Tool(
         name="print_page",
@@ -220,7 +245,7 @@ docx, xlsx и др., другие файлы), лежит у тебя
                     "layout: document - A4 страницы, как печатает браузер (по умолчанию); screen - одна "
                     "картинка 1280x720 на лист, как на телевизоре.",
         schema={"type": "object", "additionalProperties": False, "required": ["html"],
-                "properties": {"title": {"type": "string"}, "html": {"type": "string"},
+                "properties": {"again": _AGAIN, "title": {"type": "string"}, "html": {"type": "string"},
                                "layout": {"type": "string", "enum": ["document", "screen"]}, "copies": _COPIES}},
         handler=print_page, needs="known",
     ), Tool(
@@ -229,7 +254,7 @@ docx, xlsx и др., другие файлы), лежит у тебя
                     "твою страницу (как на экране; тёмный фон печатается светлым). Сетка из нескольких фото - "
                     "только с all=true (каждое на своём листе).",
         schema={"type": "object", "additionalProperties": False,
-                "properties": {"copies": _COPIES, "all": {"type": "boolean"},
+                "properties": {"again": _AGAIN, "copies": _COPIES, "all": {"type": "boolean"},
                                "fit": {"type": "string", "enum": ["fit", "fill"]}}},
         handler=print_screen, needs="screen",
     ), Tool(

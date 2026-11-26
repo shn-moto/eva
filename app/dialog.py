@@ -282,6 +282,7 @@ def local(text, person, r):
     says goes into the history too, so Claude knows it later."""
     intent, p = r["intent"], music.PLAYER
     reply = LOCAL_SAY.get(intent, "")
+    result = None                       # what the action itself returned (print_screen: the job)
     try:
         if intent == "ack":
             reply = "Пожалуйста!" if re.search(r"спасиб", text, re.I) else None
@@ -343,7 +344,7 @@ def local(text, person, r):
             from importlib import import_module
             if not person.may("screen"):
                 raise PermissionError("screen")
-            out = import_module("skills.print").print_screen({}, person)
+            out = result = import_module("skills.print").print_screen({}, person)
             reply = "Печатаю." if out.startswith("Отправила") else out
     except Exception as e:
         log(f"local {intent} failed: {e} - to Claude")
@@ -359,9 +360,40 @@ def local(text, person, r):
         ui({"type": "hear", "state": "called", "text": text})
     if intent != "unclear":
         history.append({"role": "user", "content": f"[{ru_now()}] [{person.name or 'голос не узнан'}] {text}"})
+        call = _local_call(intent, r, result, reply)
+        if call:
+            # the action as a real call with its result, as if she had made it herself: with
+            # only her word «Печатаю.» in the history she took it for a promise she had not
+            # kept, and printed the same page again (2026-11-26 09:42)
+            tid = f"toolu_local{int(time.time() * 1000)}"
+            history.append({"role": "assistant", "content": [{"type": "tool_use", "id": tid, "name": call[0], "input": call[1]}]})
+            history.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": call[2]}]})
         history.append({"role": "assistant", "content": reply or "(сделано)"})
         llm.trim(history)
         save_history()
+
+
+MUSIC_ACTION = {"music_stop": "stop", "music_pause": "pause", "music_resume": "resume", "music_next": "next",
+                "music_prev": "previous", "volume_up": "louder", "volume_down": "quieter", "what_playing": "status"}
+
+
+def _local_call(intent, r, result, reply):
+    """A router command as the tool call Claude would have made: (tool, input, result) or None."""
+    done = "[выполнено сразу по команде, без тебя] "
+    if intent == "print_screen":
+        return "print_screen", {}, done + (result or reply or "")
+    if intent == "music_play" and r.get("query"):
+        return "music_play", {"query": r["query"], "kind": r.get("kind") or "track"}, done + (reply or "Включила.")
+    if intent in MUSIC_ACTION:
+        return "music_control", {"action": MUSIC_ACTION[intent]}, done + (reply or music.PLAYER.describe() or "Сделано.")
+    if intent.startswith("screen_"):
+        inp = {"action": intent[7:]} | ({"n": int(r["n"])} if r.get("n") is not None else {})
+        return "screen", inp, done + screen.describe()
+    if intent == "avatar":
+        return "avatar", {"mode": r.get("mode") or "ascii"}, done + (reply or "Сделано.")
+    if intent == "panel" and r.get("panel") in ("chat", "stats"):
+        return "panel", {"panel": r["panel"], "show": bool(r.get("show", True))}, done + "Сделано."
+    return None
 
 
 def show(presentation):
