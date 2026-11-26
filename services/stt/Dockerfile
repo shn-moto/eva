@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir faster-whisper==1.2.1 sherpa-onnx==2.0.1 fastapi=
 # livekit: WebRTC's audio processing (AEC3, noise suppression) for the ear (ear_stream.py)
 
 WORKDIR /app
-COPY stt_server.py voices.py hear.py rescan.py ear_stream.py silero_vad.onnx doa_geometry.json /app/
+COPY stt_server.py voices.py hear.py rescan.py ear_stream.py ear_null.py silero_vad.onnx doa_geometry.json /app/
 
 ENV STT_MODEL=small STT_COMPUTE=int8 STT_THREADS=8
 EXPOSE 8901 8912

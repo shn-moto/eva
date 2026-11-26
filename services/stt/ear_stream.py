@@ -30,6 +30,7 @@ import numpy as np
 import onnxruntime as ort
 from livekit import rtc
 
+import ear_null
 import hear
 
 PORT = int(os.environ.get("EAR_PORT", "8912"))
@@ -171,6 +172,11 @@ class Ear:
     def __init__(self):
         self.front = Front()
         self.vad = Vad()
+        # the null toward the muted places (ear_null.py): 256 samples late, so the reference and
+        # the raw mics wait as long - the canceller needs them in step with the mono
+        self.null = ear_null.STATE["null"] = ear_null.Null()
+        self.d_raw = np.zeros((ear_null.HOP, 7), np.int16)
+        self.d_ref = np.zeros(ear_null.HOP, np.int16)
         self.box = collections.deque(maxlen=int(BOX_S * SR / CHUNK))
         self.box_auto = 0.0
         self.seq = 0
@@ -214,7 +220,14 @@ class Ear:
     def feed(self, flags, raw):
         mics, ref = unpack(raw)
         self.flags = flags
-        mono = mics[:, HEAR_MICS].astype(np.float64).mean(axis=1)
+        # the mics -> one mono with the muted places (the TV) taken out; with no muted place it is
+        # the plain mean of HEAR_MICS, as before
+        mono = self.null.process(mics.astype(np.float64))
+        self.d_raw = np.concatenate([self.d_raw, mics])
+        self.d_ref = np.concatenate([self.d_ref, ref])
+        k = len(mono)
+        mics, ref = self.d_raw[:k], self.d_ref[:k]
+        self.d_raw, self.d_ref = self.d_raw[k:], self.d_ref[k:]
         e = self.front.process(mono, ref)
         # the raw side, delayed with the processed one (APM holds up to 10 ms)
         self.q_y = np.concatenate([self.q_y, (mono * MIC_GAIN / 32768.0).astype(np.float32)])
@@ -407,5 +420,31 @@ def server():
         threading.Thread(target=run, daemon=True).start()
 
 
+def null_watch():
+    """The muted places changed (the «Места» page) -> the null is made again from the STT log."""
+    last = None
+    time.sleep(20)                          # the voice base loads first
+    while True:
+        try:
+            muted = sorted((n, round(a)) for n, a, mode in hear._places() if mode == "mute")
+            if muted != last:
+                null = ear_null.STATE["null"]
+                have = (null.info or {}) if null else {}
+                if not muted:
+                    if last is not None or have:
+                        ear_null.plain()
+                        log("no muted place: the plain mono")
+                elif have.get("places") != [n for n, _ in muted] or have.get("az") != [a for _, a in muted]:
+                    vb = hear.V()
+                    family = list(vb.profiles) if vb is not None else []
+                    log(f"muted places {muted}: making the null")
+                    ear_null.recalibrate(muted, family)
+                last = muted
+        except Exception as e:
+            log("null watch:", e)
+        time.sleep(30)
+
+
 def start():
     threading.Thread(target=server, daemon=True).start()
+    threading.Thread(target=null_watch, daemon=True).start()
