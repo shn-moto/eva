@@ -141,10 +141,12 @@ button.i.del:hover { color: var(--danger); }
 .tag.fix { color: var(--accent); border-color: var(--accent); }
 /* the speech emotion (GigaAM-Emo) and sounds that stood out (PANNs): to judge them by ear */
 .tag.emo { cursor: help; }
-.tag.emo.angry { color: #d0453a; border-color: #d0453a66; }
-.tag.emo.sad { color: #3a78d0; border-color: #3a78d066; }
-.tag.emo.positive { color: #2f9e55; border-color: #2f9e5566; }
-.tag.emo.neutral { opacity: .6; }
+/* filled with the emotion's colour; the surer the model, the deeper (--k = its score) */
+.tag.emo { color: #fff; border-color: transparent; }
+.tag.emo.angry { background: rgba(208, 69, 58, calc(.35 + .65 * var(--k))); }
+.tag.emo.sad { background: rgba(58, 120, 208, calc(.35 + .65 * var(--k))); }
+.tag.emo.positive { background: rgba(47, 158, 85, calc(.35 + .65 * var(--k))); }
+.tag.emo.neutral { color: var(--mute); background: var(--bg); border-color: var(--line); opacity: .7; }
 .tag.kind { color: #b06a00; border-color: #b06a0066; }
 .editor { display: grid; grid-template-columns: 1fr 170px auto; gap: 8px; align-items: start; padding: 8px 14px 10px 186px;
           border-bottom: 1px solid var(--line); background: var(--accent-soft); }
@@ -392,7 +394,7 @@ function render(keepSel) {
       if (s.emo) {
         const all = Object.entries(s.probs || {}).sort((a, b) => b[1] - a[1])
           .map(([k, v]) => `${EMO[k] || k} ${v.toFixed(2)}`).join(", ");
-        soundHtml += `<span class="tag emo ${s.emo}" title="эмоция речи: ${all}">${EMO[s.emo] || s.emo} ${(+s.score).toFixed(2)}</span>`;
+        soundHtml += `<span class="tag emo ${s.emo}" style="--k:${(+s.score || 0).toFixed(2)}" title="эмоция речи: ${all}">${EMO[s.emo] || s.emo} ${(+s.score).toFixed(2)}</span>`;
       }
       for (const [k, v] of Object.entries(s.kinds || {}))
         soundHtml += `<span class="tag kind" title="звук (PANNs)">${KIND[k] || k} ${v.toFixed(2)}</span>`;
