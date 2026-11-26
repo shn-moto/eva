@@ -11,7 +11,9 @@ profile.json "artist" (every key optional, the defaults are SAM Grid):
       "key":        "GRID_KEY",               the name of its key in /etc/eva/secrets.env
       "model":      "saipixel-qwen-image-2.1", the best picture (~30 s)
       "fast_model": "saipixel-krea2-turbo",    a quick one (~10 s)
-      "edit_model": "saipixel-qwen-image-2.1", redraw a picture - the best (~35 s; "" - this API cannot)
+      "edit_api":   "xai",                    who redraws a picture: "xai" (xAI images API, XAI_API_KEY)
+                                                or "openai" (the base_url above, multipart /images/edits)
+      "edit_model": "grok-imagine-image-2.0", the model of the redraw API (~20 s, ~$0.07)
       "fast_edit_model": "saipixel-flux2-klein-9b-edit",  a quick redraw (~15-25 s), weaker on big changes
       "sizes":      {"square": "1024x1024", "portrait": "832x1216", "landscape": "1216x832"},
       "album":      "Картинки от Евы",         the photolib album her saved pictures go to
@@ -41,9 +43,11 @@ CFG = {
     "key": "GRID_KEY",
     "model": "saipixel-qwen-image-2.1",
     "fast_model": "saipixel-krea2-turbo",
-    # drawing and editing apart (2026-11-26): the small flux2-klein made two-headed wolves of «put her on
-    # a wolf»; qwen-image-2.1 (the model of the Kalah art) takes /images/edits too and keeps the face
-    "edit_model": "saipixel-qwen-image-2.1",
+    # drawing and editing apart (2026-11-26): on SAM Grid flux2-klein made two-headed wolves of «put her on
+    # a wolf» and qwen-image-2.1 a girl grown into a small wolf; xAI's grok-imagine-image-2.0 turned the
+    # statue under Аэлита into a living wolf she really sits on, her face and clothes kept (~20 s, $0.07)
+    "edit_api": "xai",
+    "edit_model": "grok-imagine-image-2.0",
     "fast_edit_model": "saipixel-flux2-klein-9b-edit",
     "sizes": {"square": "1024x1024", "portrait": "832x1216", "landscape": "1216x832"},
     "album": "Картинки от Евы",
@@ -87,15 +91,31 @@ def generate(prompt, size, model):
 
 
 def edit(png, prompt, size, model=None):
+    """A picture redrawn by a prompt. The fast model always goes to base_url (SAM Grid)."""
+    model = model or CFG["edit_model"]
+    if CFG.get("edit_api") == "xai" and model == CFG["edit_model"]:
+        return _edit_xai(png, prompt, model)
     b = uuid.uuid4().hex
     parts = [f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
-             for k, v in {"model": model or CFG["edit_model"], "prompt": prompt, "size": size, "n": 1}.items()]
+             for k, v in {"model": model, "prompt": prompt, "size": size, "n": 1}.items()]
     parts.append(f'--{b}\r\nContent-Disposition: form-data; name="image"; filename="in.png"\r\n'
                  f'Content-Type: image/png\r\n\r\n'.encode() + png + b"\r\n")
     parts.append(f"--{b}--\r\n".encode())
     req = urllib.request.Request(CFG["base_url"] + "/images/edits", data=b"".join(parts), method="POST", headers={
         "Authorization": "Bearer " + _key(), "Content-Type": f"multipart/form-data; boundary={b}"})
     return _images(req, 600)
+
+
+def _edit_xai(png, prompt, model):
+    """xAI images API: JSON, the picture as a data URI; the aspect follows the picture."""
+    k = secrets().get("XAI_API_KEY")
+    if not k:
+        raise RuntimeError("нет ключа xAI (XAI_API_KEY в secrets.env)")
+    body = {"model": model, "prompt": prompt, "response_format": "b64_json",
+            "image": {"url": "data:image/png;base64," + base64.b64encode(png).decode("ascii"), "type": "image_url"}}
+    req = urllib.request.Request("https://api.x.ai/v1/images/edits", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Authorization": "Bearer " + k, "Content-Type": "application/json"})
+    return _images(req, 300)
 
 
 def _size(shape, src=None):
@@ -325,7 +345,7 @@ SKILL = Skill(
                                "file_id": {"type": "string"},
                                "title": _TITLE,
                                "quality": {"type": "string", "enum": ["best", "fast"],
-                                           "description": "best (~35 с, по умолчанию) | fast (~20 с, слабее на "
+                                           "description": "best (~20 с, по умолчанию) | fast (~20 с, слабее на "
                                                           "больших переменах сцены)"},
                                "shape": {"type": "string", "enum": ["auto", "square", "portrait", "landscape"],
                                          "description": "auto - как у исходной (по умолчанию)"}}},
