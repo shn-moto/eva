@@ -458,6 +458,7 @@ function edit(i) {
     // a stranger named: the phrase left the memory - a heard clip with the mark now
     if (res && res.removed) { r.id = null; r.role = "heard"; }
     if (res && res.speaker) r.speaker = res.speaker;      // «-» became «Неизвестный N»
+    if (res && res.voice && res.voice.error) toast("Подпись сохранена; голос не учила: " + res.voice.error);
     if (!r.corrected) { r.text_heard = r.text; if ((who.value.trim() || r.speaker) !== r.speaker) r.speaker_heard = r.speaker; }
     r.text = text; r.speaker = (res && res.speaker) || who.value.trim() || r.speaker; r.corrected = true; if (r.has_audio) r.keep = true;
     render(true); toast("Исправлено · звук оставлен для обучения");

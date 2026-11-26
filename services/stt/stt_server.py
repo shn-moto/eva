@@ -476,6 +476,17 @@ def clip_emb(audio):
         return {"error": "no such clip"}
     with wave.open(full, "rb") as w:
         a = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32) / 32768
+    try:
+        info = json.load(open(full[:-4] + ".json", encoding="utf-8"))
+    except (OSError, ValueError):
+        info = {}
+    if info.get("mixed") is not None:
+        # two places in the phrase (hear.mixed_at): only its clean head teaches a voice
+        head = info.get("head")
+        if span or not head:
+            return {"error": "смешанная фраза (два голоса с разных сторон): голос по ней не учу"}
+        a = a[:int(head * 16000)]
+        span = ""
     if span:
         p = [float(x) for x in span.split(",")]
         a = a[int(p[0] * 16000): int(p[1] * 16000) if len(p) > 1 else None]

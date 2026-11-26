@@ -120,6 +120,54 @@ class Events:
 EVENTS = Events()
 
 
+# ---- clean phrases: one voice from one place ----
+# The voices learn only from clean phrases (user, 2026-11-26): a phrase where a second
+# place speaks (a sustained other direction) is "mixed" - its speaker is told by its head
+# (before the other place, at least HEAD_MIN s), and it teaches nothing: no auto-learning,
+# no guest group, no enrollment sample, a correction learns from the clean head only.
+# A single stray block is a reflection, not a person: 45 % of one-voice phrases have one
+# (2026-11-23..26); MIX_RUN blocks in a row MIX_OFF degrees off the head's direction is a
+# second place - 13 % of one-voice-labelled phrases (families talking in turn, someone
+# walking), and «Неизвестный 215» (Аэлита cutting in at 5.5 s).
+MIX_OFF = float(os.environ.get("EVA_HEAR_MIX_OFF", "30"))
+MIX_RUN = int(os.environ.get("EVA_HEAR_MIX_RUN", "2"))
+HEAD_MIN = 1.5
+
+
+def _cmed(azs):
+    return min(azs, key=lambda c: sum(_apart(a, c) for a in azs))
+
+
+def mixed_at(blocks):
+    """[[t, az, strength], ...] per 0.5 s -> when a second place starts speaking, or None."""
+    v = [(b[0], b[1]) for b in blocks or [] if b[1] is not None]
+    head = [a for t, a in v if t < SPK_SECONDS] or [a for _, a in v][:6]
+    if len(head) < 2:
+        return None
+    main, run, start = _cmed(head), 0, None
+    for t, a in v:
+        if _apart(a, main) > MIX_OFF:
+            run += 1
+            start = t if run == 1 else start
+            if run >= MIX_RUN:
+                return start
+        else:
+            run = 0
+    return None
+
+
+def mark_mixed(audio, at, head):
+    """The clip's json says so: the admin's correction learns from its head only."""
+    p = os.path.join(S().LOG_DIR, audio.split("#")[0] + ".json")
+    try:
+        info = json.load(open(p, encoding="utf-8"))
+        info.update(mixed=at, head=head)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False)
+    except (OSError, ValueError) as e:
+        log("mark_mixed:", e)
+
+
 # ---- believing a cut ----
 def _sim(e, k, v):
     return max((float(np.asarray(e, np.float32) @ np.asarray(p, np.float32)) for p in v.profiles.get(k, [])), default=0.0)
@@ -391,6 +439,12 @@ class Hearing:
         split = not meta.get("window") and not record and meta["dur"] >= SPLIT_MIN
         text, letters = st.decode(norm)
         out = st._place_and_split(norm, text, letters, mics if not meta.get("window") else None, split)
+        mix = mixed_at((out.get("doa") or {}).get("blocks"))
+        if mix is not None:
+            # two places in one phrase: the voice is told by the head, before the other place
+            meta["mixed"], meta["head"] = mix, round(min(SPK_SECONDS, mix), 2) if mix >= HEAD_MIN else None
+            if meta["head"] and meta["head"] < SPK_SECONDS:
+                v = st.spk_emb(norm[:int(SR * meta["head"])]).round(5).tolist()
         if meta.get("window"):
             # heard over her own voice (a window to catch «стоп»): kept as such - most
             # of it is her echo, and it was taken for a family voice (2026-11-25 10:09)
@@ -433,7 +487,8 @@ class Hearing:
         window = bool(meta.get("window"))
         meta.update(text=text, raw=raw, voice=None if window else v)
         if v and vb is not None and not window and text:
-            label, sim, known = vb.identify(v, meta.get("dur", 0), learn=not self.dry)
+            # a mixed phrase teaches nothing (mixed_at): it is only recognised
+            label, sim, known = vb.identify(v, meta.get("dur", 0), learn=not self.dry and meta.get("mixed") is None)
             meta["speaker"] = {"label": label, "sim": sim, "known": known}
             if not known:
                 # not signed (too short, too close): the nearest family voice goes along as a guess
@@ -445,7 +500,9 @@ class Hearing:
                 # the phrase's print, whole, kept once: a rescan reads it instead of the sound
                 try:
                     full = v
-                    if seg is not None and len(seg) > SR * (SPK_SECONDS + 0.5):
+                    if meta.get("mixed") is not None:
+                        mark_mixed(meta["audio"], meta["mixed"], meta.get("head"))
+                    elif seg is not None and len(seg) > SR * (SPK_SECONDS + 0.5):
                         p0 = float(np.abs(seg).max()) or 1.0
                         full = S().spk_emb((seg / p0 * 0.9).astype(np.float32)).round(5).tolist()
                     vb.store_print(memory_key(meta["audio"], meta.get("audio_span")), full, meta.get("dur", 0))
