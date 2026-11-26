@@ -36,6 +36,8 @@ W0[HEAR] = 1 / 3
 LOG_DIR = os.environ.get("STT_LOG_DIR", "/log")
 NULL_FILE = os.path.join(LOG_DIR, "ear-null.npz")
 EPS = float(os.environ.get("EAR_NULL_EPS", "0.1"))
+# off until verified live: on 2026-11-26 21:00 the ear went deaf with it on (VAD 0.05 on speech)
+ENABLED = os.environ.get("EAR_NULL", "off") == "on"
 TOL = 12.0                                    # degrees: a block points at the place
 DAYS = 14                                     # how far back clips are taken from
 MIN_FRAMES = 1500                             # ~24 s of the place's sound at least
@@ -63,6 +65,8 @@ class Null:
         self.load()
 
     def load(self):
+        if not ENABLED:
+            return
         try:
             d = np.load(NULL_FILE, allow_pickle=False)
             W = d["W"]
@@ -74,7 +78,8 @@ class Null:
             pass
 
     def set(self, W, info):
-        self.W, self.info = W, info
+        if ENABLED:
+            self.W, self.info = W, info
 
     def process(self, mics):
         self.pend = np.concatenate([self.pend, mics])

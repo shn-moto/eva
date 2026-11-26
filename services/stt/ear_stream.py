@@ -447,4 +447,5 @@ def null_watch():
 
 def start():
     threading.Thread(target=server, daemon=True).start()
-    threading.Thread(target=null_watch, daemon=True).start()
+    if ear_null.ENABLED:
+        threading.Thread(target=null_watch, daemon=True).start()
