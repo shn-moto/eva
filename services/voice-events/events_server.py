@@ -4,7 +4,8 @@ classes) on every phrase the ear sends to STT - speech, a child singing, crying,
 screaming, or not a voice at all (a bird, a car, music, a cupboard door). CPU only: the GPU
 is full.
 
-    POST /classify   raw s16le 16 kHz mono (or a WAV)  ->  {"voice", "kinds", "top", "verdict", "ms"}
+    POST /classify   raw s16le 16 kHz mono (or a WAV)  ->  {"voice", "kinds", "top", "verdict", "ms"}  (~0.2 s)
+    POST /emotion    the same audio  ->  {"label", "score", "probs"}   (GigaAM-Emo, ~1-2 s: never waited for)
     GET  /health
 
 voice   - the highest of the voice classes (speech, singing, laughter, crying, screaming...):
@@ -99,8 +100,8 @@ def classify(body):
     top = sorted(range(len(L)), key=lambda i: -p[i])[:3]
     out = {"voice": round(voice, 3), "kinds": kinds, "verdict": verdict,
            "top": [[L[i], round(float(p[i]), 3)] for i in top]}
-    if EMO is not None and voice >= 0.5 and len(a) >= EMO_MIN * 32000:
-        out["emotion"] = emotion(a)
+    # the speech emotion is asked separately (/emotion): it takes 1-2 s and the ear must not wait
+    out["emotion_wanted"] = EMO is not None and voice >= 0.5 and len(a) >= EMO_MIN * 32000
     out["ms"] = int(1000 * (time.time() - t))
     return out
 
@@ -130,6 +131,14 @@ def emotion(a32):
 @app.post("/classify")
 async def classify_route(request: Request):
     return await run_in_threadpool(classify, await request.body())
+
+
+@app.post("/emotion")
+async def emotion_route(request: Request):
+    if EMO is None:
+        return {"error": "no emotion model"}
+    a = _audio(await request.body())
+    return await run_in_threadpool(emotion, a)
 
 
 @app.get("/health")

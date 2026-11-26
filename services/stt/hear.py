@@ -140,6 +140,36 @@ def sound_of(seg):
         return None
 
 
+def emotion_later(seg, audio, text, label):
+    """The speech emotion (1-2 s) after the phrase went on: into its clip and the log."""
+    import urllib.request
+
+    def run():
+        pcm = (np.clip(seg, -1, 1) * 32767).astype("<i2").tobytes()
+        try:
+            req = urllib.request.Request(EVENTS_URL.rsplit("/", 1)[0] + "/emotion", data=pcm,
+                                         headers={"Content-Type": "application/octet-stream"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                emo = json.loads(r.read())
+        except Exception as e:
+            log("emotion:", e)
+            return
+        if "error" in emo:
+            return
+        if audio:
+            p = os.path.join(S().LOG_DIR, audio.split("#")[0] + ".json")
+            try:
+                info = json.load(open(p, encoding="utf-8"))
+                info.setdefault("sound", {})["emotion"] = emo
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump(info, f, ensure_ascii=False)
+            except (OSError, ValueError):
+                pass
+        if emo.get("label") != "neutral" and emo.get("score", 0) >= 0.7:
+            log(f"emotion: {emo['label']} {emo['score']} ({label or 'unknown'}): {text!r}")
+    threading.Thread(target=run, daemon=True).start()
+
+
 def mark_sound(audio, sound):
     """The verdict into the clip's json: the admin page shows «шум» / «плач» / «смех»."""
     p = os.path.join(S().LOG_DIR, audio.split("#")[0] + ".json")
@@ -500,17 +530,15 @@ class Hearing:
             if snd.get("r"):
                 meta["sound"] = snd["r"]
                 s_ = snd["r"]
-                emo = s_.get("emotion") or {}
-                loud = emo.get("label") not in (None, "neutral") and (emo.get("score") or 0) >= 0.7
-                if loud or s_["verdict"] != "speech" or max(s_["kinds"].get(k, 0) for k in ("cry", "scream", "shout", "laugh")) >= 0.3:
+                if s_["verdict"] != "speech" or max(s_["kinds"].get(k, 0) for k in ("cry", "scream", "shout", "laugh")) >= 0.3:
                     # stage 2 of the emotion plan: every event logged, no action yet
-                    log(f"sound: {s_['verdict']} voice {s_['voice']} "
-                        + (f"emotion {emo.get('label')} {emo.get('score')} " if emo else "")
-                        + f"{s_['kinds']} top {s_['top'][:2]}: {text!r}")
+                    log(f"sound: {s_['verdict']} voice {s_['voice']} {s_['kinds']} top {s_['top'][:2]}: {text!r}")
         if out.get("audio"):
             meta["audio"] = out["audio"]
             if meta.get("sound"):
                 mark_sound(out["audio"], meta["sound"])
+        if (meta.get("sound") or {}).get("emotion_wanted") and not self.dry:
+            emotion_later(seg, meta.get("audio"), out.get("text") or "", None)
             if meta.get("_joined_from"):
                 joined_into(meta["_joined_from"], out["audio"])
         parts = accepted_parts(out.get("parts"))
