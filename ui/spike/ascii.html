@@ -649,7 +649,7 @@ function drawStats(s) {
   const usd = (x) => "$" + (x || 0).toFixed(2);
   const share = s.limit ? s.today / s.limit : 0;
   const head = el("span", "m");
-  head.append(el("span", "k", "claude"), el("b", "", usd(s.today)), el("span", "k", "/ " + usd(s.limit)),
+  head.append(el("span", "k", "сегодня"), el("b", "", usd(s.today)), el("span", "k", "/ " + usd(s.limit)),
     meter([["bu" + (share >= 1 ? " over" : share > 0.7 ? " hi" : ""), Math.min(1, share)]]));
   const month = el("span", "m");
   month.append(el("span", "k", "месяц"), el("b", "", usd(s.month)), el("span", "k", "· " + (s.calls || 0) + " выз."));
