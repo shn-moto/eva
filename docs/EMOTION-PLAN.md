@@ -148,6 +148,21 @@ Plus PANNs CNN14 (AudioSet, 80M) on the STT log.
 
 The week of logging (stage 2) answers these on real data; staged clips can speed it up.
 
+## Stage 2 started (2026-11-26)
+
+- `services/voice-events` (container `eva-voice-events`, CPU, ~2.5 GB): PANNs CNN14 `/classify` (~0.2 s,
+  in parallel with STT, the ear waits for it) and GigaAM-Emo `/emotion` (~1-2 s, asked after the phrase
+  went on, never waited for). Checkpoints from `~/eva-data/bench-cache`.
+- Every phrase gets `sound` {voice, kinds (cry / laugh / scream / shout / singing / music / bird / tv),
+  verdict, top} in its clip json and in the utterance; speech emotion for a voice of >= 2 s.
+- **Noise**: voice < 0.15 = not a voice (the STT made words of a car, a door, music): on 2181 phrases it
+  takes 86 of 367 short ones and 2 of 711 family phrases. The brain drops such a phrase (no listeners,
+  no dialog) unless her name is in it; the admin page shows «шум (<class>)».
+- Logged only: `hear: sound: <verdict> ...` for non-speech / cry / scream / shout / laugh >= 0.3 and
+  `hear: emotion: <label> <score>` for non-neutral >= 0.7. No table `voice_event` yet, no actions.
+- Not done yet: the loudness trigger for sounds that do not pass the speech VAD (crying, screams),
+  the table, the week of review, the rules.
+
 ## Open questions
 
 - Which children's states matter most: crying, screaming, fighting, fear? Should a child's "angry" speech without crying trigger too?
