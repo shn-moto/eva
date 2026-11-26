@@ -39,21 +39,26 @@ def _say(text, note):
 
 
 def _telegram(e, text):
+    """-> True if the message went."""
     from skills.home import send
     who = e.get("who") or e.get("by")
     try:
-        log(f"calendar: telegram to {who}: {send({'name': who, 'text': text}, _person(e))}")
+        out = send({"name": who, "text": text}, _person(e))
+        log(f"calendar: telegram to {who}: {out}")
+        return out.startswith("Написала")
     except Exception as ex:
         log(f"calendar: telegram to {who}: {ex}")
+        return False
 
 
 def do_remind(e):
     text = e.get("text") or e.get("title")
     who = e.get("who")
-    if e.get("notify") in (None, "home", "both"):
+    aloud = e.get("notify") in (None, "home", "both")
+    if e.get("notify") in ("telegram", "both") and not _telegram(e, f"Напоминаю: {text}"):
+        aloud = True                          # Telegram did not take it: never lost silently - aloud at home
+    if aloud:
         _say((f"{who}, напоминаю: " if who else "Напоминаю: ") + text, "напоминание из календаря")
-    if e.get("notify") in ("telegram", "both"):
-        _telegram(e, f"Напоминаю: {text}")
 
 
 def do_music(e):
