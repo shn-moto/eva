@@ -67,7 +67,7 @@ def listen(on_phrase):
                         _phrases.put(ev["item"])
                     elif kind == "hearing":
                         STATE.update(on=bool(ev.get("on")), at=time.time())
-                    elif kind == "ui" and ev.get("state") != "stt":
+                    elif kind == "ui":
                         e = {"type": "hear", "state": ev["state"]}
                         if ev.get("text"):
                             e["text"] = ev["text"]

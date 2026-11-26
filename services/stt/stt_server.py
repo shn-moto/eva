@@ -460,7 +460,9 @@ def _keep_raw(raw):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "engine": ENGINE, "model": GIGA_DIR if ENGINE.startswith("gigaam") else MODEL_NAME}
+    import ear_stream
+    return {"ok": True, "engine": ENGINE, "model": GIGA_DIR if ENGINE.startswith("gigaam") else MODEL_NAME,
+            "ear": ear_stream.STATE}
 
 
 LOG_DIR = os.environ.get("STT_LOG_DIR", "")      # every phrase kept here (shn-linux), not on the Station
@@ -813,6 +815,9 @@ def warmup():
         get_recognizer()
     else:
         get_model()
+    # the ear's processing: the Station streams its raw capture here (services/stt/ear_stream.py)
+    import ear_stream
+    ear_stream.start()
 
 
 # --- the ear's decisions (services/stt/hear.py, docs/EAR-PLAN.md stage 2) ---
@@ -845,6 +850,15 @@ async def hear_start(request: Request):
     # someone is talking: the brain waits with a request until they are done
     _hear.EVENTS.publish({"type": "hearing", "on": True, "source": "station"})
     return {"ok": True}
+
+
+@app.post("/hear/box")
+async def hear_box():
+    """The ear's black box: the last minute as processed -> a file in the log folder."""
+    import ear_stream
+    ear = ear_stream.EAR["ear"]
+    path = await run_in_threadpool(ear.dump, "asked") if ear else None
+    return {"path": path}
 
 
 @app.post("/hear/echo")

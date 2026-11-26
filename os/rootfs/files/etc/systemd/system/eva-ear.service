@@ -1,5 +1,5 @@
 [Unit]
-Description=Eva: hearing (mics, echo cancelling, phrases, speech to text)
+Description=Eva: hearing - the raw mic stream to the hub (all processing there)
 # the mic ADCs are set up by eva-sound, which needs the capture closed
 After=eva-sound.service eva-body.service
 Wants=eva-sound.service eva-body.service
