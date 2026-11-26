@@ -828,6 +828,20 @@ async def listeners_post(request: Request):
     return listeners_get()
 
 
+@app.get("/api/family")
+def family_list():
+    """The family members Eva can write to in Telegram (photolib users with a Telegram):
+    a choice for «для кого» / «кому написать», not a name typed by hand."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(PHOTOLIB + "/admin/users", timeout=10) as r:
+            users = json.load(r)
+        users = users.get("users", []) if isinstance(users, dict) else users
+    except Exception:
+        return []
+    return sorted({u["person_name"] for u in users if u.get("telegram_id") and u.get("person_name")})
+
+
 @app.get("/api/voices")
 def voices_list():
     """The family's voices with samples in the base (services/stt/voices.py) - for "who speaks"."""
