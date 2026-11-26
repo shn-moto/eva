@@ -262,7 +262,7 @@ def answer(text, person, owner=None, note=None):
     history.append(entry)
     REPLIES[gen0] = entry
     save_history()
-    state["last_spoke"] = time.time()
+    state["last_spoke"] = state["last_answer"] = time.time()
     ui({"type": "chat", "who": "eva", "text": reply})
     if person.known:
         memory.write("assistant", say.untag(reply), speaker=person.profile, stt="voice")
@@ -355,7 +355,7 @@ def local(text, person, r):
     if reply:
         VOICE.say(reply)
         ui({"type": "chat", "who": "eva", "text": reply})
-        state["last_spoke"] = time.time()
+        state["last_spoke"] = state["last_answer"] = time.time()
     else:
         ui({"type": "hear", "state": "called", "text": text})
     if intent != "unclear":
@@ -597,7 +597,7 @@ def on_phrase(item):
     # showed him), not from when the phrase came back recognised: answers begun
     # with the bar still running were "not for Eva" (2026-11-19 evening)
     began = item.get("speech_start") or time.time()
-    in_dialog = began - max(state["last_spoke"], VOICE.busy_until) < DIALOG_WINDOW
+    in_dialog = began - dialog_end() < DIALOG_WINDOW
     # every phrase by its own voice: the dialog window is for the one she talks
     # with, not for whoever speaks next ("теперь можешь разговаривать" - Иван to
     # Лиза, unrecognised - she took as Лиза's and for her, 2026-11-19)
@@ -887,7 +887,7 @@ def attention_until():
     without her name. -> (until, total) in seconds, or (0, 0)."""
     if VOICE.speaking():
         return time.time() + DIALOG_WINDOW, DIALOG_WINDOW
-    talk = max(state["last_spoke"], VOICE.busy_until) + DIALOG_WINDOW
+    talk = dialog_end() + DIALOG_WINDOW
     until, total = max((talk, DIALOG_WINDOW), (state["called_until"], CALL_WINDOW))
     return (until, total) if until > time.time() else (0.0, 0.0)
 
@@ -1007,6 +1007,15 @@ UNKNOWN_TO_CLAUDE = profile.tune("dialog.unknown_to_claude", False)
 GUESS_SIM = profile.tune("dialog.guess_sim", 0.55)     # an unsigned phrase this close to a family voice is that person
 UNKNOWN_SAY = profile.tune("dialog.unknown_say_every", 120.0)   # s between two «я тебя не узнала»
 _unknown_said = [0.0]
+
+
+def dialog_end():
+    """When her last answer to somebody ended: the conversation window runs from there.
+    Only an answer opens it - her own words (the boot greeting, a reminder, a listener's
+    «не ругайтесь при детях», «сказать дома») do not: after the greeting the room's talk was
+    taken for a conversation with her and she asked «что ты сказал?» (2026-11-26)."""
+    la = state.get("last_answer", 0.0)
+    return max(la, VOICE.busy_until) if time.time() - la < 120 else la
 
 
 def unknown_voice(text):
