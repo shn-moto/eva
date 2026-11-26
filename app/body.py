@@ -88,6 +88,9 @@ def ui(event):
 def flag(path, on):
     try:
         if on:
+            # /run is empty after a reboot: the flag's folder is made here (os/rootfs tmpfiles
+            # eva.conf too) - without it the ear never knew music played (2026-11-26)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             open(path, "w").close()
         elif os.path.exists(path):
             os.remove(path)
