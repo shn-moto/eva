@@ -54,7 +54,10 @@ MIC_SLOTS = ((1, "h"), (1, "l"), (2, "h"), (2, "l"), (3, "h"), (3, "l"), (4, "l"
 REF_SLOT = (4, "h")
 HEAR_MICS = [0, 2, 4]            # mixed for listening: some capsules have the opposite polarity
 
-MIC_GAIN = _f("mic_gain", 32.0)  # after the canceller: the levels the VAD and STT were tuned on
+# after the canceller: the levels the VAD and STT were tuned on. 32 with the mics' PGA at 20 dB;
+# 10 with it at 30 dB (station-mics-init.sh, 2026-11-26: less ADC hiss under quiet speech)
+MIC_GAIN = _f("mic_gain", 10.0)
+LOUD = _f("loud", 0.3)           # raw peak (full scale 1) counted as "loud" by the stuck-VAD guard
 REF_GAIN = _f("ref_gain", 32.0)  # the tap (PGA 0.5 dB) is ~-60 dBFS: up to where AEC3 sees it
 REF_ACTIVE = _f("ref_active", 5e-4) * REF_GAIN
 # The tap always carries the ADC's own noise (~-61 dBFS after REF_GAIN). Given to AEC3 as it is,
@@ -281,7 +284,7 @@ class Ear:
         # a stuck VAD: loud in the room, no voice for VAD_STUCK s, not over her own voice. Over
         # music too: the VAD gave 0.00 for whole songs (2026-11-26); music alone scores above
         # 0.01 now and then, so a flat zero is the stuck state
-        loud = float(np.abs(raw).max()) / 32768.0 > 0.1
+        loud = float(np.abs(raw).max()) / 32768.0 > LOUD
         if loud and p < (0.01 if play_now else 0.05) and not her_now:
             self.stuck_n += 1
             if self.stuck_n * CHUNK / SR >= VAD_STUCK:

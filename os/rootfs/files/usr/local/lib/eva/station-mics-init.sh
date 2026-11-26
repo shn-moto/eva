@@ -35,19 +35,23 @@ closed|unknown) ;;
 *) echo "capture is running on $CARD, stop it first" >&2; exit 1 ;;
 esac
 
-# PGA gain in 0.5 dB steps: 40 = 20 dB (microphones), 1 = 0.5 dB (reference taps)
+# PGA gain in 0.5 dB steps: 60 = 30 dB (microphones), 1 = 0.5 dB (reference taps)
 # slot: ADC0..3 = i2c-1 0x18..0x1b, ADC4 = i2c-0 0x18
 # At 20 dB the ADC's own noise (0.85 LSB) is ~3.5x the microphones' (measured
 # 2026-11-23); 36 dB was tried the same day and the VAD stopped hearing speech
-# (max 0.32 while talking) - back to 20 dB until that is understood.
+# (max 0.32 while talking) - back to 20 dB until that is understood. (That deafness was the
+# mics' mixed polarity, fixed the same day by HEAR_MICS.)
+# 30 dB since 2026-11-26 evening: the processing moved to the hub (services/stt/ear_stream.py)
+# and at 20 dB a phrase from 3 m was only 13-25 dB above the ADC's own noise - lifted ~40 dB
+# to a normal level it hissed. 10 dB more here, 10 dB less in software (MIC_GAIN 32 -> 10).
 gain() {
 	case "$1" in
-	0|1|2) echo 40,40 ;;
+	0|1|2) echo 60,60 ;;
 	# ADC3 right: the speaker amplifier's tap, the echo canceller's reference
 	# (capture channel 4). Eva OS: 0.5 dB, with the input attenuated 6 dB below:
 	# at the vendor's 30 dB it clipped at full scale even at -35 dB speaker
 	# level, and a clipped reference cannot be cancelled (ERLE 1-4 dB -> 22 dB)
-	3) echo 40,1 ;;
+	3) echo 60,1 ;;
 	4) echo 1,1 ;;
 	esac
 }
