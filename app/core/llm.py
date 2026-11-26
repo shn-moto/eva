@@ -42,7 +42,7 @@ LIGHT_TOOLS = profile.tune("llm.light_tools", {"music_play", "music_control", "s
                # drawing: she sees the picture and says one phrase - Sonnet is enough; after
                # picture_draw Opus came in with a cold cache and spent the day's limit (2026-11-25)
                "picture_draw", "picture_redraw", "picture_save",
-               "calendar_add", "calendar_list", "calendar_remove"})
+               "calendar_add", "calendar_list", "calendar_remove", "private_notes"})
 
 
 # Opus does not come in just because a tool brought data: Sonnet (warm cache, ~$0.01 a
@@ -128,7 +128,7 @@ WEB_FETCH_USES = profile.tune("llm.web_fetch_uses", 3)
 
 
 def _web_tools(person):
-    if not WEB or not person.known:
+    if not WEB:
         return []
     search = {"type": "web_search_20260209", "name": "web_search", "max_uses": WEB_SEARCH_USES}
     if profile.LOCATION:
@@ -393,6 +393,7 @@ def stream(system, history, person, on_chunk, on_show=None, on_tool=None, max_to
     # the limit is checked when a turn begins, not between its rounds: a turn
     # cut after its tool ran printed a photo and never said a word (2026-11-25)
     cost.check()
+    LAST_VOICE[0] = time.time()
     with _turn():
         return _stream(msgs, params, person, on_chunk, on_show, on_tool, trace, record, t0)
 
@@ -436,6 +437,34 @@ def _stream(msgs, params, person, on_chunk, on_show, on_tool, trace, record, t0)
     if final.stop_reason == "refusal":
         log("refusal:", getattr(final.stop_details, "category", None))
     return {"final": final, "cut": False, "first": first}
+
+
+LAST_VOICE = [0.0]    # when the voice channel last called Claude (the keep-alive waits for a pause)
+WARM_AFTER = profile.tune("llm.warm_after", 50 * 60)      # s of silence before the cache is refreshed
+WARM_HOURS = profile.tune("llm.warm_hours", (7, 23))      # only while the home is awake
+
+
+def keepalive(system, history, person):
+    """The voice conversation's cache kept warm through a pause: the same prompt, tools
+    and history with max_tokens 0 - billed as a cache read only (~$0.007), no answer. A
+    first request after an hour's pause wrote ~60k tokens again (~$0.25, 2026-11-26).
+    The breakpoint is on her last words, not on the placeholder: the next real request
+    reads up to there."""
+    msgs = prepare(history, person)
+    if not msgs or msgs[-1]["role"] != "assistant":
+        return None
+    last = msgs[-1]
+    blocks = last["content"] if isinstance(last["content"], list) else [{"type": "text", "text": last["content"]}]
+    blocks = [dict(b) for b in blocks]
+    blocks[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+    msgs = msgs[:-1] + [{"role": "assistant", "content": blocks},
+                        {"role": "user", "content": "(служебно: прогрев, ответа не нужно)"}]
+    params = _params(system, person, 0)
+    params.pop("cache_control", None)        # not keyed to the placeholder
+    r = CLIENT.messages.create(messages=msgs, **params)
+    usd = cost.add(params["model"], r.usage, "warm")
+    log(f"cache warm: read {r.usage.cache_read_input_tokens} written {r.usage.cache_creation_input_tokens} ${usd:.4f}")
+    return r.usage
 
 
 ACTIVE = [0]          # turns being answered now: a deploy waits for 0 (brain /health "busy")

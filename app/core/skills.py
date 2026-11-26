@@ -68,6 +68,28 @@ THINK_DEEPER = Tool(
     handler=_think_deeper, needs="known",
 )
 
+def _private(args, person):
+    """The household's private notes (eva/PRIVATE.md): health, documents, money."""
+    from core import prompt
+    if not person.may("adult"):
+        return "Нет доступа: это только для взрослых."
+    try:
+        return open(prompt.PRIVATE, encoding="utf-8").read()
+    except OSError:
+        return "Личных заметок нет."
+
+
+# The private block was in the prompt for a known adult only - a prompt (and a cache) of
+# its own. As a tool the prompt is one for all, and a child or an unknown voice still
+# cannot get it: the right is checked when it runs.
+PRIVATE_NOTES = Tool(
+    name="private_notes",
+    description=("Личное семьи: здоровье, документы, деньги, всё, что не для детей и чужих. Открой, когда "
+                 "вопрос или ответ касается этого; только узнанному взрослому дома."),
+    schema={"type": "object", "additionalProperties": False, "properties": {}},
+    handler=_private, needs="private",
+)
+
 SKILLS = []
 # a picture she looked at -> a small copy of it for the conversation history
 # (without any picture there she later "confessed" she had not seen it, 2026-11-20)
@@ -123,11 +145,14 @@ def prompt():
 
 
 def _tools():
-    return [t for s in SKILLS for t in s.tools] + [THINK_DEEPER]
+    return [t for s in SKILLS for t in s.tools] + [THINK_DEEPER, PRIVATE_NOTES]
 
 
 def specs_for(person):
-    return [t.spec() for t in _tools() if person.may(t.needs)]
+    """The same tools for everybody: a tool's right is checked when it runs (run below).
+    A list per person (47 / 31 / 7 tools) made a prompt cache per person, and every change
+    of speaker wrote ~60k tokens again (~$0.25, 2026-11-26)."""
+    return [t.spec() for t in _tools()]
 
 
 def run(block, person):

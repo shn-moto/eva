@@ -140,12 +140,10 @@ INNER = """## Служебное - про себя
 
 
 def system(channel, person=None):
-    """The private block is in the prompt only for a known adult: with an
-    unknown voice or a child it is simply not there to let slip. Two prompt
-    variants, each cached on its own."""
+    """One prompt for everybody (one cache): the private block is the tool private_notes
+    (core/skills.py) - for a child or an unknown voice it is still simply not there."""
     persona = open(PERSONA, encoding="utf-8").read()
-    files = [LEGEND] + ([PRIVATE] if person is not None and person.may("adult") and person.may("private") else [])
-    for path in files:
+    for path in [LEGEND]:
         try:
             persona += "\n\n" + open(path, encoding="utf-8").read()
         except OSError:

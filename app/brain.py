@@ -141,6 +141,25 @@ if __name__ == "__main__":
                 day = time.strftime("%Y-%m-%d")
                 cost.on_change()
     threading.Thread(target=new_day, daemon=True).start()
+
+    def warm():
+        """The voice cache through a pause (llm.keepalive), while the home is awake."""
+        from core import identity
+        from core.prompt import system
+        while True:
+            time.sleep(60)
+            h0, h1 = llm.WARM_HOURS
+            quiet = time.time() - max(llm.LAST_VOICE[0], WARMED[0]) >= llm.WARM_AFTER
+            if not (h0 <= time.localtime().tm_hour < h1) or not quiet or llm.ACTIVE[0]:
+                continue
+            try:
+                cost.check()
+                WARMED[0] = time.time()
+                llm.keepalive(system("voice", identity.GUEST), list(dialog.history), identity.GUEST)
+            except Exception as e:
+                log(f"cache warm: {e}")
+    WARMED = [time.time()]
+    threading.Thread(target=warm, daemon=True).start()
     threading.Thread(target=music.PLAYER.duck_watch, daemon=True).start()
     start_slideshow()
     # "секунду, посмотрю" must sound at once: its speech is made now, once, and cached
