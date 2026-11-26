@@ -68,7 +68,9 @@ def listen(on_phrase):
                     elif kind == "hearing":
                         STATE.update(on=bool(ev.get("on")), at=time.time())
                     elif kind == "ui":
-                        e = {"type": "hear", "state": ev["state"]}
+                        # from the ear: what it hears, for the screen only - never the LED ring
+                        # (the hub's "held" is any phrase with an open end, the TV's too)
+                        e = {"type": "hear", "state": ev["state"], "source": "ear"}
                         if ev.get("text"):
                             e["text"] = ev["text"]
                         body.ui(e)

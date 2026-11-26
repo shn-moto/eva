@@ -136,7 +136,10 @@ class LedRing:
                 # only when she decided it is for her (held: a request is being heard, called:
                 # her name / a command): the raw "a voice began" (on / stt) lit the ring on a
                 # stamp on the floor and not on speech (2026-11-26) - it stays on the screen only
-                if st in ("held", "called"):
+                # (and only the brain's own: what the ear reports - "source": "ear" - is any sound in
+                # the room, a TV phrase with an open end too; the user: the ring only when she noticed
+                # she is spoken to, thinks or answers)
+                if st in ("held", "called") and ev.get("source") != "ear":
                     self.hear, self.hear_until = st, now + 6
                 elif st in ("none", "text", "ignored"):
                     self.hear = "idle"
