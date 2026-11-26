@@ -41,9 +41,11 @@ esac
 # 2026-11-23); 36 dB was tried the same day and the VAD stopped hearing speech
 # (max 0.32 while talking) - back to 20 dB until that is understood. (That deafness was the
 # mics' mixed polarity, fixed the same day by HEAR_MICS.)
-# 30 dB since 2026-11-26 evening: the processing moved to the hub (services/stt/ear_stream.py)
-# and at 20 dB a phrase from 3 m was only 13-25 dB above the ADC's own noise - lifted ~40 dB
-# to a normal level it hissed. 10 dB more here, 10 dB less in software (MIC_GAIN 32 -> 10).
+# 30 dB since 2026-11-26 evening: the processing moved to the hub (services/stt/ear_stream.py),
+# whose WebRTC APM takes the ADC-level samples before the software gain - at 20 dB a phrase from
+# 3 m reached it at ~-60 dBFS and the noise suppressor's artifacts, lifted x32, hissed. 10 dB more
+# here, 10 dB less in software (MIC_GAIN 32 -> 10): by ear the phrases came out clean. (The room
+# noise between words rose with the speech - the raw SNR did not change; the gain is in the APM.)
 gain() {
 	case "$1" in
 	0|1|2) echo 60,60 ;;
