@@ -272,6 +272,11 @@ class Ear:
         en_in, en_out = float(np.mean(y.astype(np.float64) ** 2)), float(np.mean(e.astype(np.float64) ** 2))
         st = self.stats
         st["mic_peak"] = max(st["mic_peak"], float(np.abs(raw).max()) / 32768.0)
+        # the ADC at full scale while the speaker plays: the canceller cannot model a clipped echo -
+        # the check on the mics' PGA (30 dB: her echo peaked ~-6 dBFS at the usual volumes)
+        if play_now:
+            st["raw_clip"] += int(np.count_nonzero(np.abs(raw) >= 32000))
+            st["play_peak"] = max(st["play_peak"], float(np.abs(raw).max()) / 32768.0)
         if play_now:
             st["aec_in"] += en_in
             st["aec_out"] += en_out
@@ -360,7 +365,10 @@ class Ear:
         line = (f"level: speech {st['speech']}/{st['chunks']} chunks, playback {st['play']}, vad resets {self.vad.resets}, "
                 f"mic peak {20 * np.log10(st['mic_peak'] + 1e-12):.0f} dBFS, vad max {st['vad_max']:.2f}, sent {self.sent}")
         if st["play_n"]:
-            line += f", aec out/in {10 * np.log10((st['aec_out'] + 1e-12) / (st['aec_in'] + 1e-12)):+.1f} dB"
+            line += (f", aec out/in {10 * np.log10((st['aec_out'] + 1e-12) / (st['aec_in'] + 1e-12)):+.1f} dB"
+                     f", peak while playing {20 * np.log10(st['play_peak'] + 1e-12):.0f} dBFS")
+            if st["raw_clip"]:
+                line += f", ADC CLIPPED while playing {st['raw_clip']}"
         if st["clip"]:
             line += f", clipped {st['clip']}"
         log(line)
