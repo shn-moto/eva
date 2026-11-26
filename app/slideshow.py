@@ -307,6 +307,21 @@ def release_held():
     state["held"] = None
 
 
+QUIET = profile.tune("slideshow.quiet_after_speech", 2.0)    # s after speech before the next photo
+
+
+def _talking():
+    """Someone in the room is speaking now (or just stopped): the next photo waits. The
+    slide changed while «измени это фото» was being said and recognised, and she held -
+    and redrew - the next one (2026-11-26)."""
+    try:
+        from core import hub_ear
+    except ImportError:
+        return False
+    st = hub_ear.STATE
+    return st.get("active") and (hub_ear.hearing() or time.time() - st.get("at", 0) < QUIET)
+
+
 def run(busy, last_activity, screen_free, restore=None):
     """The loop (a thread of the brain). busy() - she is wanted right now;
     last_activity() - time of the last conversation / screen use;
@@ -345,6 +360,8 @@ def run(busy, last_activity, screen_free, restore=None):
             pl.ensure()
             if time.time() - shown_at < SECONDS:
                 continue
+            if _talking():
+                continue                          # the photo stays while someone speaks: a question may be about it
             item = pl.next()
             if item is None:
                 continue                          # the first photos are still being found
