@@ -120,6 +120,9 @@ class Events:
 EVENTS = Events()
 
 
+OWN_SIM = 0.45                    # her own voice: not kept in the STT log (the brain's SELF_SIM)
+
+
 # ---- what the sound is (services/voice-events: PANNs) ----
 EVENTS_URL = os.environ.get("EVENTS_URL", "http://host.docker.internal:8911/classify")
 
@@ -517,7 +520,16 @@ class Hearing:
             # heard over her own voice (a window to catch «стоп»): kept as such - most
             # of it is her echo, and it was taken for a family voice (2026-11-25 10:09)
             out["window"], out["playback"] = True, meta.get("playback")
-        if not self.dry:
+        # her own voice only (a window over her speech, or the tail that ends after it): it goes to
+        # the brain (a «стоп» is looked for there) but not into the log - one reply of hers was
+        # three entries with a word twice: «включаю» / «я хочу быть» / «хочу быть с тобой»,
+        # the windows overlap 0.6 s (2026-11-26). Another voice in it: logged as before.
+        own = False
+        vb = V()
+        if v and vb is not None and (meta.get("window") or meta.get("playback", 0) >= 0.5):
+            self_sim, fam_sim = vb.sims(v)
+            own = self_sim >= OWN_SIM and self_sim > fam_sim + 0.1
+        if not self.dry and not own:
             out = st._finish(norm, out, mics, record, t)
             if record and mics is not None:
                 st._keep_raw(mics)
