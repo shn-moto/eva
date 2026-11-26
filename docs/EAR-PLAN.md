@@ -1,5 +1,9 @@
 # The ear on the server: plan (2026-11-24)
 
+**Superseded 2026-11-26:** the echo canceller, the VAD and the cut moved to the hub too
+(services/stt/ear_stream.py, WebRTC AEC3); the Station only streams its raw capture. See
+docs/EAR-AUDIT-2026-11-26.md. The rest of this plan (what the hub decides) still holds.
+
 **Done 2026-11-24** - stage 1 ddb95d8, stage 2 fb17c2f..dcf0922, stage 3 8442f76,
 stage 4: the Station's voice files (backed up to the hub, `~/eva-data/station-voices-20261124.tgz`),
 CAM++ and sherpa-onnx removed from the Station. Open: the rule for believing a cut
