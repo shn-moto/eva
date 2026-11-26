@@ -113,6 +113,7 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .pl-warn { margin: 10px 0 0; color: var(--accent); font-size: 12.5px; }
 .pl-row { grid-template-columns: 1fr 50px 80px 200px 180px auto; }
 .pl-row label { white-space: nowrap; }
+.pl-row label.off { opacity: .4; cursor: default; }     /* the master switch is off: the checkbox does nothing */
 .pl-null { padding: 10px 0 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .pl-null .st { color: var(--mute); margin-left: 8px; font-size: 12.5px; }
 .pl-head { color: var(--faint); font-size: 11.5px; border-bottom: 1px solid var(--line); padding: 6px 0; }
@@ -1020,7 +1021,7 @@ function plRender() {
     return `<div class="pl-row ${mode}"><b>${esc(p.name)}</b><span>${Math.round(scr(p.az))}°</span>
       <span style="color:var(--faint)">${p.n} ${p.n === 1 ? "отметка" : p.n < 5 ? "отметки" : "отметок"}</span>
       <select class="pl-mode" data-n="${esc(p.name)}">${MODES.map(([v, l]) => `<option value="${v}"${v === mode ? " selected" : ""}>${l}</option>`).join("")}</select>
-      <label title="Направленный фильтр по микрофонам гасит звук отсюда"><input type="checkbox" class="pl-nullp" data-n="${esc(p.name)}"${(opts[p.name] || {}).null ? " checked" : ""}> глушить микрофонами</label>
+      <label class="${ROOM.null_on ? "" : "off"}" title="${ROOM.null_on ? "Направленный фильтр по микрофонам гасит звук отсюда" : "Не действует: общий выключатель «Звуковое подавление» сверху выключен"}"><input type="checkbox" class="pl-nullp" data-n="${esc(p.name)}"${(opts[p.name] || {}).null ? " checked" : ""}${ROOM.null_on ? "" : " disabled"}> глушить микрофонами</label>
       <button class="btn pl-del" data-n="${esc(p.name)}" title="Забыть это место (все отметки)">Удалить</button></div>`;
   });
   const only = Object.values(opts).some(o => o.mode === "only");
