@@ -109,7 +109,17 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .bx-parts .btn.on { outline: 2px solid var(--accent, #2f6fd0); }
 #bx-view .btn.sm { padding: 2px 9px; font-size: 12px; }
 #bx-audio { width: 100%; margin-top: 6px; }
-.bx-flags { font-size: 12px; color: var(--mute); margin-top: 8px; white-space: pre-wrap; }
+.bx-strip { position: relative; height: 26px; margin-top: 8px; background: var(--line); border-radius: 4px; cursor: pointer; overflow: hidden; }
+.bx-strip span { position: absolute; }
+.bx-strip .m { top: 0; height: 9px; background: #6ea8fe; }
+.bx-strip .h { top: 9px; height: 8px; background: #f0a04b; }
+.bx-strip .p { top: 17px; height: 9px; background: #3fb950; }
+.bx-strip i { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); left: 0; }
+.bx-legend { font-size: 12px; color: var(--mute); margin: 3px 0 6px; }
+.bx-legend span { display: inline-block; width: 12px; height: 8px; margin: 0 4px 0 10px; }
+.bx-legend .m { background: #6ea8fe; } .bx-legend .h { background: #f0a04b; } .bx-legend .p { background: #3fb950; }
+.bx-ph .bxr { cursor: pointer; padding: 3px 6px; border-radius: 4px; }
+.bx-ph .bxr:hover { background: var(--line); }
 #ls-body { display: grid; grid-template-columns: 240px 1fr; min-height: 0; flex: 1; }
 #ls-body > div { min-height: 0; overflow: auto; padding: 10px 14px; }
 #ls-body > div + div { border-left: 1px solid var(--line); }
@@ -1228,7 +1238,6 @@ const BX = { data: null, cur: null, part: 0, track: "mic1", timer: null };
 const bxTime = t => new Date(t * 1000).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const bxMB = b => (b / 1048576).toFixed(b > 104857600 ? 0 : 1) + " МБ";
 const bxDur = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
-const BX_FLAG = f => [f & 1 ? "музыка" : "", f & 2 ? "её голос" : "", f & 4 ? "динамик звучит" : ""].filter(Boolean).join(", ") || "тихо";
 const BX_WHY = { "over-music": "фраза поверх музыки", "over-her": "фраза поверх её голоса", music: "во время музыки", asked: "по запросу", "deaf-music": "ухо глухое поверх музыки" };
 async function bxLoad() {
   try { BX.data = await api("/api/box"); } catch (e) { $("#bx-sub").textContent = "ошибка: " + e.message; return; }
@@ -1267,7 +1276,8 @@ function bxView() {
     <div class="help">Микрофоны звучат с общей громкостью — их уровни можно сравнивать; остальные дорожки подняты до пика. Переключение дорожки держит позицию.
       В старых ящиках (до 27.11 14:00) отдельных микрофонов нет — только смесь.</div>
     ${file ? `<audio id="bx-audio" controls preload="none" src="${url}"></audio><div><a href="${url}" download="${esc(file.replace(/\//g, "_"))}-${BX.track}.wav">скачать эту дорожку</a></div>` : ""}
-    ${it.kind === "rec" && it.flags.length ? `<div class="bx-flags">Что звучало (от начала записи):\n${it.flags.map(([t, f]) => `${bxDur(t)}  ${BX_FLAG(f)}`).join("\n")}</div>` : ""}`;
+    ${file ? bxStrip(it) : ""}`;
+  bxStripWire(it);
   document.querySelectorAll("#bx-view [data-p]").forEach(b => b.onclick = () => { BX.part = +b.dataset.p; bxView(); });
   document.querySelectorAll("#bx-view [data-t]").forEach(b => b.onclick = () => {
     const au = $("#bx-audio"), pos = au ? au.currentTime : 0, playing = au && !au.paused;
@@ -1276,6 +1286,52 @@ function bxView() {
     n.addEventListener("loadedmetadata", () => { n.currentTime = pos; if (playing) n.play(); }, { once: true });
     n.load();
   });
+}
+// the time window of what plays: a recording's minute, or a box's minute before its end (epoch s)
+function bxWindow(it) {
+  if (it.kind === "box") return [it.start, it.end];
+  let t = it.start;
+  for (let i = 0; i < BX.part; i++) t += it.parts[i].seconds;
+  return [t, t + ((it.parts[BX.part] || {}).seconds || 60)];
+}
+// intervals where a flag bit was on (rec.json flags: [[s from the start, bits]]), short gaps merged:
+// the speaker's level hovers around the threshold in quiet bars and flickered by the second
+function bxSpans(it, bit) {
+  const out = [], fl = it.flags || [];
+  for (let i = 0; i < fl.length; i++) {
+    if (!(fl[i][1] & bit)) continue;
+    const a = it.start + fl[i][0], b = it.start + (i + 1 < fl.length ? fl[i + 1][0] : it.seconds);
+    if (out.length && a - out[out.length - 1][1] < 1.5) out[out.length - 1][1] = b; else out.push([a, b]);
+  }
+  return out;
+}
+function bxStrip(it) {
+  const [w0, w1] = bxWindow(it), L = w1 - w0;
+  const pos = (a, b) => `left:${Math.max(0, (a - w0) / L * 100)}%;width:${Math.max(0.4, (Math.min(b, w1) - Math.max(a, w0)) / L * 100)}%`;
+  const inW = ([a, b]) => b > w0 && a < w1;
+  const music = it.kind === "rec" ? bxSpans(it, 4).filter(inW) : [];
+  const her = it.kind === "rec" ? bxSpans(it, 2).filter(inW) : [];
+  const ph = (it.phrases || []).filter(p => p.t + p.dur > w0 && p.t < w1);
+  const mmss = t => bxDur(Math.max(0, t - w0));
+  return `<div class="bx-strip" id="bx-strip" title="нажми — перейти к этому месту">
+      ${music.map(([a, b]) => `<span class="m" style="${pos(a, b)}"></span>`).join("")}
+      ${her.map(([a, b]) => `<span class="h" style="${pos(a, b)}"></span>`).join("")}
+      ${ph.map(p => `<span class="p" style="${pos(p.t, p.t + p.dur)}" title="${esc(p.text || "(пусто)")}"></span>`).join("")}
+      <i id="bx-head"></i></div>
+    <div class="bx-legend">${it.kind === "rec" ? '<span class="m"></span>играет динамик <span class="h"></span>говорит она ' : ""}<span class="p"></span>ухо вырезало фразу</div>
+    <div class="bx-ph">${ph.length ? `<div class="help">Что ухо вырезало и распознало (время от начала этой минуты; нажми — перейти):</div>` + ph.map(p =>
+      `<div class="bxr" data-t="${p.t - w0}"><b>${mmss(p.t)}</b> после AEC3: «${esc(p.text || "—")}»${p.raw_text != null ? ` · сырые микрофоны: «${esc(p.raw_text || "—")}»` : ""}</div>`).join("")
+      : '<div class="help">В эту минуту ухо не вырезало ни одной фразы.</div>'}</div>`;
+}
+function bxStripWire(it) {
+  const st = $("#bx-strip"), au = $("#bx-audio");
+  if (!st || !au) return;
+  const L = bxWindow(it)[1] - bxWindow(it)[0];
+  const seek = t => { const go = () => { au.currentTime = Math.max(0, t); au.play(); };
+    if (au.readyState >= 1) go(); else { au.addEventListener("loadedmetadata", go, { once: true }); au.load(); } };
+  st.onclick = e => { const r = st.getBoundingClientRect(); seek((e.clientX - r.left) / r.width * L); };
+  document.querySelectorAll("#bx-view .bx-ph .bxr").forEach(r => r.onclick = () => seek(+r.dataset.t - 0.3));
+  au.ontimeupdate = () => { const h = $("#bx-head"); if (h) h.style.left = (au.currentTime / L * 100) + "%"; };
 }
 $("#bx-open").onclick = () => {
   $("#bx").hidden = false;

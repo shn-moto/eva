@@ -1041,6 +1041,33 @@ def _ear(path, body=None):
         return json.loads(r.read())
 
 
+def _phrases_in(t0, t1):
+    """What the ear cut and recognised between t0 and t1 (epoch): the STT log's clips, both
+    readings (AEC3 output, raw mics) - the black box page lays them over the recording."""
+    out = []
+    day = datetime.date.fromtimestamp(t0)
+    while day <= datetime.date.fromtimestamp(t1):
+        d = os.path.join(LOG_DIR, day.isoformat())
+        if os.path.isdir(d):
+            for f in sorted(os.listdir(d)):
+                m = re.fullmatch(r"(\d{6})-(\d{3})\.json", f)
+                if not m:
+                    continue
+                t = datetime.datetime.combine(day, datetime.datetime.strptime(m.group(1), "%H%M%S").time()).timestamp() \
+                    + int(m.group(2)) / 1000
+                if not t0 - 5 <= t <= t1 + 5:
+                    continue
+                try:
+                    info = json.load(open(os.path.join(d, f), encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                dur = float(info.get("duration") or 0)
+                out.append({"t": round(t - dur, 2), "dur": dur, "text": info.get("text") or "",
+                            "raw_text": info.get("raw_text"), "audio": f"{day.isoformat()}/{f[:-5]}"})
+        day += datetime.timedelta(days=1)
+    return out
+
+
 def _box_items():
     import wave
     items = []
@@ -1068,14 +1095,15 @@ def _box_items():
             items.append({"kind": "rec", "id": s, "start": start,
                           "seconds": meta.get("seconds") or sum(p["seconds"] for p in parts),
                           "on": meta.get("on"), "stopped": meta.get("stopped"), "flags": meta.get("flags", []),
-                          "parts": parts})
+                          "parts": parts, "phrases": _phrases_in(start, start + (meta.get("seconds") or 3600))})
     if os.path.isdir(BOX_DIR):
         for f in sorted(os.listdir(BOX_DIR), reverse=True):
             m = re.fullmatch(r"(\d{8}-\d{6})-([\w-]+)\.npz", f)
             if m:
                 t = datetime.datetime.strptime(m.group(1), "%Y%m%d-%H%M%S").timestamp()
                 items.append({"kind": "box", "id": f, "start": t - 60, "end": t, "reason": m.group(2),
-                              "file": f"ear-box/{f}", "bytes": os.path.getsize(os.path.join(BOX_DIR, f))})
+                              "file": f"ear-box/{f}", "bytes": os.path.getsize(os.path.join(BOX_DIR, f)),
+                              "phrases": _phrases_in(t - 60, t)})
     return sorted(items, key=lambda i: i["start"], reverse=True)
 
 
