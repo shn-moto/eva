@@ -10,6 +10,7 @@ part lives here and the Station only plays the stream with mpg123.
     GET /beats?url=<watch url>                  -> {"bpm","first"}: tempo and first beat (Eva dances)
     GET /prefetch?url=<watch url>               -> {"cached"}: download into the cache now (a listener's track)
     GET /media[?dir=/media/<folder>]            -> [{"path","bytes"}]: the local files (under a folder)
+    GET /cover?url=/media/<file>                -> the image: cover.jpg (.png/.webp) beside it or in a folder above
     GET /health
 A "url" may also be a direct link to an audio file (played by ffmpeg, no yt-dlp) or a local
 file "/media/<name>" (~/eva-data/media on the hub). A YouTube track played once is cached as
@@ -152,6 +153,25 @@ def search(q, kind="track", limit=5):
     return out
 
 
+COVERS = ("cover.jpg", "cover.jpeg", "cover.png", "cover.webp")
+
+
+def cover(path):
+    """A local file's cover: cover.jpg in its folder, else in the folders above it up to MEDIA
+    (one cover.jpg in /media/<compilation>/ dresses all its tracks, 2026-11-27)."""
+    top = os.path.realpath(MEDIA)
+    d = os.path.dirname(os.path.realpath(path))
+    while (d + os.sep).startswith(top + os.sep):
+        names = {n.lower(): n for n in os.listdir(d)}
+        for c in COVERS:
+            if c in names:
+                return os.path.join(d, names[c])
+        if d == top:
+            break
+        d = os.path.dirname(d)
+    return None
+
+
 def probe(where):
     """A file or a direct link: its facts by ffprobe."""
     r = subprocess.run(["ffprobe", "-v", "error", "-show_format", "-of", "json", where],
@@ -171,7 +191,10 @@ def info(url):
     if kind is None:
         return {"url": url, "error": where}
     if kind in ("file", "direct"):
-        return dict(probe(where), url=url)
+        out = dict(probe(where), url=url)
+        if kind == "file" and cover(where):
+            out["thumb"] = "/cover?url=" + urllib.parse.quote(url, safe="")   # relative: the brain adds the host
+        return out
     meta = _cached(url)[:-4] + ".json"
     if os.path.isfile(meta):
         try:
@@ -280,6 +303,19 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:
                 err(f"{u.path} {q}: {e!r}")
                 return self._json(500, {"error": str(e)[:300]})
+        if u.path == "/cover":
+            kind, where = source(q.get("url", ""))
+            c = cover(where) if kind == "file" else None
+            if not c:
+                return self._json(404, {"error": "нет обложки"})
+            body = open(c, "rb").read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/" + {"jpg": "jpeg"}.get(c.rsplit(".", 1)[-1].lower(), c.rsplit(".", 1)[-1].lower()))
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "max-age=3600")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if u.path == "/prefetch":
             url = q.get("url", "")
             threading.Thread(target=lambda: prefetch(url) if source(url)[0] == "ytdlp" else None, daemon=True).start()

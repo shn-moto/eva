@@ -167,6 +167,8 @@ class Player:
         """Artist, album, length, cover: the search does not give them."""
         try:
             t.update({k: v for k, v in _get("/info?url=" + urllib.parse.quote(t["url"], safe=""), 60).items() if v})
+            if (t.get("thumb") or "").startswith("/"):
+                t["thumb"] = SERVICE + t["thumb"]         # a local file's cover.jpg, served by the music service
             t["info"] = True
             if t.get("error"):
                 log(f"music: info {t.get('title')!r}: {t['error']}")
