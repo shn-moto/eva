@@ -363,9 +363,10 @@ def local(text, person, r):
             # the media library without Claude: open it, a folder by its number, up; a file plays
             # (Sonnet opened it and «открой первую» did nothing, 2026-11-27)
             import library
-            if intent == "library_open":
+            if intent == "library_open" or (intent == "library_find" and not (r.get("query") or "").strip()):
+                # library_find without the title (the router dropped it): the library itself
                 call = ("library_browse", {"kind": r.get("lib") or "video"})
-            elif intent == "library_find":
+            elif intent == "library_find" and (r.get("query") or "").strip():
                 call = ("library_browse", {"kind": r.get("lib") or "video", "query": r.get("query") or ""})
             elif intent == "screen_back":
                 call = ("library_browse", {"up": True})
