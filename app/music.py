@@ -10,6 +10,7 @@ The TV shows the player (kind "music"); other views (photos) go over it and
 the player comes back when they close (core/screen.py).
 """
 import json
+import re
 import threading
 import time
 import urllib.parse
@@ -50,10 +51,12 @@ def _get(path, timeout=150):
 def search(query, kind="track", limit=1):
     """One track comes with the next search hits as `alts`: YouTube Music's first hit can be a
     video that is "not available" here, and a listener's song never played (2026-11-27 12:23)."""
-    if query.strip().startswith(("https://music.youtube.com/", "https://www.youtube.com/", "https://youtu.be/")):
-        # a listener's exact track, chosen once on the admin page: the search's order drifts
-        # (the same words gave the Leopold song, then «Живите дружно», 2026-11-27)
-        return [{"title": query.strip(), "url": query.strip()}]
+    if re.match(r"https?://\S+$", query.strip()):
+        # a link, not words: a listener's exact track chosen on the admin page (the search's
+        # order drifts - the same words gave the Leopold song, then «Живите дружно», 2026-11-27)
+        # or a direct mp3; music_server's yt-dlp plays both (its generic extractor for files)
+        u = query.strip()
+        return [{"title": urllib.parse.unquote(u.rsplit("/", 1)[-1].split("?")[0]) or u, "url": u}]
     spare = 3 if kind == "track" and limit == 1 else 0
     found = _get(f"/search?q={urllib.parse.quote(query)}&kind={kind}&limit={limit + spare}")
     if spare and found:

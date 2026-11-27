@@ -866,19 +866,42 @@ def music_search(q: str):
     of the Leopold song was "not available" (2026-11-27)."""
     import urllib.parse
     import urllib.request
+    if re.match(r"https?://\S+$", q.strip()):              # a link (a track page or a direct mp3): just check it
+        return {"hits": [_music_check({"title": q.strip(), "url": q.strip()})]}
     with urllib.request.urlopen(f"{MUSIC}/search?q={urllib.parse.quote(q)}&kind=track&limit=6", timeout=150) as r:
         hits = json.loads(r.read())
-
-    def check(t):
-        try:
-            with urllib.request.urlopen(f"{MUSIC}/info?url={urllib.parse.quote(t['url'], safe='')}", timeout=90) as r:
-                i = json.loads(r.read())
-            return dict(t, **{k: v for k, v in i.items() if v and k != "url"}, error=i.get("error"))
-        except Exception as e:
-            return dict(t, error=str(e)[:200])
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(6) as ex:
-        return {"hits": list(ex.map(check, hits))}
+        return {"hits": list(ex.map(_music_check, hits))}
+
+
+def _music_check(t):
+    """Does it play: the music service's /info (yt-dlp) - its error, or the track's facts."""
+    import urllib.parse
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"{MUSIC}/info?url={urllib.parse.quote(t['url'], safe='')}", timeout=90) as r:
+            i = json.loads(r.read())
+        return dict(t, **{k: v for k, v in i.items() if v and k != "url"}, error=i.get("error"))
+    except Exception as e:
+        return dict(t, error=str(e)[:200])
+
+
+@app.get("/api/music/stream")
+def music_stream(url: str):
+    """The track as the Station would hear it (the music service's mp3), to listen before choosing."""
+    import urllib.parse
+    import urllib.request
+    from fastapi.responses import StreamingResponse
+    r = urllib.request.urlopen(f"{MUSIC}/stream?url={urllib.parse.quote(url, safe='')}", timeout=60)
+
+    def body():
+        try:
+            while chunk := r.read(16384):
+                yield chunk
+        finally:
+            r.close()
+    return StreamingResponse(body(), media_type="audio/mpeg")
 
 
 @app.get("/api/listeners")

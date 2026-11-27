@@ -91,7 +91,7 @@ def beats(url):
     if url in BEATS:
         return BEATS[url]
     sr, n, hop = 11025, 1024, 256
-    dl = subprocess.Popen(["yt-dlp", "-q", "-f", "bestaudio", "--no-playlist", "-o", "-", url],
+    dl = subprocess.Popen(["yt-dlp", "-q", "-f", "bestaudio/best", "--no-playlist", "-o", "-", url],
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     ff = subprocess.run(["ffmpeg", "-v", "error", "-i", "pipe:0", "-t", "120", "-vn", "-ac", "1", "-ar", str(sr),
                          "-f", "s16le", "pipe:1"], stdin=dl.stdout, capture_output=True, timeout=120)
@@ -165,11 +165,11 @@ class H(BaseHTTPRequestHandler):
                 return self._json(500, {"error": str(e)[:300]})
         if u.path == "/stream":
             url = q.get("url", "")
-            if not url.startswith("https://"):
+            if not url.startswith(("https://", "http://")):
                 return self._json(400, {"error": "url"})
             # their errors (quiet otherwise: -q, -v error) go to the container's log
             err(f"stream {url}")
-            dl = subprocess.Popen(["yt-dlp", "-q", "--no-warnings", "-f", "bestaudio", "--no-playlist", "-o", "-", url],
+            dl = subprocess.Popen(["yt-dlp", "-q", "--no-warnings", "-f", "bestaudio/best", "--no-playlist", "-o", "-", url],
                                   stdout=subprocess.PIPE, stderr=sys.stderr)
             ff = subprocess.Popen(["ffmpeg", "-v", "error", "-i", "pipe:0", "-vn", "-ar", "48000", "-ac", "2",
                                    "-f", "mp3", "-b:a", "160k", "pipe:1"],
