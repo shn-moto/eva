@@ -80,7 +80,7 @@ OVERLAP = 19                     # chunks (~0.6 s) shared by consecutive windows
 VAD_STUCK = 3.0                  # s loud with no voice at all: the VAD's state starts over
 BOX_S = 60
 BOX_AUTO_EVERY = 600.0
-BOX_KEEP = int(_f("box_keep", 80))   # ~5.7 MB each
+BOX_KEEP = int(_f("box_keep", 60))   # ~19 MB each with the raw mics
 # Data for redoing the cut (2026-11-27): with AEC3 removing her own sound, the windows over her
 # voice may be needless and the raw mics may read better than the canceller's output. While this
 # file exists (touch / rm it on the hub, no restart), a phrase said over her music or voice
@@ -299,8 +299,10 @@ class Ear:
         st["clip"] += int(np.count_nonzero(np.abs(e) >= 1.0))
         e = np.clip(e, -1.0, 1.0)
         p = self.vad(e)
+        # the 7 raw mics too, as they came (int16): the user listens to them himself - the mono mix
+        # alone could not say whether his «стоп» was on the mics over the music (2026-11-27)
         self.box.append((y.astype(np.float16), x.astype(np.float16), e.astype(np.float16), p,
-                         1 * music + 2 * her_now + 4 * ref_on))
+                         1 * music + 2 * her_now + 4 * ref_on, raw.astype(np.int16)))
         if music and now - self.collect_at > COLLECT_EVERY and now - self.music_since > BOX_S - 5 \
                 and os.path.exists(COLLECT_FLAG):
             # over loud music the ear cuts no phrase at all (AEC3 gates the room to -73 dB, the VAD
@@ -414,7 +416,8 @@ class Ear:
         path = os.path.join(BOX_DIR, time.strftime("%Y%m%d-%H%M%S") + f"-{reason}.npz")
         np.savez(path, y=np.concatenate([i[0] for i in items]), x=np.concatenate([i[1] for i in items]),
                  e=np.concatenate([i[2] for i in items]), p=np.array([i[3] for i in items], dtype=np.float32),
-                 flags=np.array([i[4] for i in items], dtype=np.uint8), sr=SR, chunk=CHUNK, end=time.time())
+                 flags=np.array([i[4] for i in items], dtype=np.uint8), sr=SR, chunk=CHUNK, end=time.time(),
+                 raw7=np.concatenate([i[5] for i in items]))
         for f in sorted(f for f in os.listdir(BOX_DIR) if f.endswith(".npz"))[:-BOX_KEEP]:
             os.remove(os.path.join(BOX_DIR, f))
         log(f"black box: {path} ({len(items) * CHUNK / SR:.0f} s)")
