@@ -1081,7 +1081,7 @@ function lsRender() {
       <input id="ls-who-name" list="ls-voices" placeholder="имя, как в голосовой базе" value="${WHO[x.who || "any"] ? "" : esc(x.who)}" style="flex:1"></span>
     <label class="tog full" id="ls-guess-l" style="padding-left:130px"><input type="checkbox" data-k="guess"${x.guess === false ? "" : " checked"}> и вероятный голос — короткое слово, которое база не подписала, но ближе всего к этому человеку</label>
     <datalist id="ls-voices">${VOICES.map(v => `<option value="${esc(v)}">`).join("")}</datalist>
-    <span>Слова</span><input data-k="words" value="${esc(x.words || "")}" placeholder="регулярное выражение; пусто — любая фраза" style="font-family:var(--mono);font-size:12px">
+    <span>Слова</span><input data-k="words" value="${esc(x.words || "")}" placeholder="на какие слова: дружно|не ругайтесь (регулярное выражение; пусто — КАЖДАЯ фраза)" style="font-family:var(--mono);font-size:12px">
     <span>Дети рядом, с</span><input data-k="children_within" type="number" min="0" value="${x.children_within || 0}">
     <span class="full help">«Кто говорит» и «дети рядом» — по голосам семьи; дети рядом — голос ребёнка в пределах N секунд до или после фразы (0 — не проверять).</span>
     <span>Вопрос модели</span><textarea data-k="prompt" placeholder="необязательно: вопрос да/нет локальной модели, например «Человек злится или ругается?»">${esc(x.prompt || "")}</textarea>

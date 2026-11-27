@@ -889,6 +889,12 @@ async def listeners_post(request: Request):
                 re.compile(x["words"], re.I)
             except re.error as e:
                 raise HTTPException(400, f"{x['id']}: words: {e}")
+        elif (x.get("enabled") and not x.get("emotion") and not (x.get("prompt") or "").strip()
+              and x.get("action", "log") != "log"):
+            # empty words = every phrase: a music listener meant for «давайте жить дружно» fired on
+            # a laugh 10 min later, and again after each pause (2026-11-27)
+            raise HTTPException(400, f"«{x.get('name') or x['id']}»: пустые «Слова» — сработает на КАЖДУЮ фразу. "
+                                     "Задай слова (или вопрос модели), либо действие «только в лог»")
     _jsave(LST, {"listeners": items})
     return listeners_get()
 

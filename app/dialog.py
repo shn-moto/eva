@@ -941,6 +941,11 @@ def _to_listeners(item):
         # a family voice is that person for the listeners too - «немечка хуя» from Лиза
         # (0.67) passed as "an unknown adult" and got «не ругайтесь при детях» (2026-11-26)
         label, known = near["label"], True
+    if not known and music.PLAYER.active():
+        # her own music is heard too, and a record's voice is never a family one: a listener
+        # that plays «давайте жить дружно» on those words would start itself again from the
+        # song (2026-11-27). Over her music only family voices reach the listeners.
+        return
     name = voices.CALL.get(label, label) if known else None
     if near:
         near = dict(near, name=voices.CALL.get(near["label"], near["label"]))
