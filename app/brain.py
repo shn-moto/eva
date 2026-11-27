@@ -171,22 +171,22 @@ if __name__ == "__main__":
     body.on("boot", station_booted)
 
     def warm():
-        """The voice cache through a pause (llm.keepalive), while the home is awake."""
+        """The voice cache through a pause (llm.keepalive) - only after today's first real
+        voice turn and only while that cache lives (llm.warm_due): no talk, no spend."""
         from core import identity
         from core.prompt import system
         while True:
             time.sleep(60)
-            h0, h1 = llm.WARM_HOURS
-            quiet = time.time() - max(llm.LAST_VOICE[0], WARMED[0]) >= llm.WARM_AFTER
-            if not (h0 <= time.localtime().tm_hour < h1) or not quiet or llm.ACTIVE[0]:
+            if not llm.warm_due():
                 continue
             try:
                 cost.check()
-                WARMED[0] = time.time()
                 llm.keepalive(system("voice", identity.GUEST), list(dialog.history), identity.GUEST)
             except Exception as e:
+                # failed or over the limit: the chain ends here (warm_due sees the cache age
+                # out), not a retry every minute ("3.00 of 3.00 USD" each minute, 2026-11-26)
+                llm.stop_warm()
                 log(f"cache warm: {e}")
-    WARMED = [time.time()]
     threading.Thread(target=warm, daemon=True).start()
     threading.Thread(target=music.PLAYER.duck_watch, daemon=True).start()
     start_slideshow()

@@ -440,8 +440,28 @@ def _stream(msgs, params, person, on_chunk, on_show, on_tool, trace, record, t0)
 
 
 LAST_VOICE = [0.0]    # when the voice channel last called Claude (the keep-alive waits for a pause)
+WARMED = [0.0]        # when a keep-alive last refreshed the cache (successfully)
 WARM_AFTER = profile.tune("llm.warm_after", 50 * 60)      # s of silence before the cache is refreshed
 WARM_HOURS = profile.tune("llm.warm_hours", (7, 23))      # only while the home is awake
+CACHE_TTL = 60 * 60                                       # the 1h breakpoint keepalive() sets
+
+
+def warm_due(now=None):
+    """Is a keep-alive worth its money now? Only to extend a cache that is still
+    alive and that a real voice turn of today made. Never the day's first paid call:
+    a cold cache is written in full (~$0.28) for a room nobody talks in - the 07:00
+    warm and the one 50 min after every brain restart, $0.56 of a day without a
+    single conversation (2026-11-27)."""
+    now = now or time.time()
+    touched = max(LAST_VOICE[0], WARMED[0])
+    if not LAST_VOICE[0] or time.strftime("%Y-%m-%d", time.localtime(LAST_VOICE[0])) \
+            != time.strftime("%Y-%m-%d", time.localtime(now)):
+        return False                     # nobody has asked her anything today
+    h0, h1 = WARM_HOURS
+    if not h0 <= time.localtime(now).tm_hour < h1 or ACTIVE[0]:
+        return False
+    quiet = now - touched
+    return WARM_AFTER <= quiet < CACHE_TTL - 120     # a dead cache is not re-made: that is a cold write
 
 
 def keepalive(system, history, person):
@@ -464,7 +484,15 @@ def keepalive(system, history, person):
     r = CLIENT.messages.create(messages=msgs, **params)
     usd = cost.add(params["model"], r.usage, "warm")
     log(f"cache warm: read {r.usage.cache_read_input_tokens} written {r.usage.cache_creation_input_tokens} ${usd:.4f}")
+    if r.usage.cache_read_input_tokens:
+        WARMED[0] = time.time()
+    else:                                # nothing read: the cache had died - no more warms until she talks
+        stop_warm()
     return r.usage
+
+
+def stop_warm():
+    WARMED[0] = LAST_VOICE[0] = min(LAST_VOICE[0], time.time() - CACHE_TTL)
 
 
 ACTIVE = [0]          # turns being answered now: a deploy waits for 0 (brain /health "busy")
