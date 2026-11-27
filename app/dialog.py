@@ -375,8 +375,11 @@ def local(text, person, r):
             from core.speech import volume_set
             volume_set(max(5, min(100, int(r.get("level") or 50))))
             reply = None
-        elif intent in ("library_open", "library_find") or (intent in ("screen_open", "screen_back")
-                                          and (screen.state.get("p") or {}).get("kind") == "library"):
+        elif intent in ("library_open", "library_find") or (
+                (screen.state.get("p") or {}).get("kind") == "library"
+                and (intent in ("screen_open", "screen_back")
+                     # «назад» on the first page is the folder above (the router says screen_prev)
+                     or (intent == "screen_prev" and not screen.state.get("page")))):
             # the media library without Claude: open it, a folder by its number, up; a file plays
             # (Sonnet opened it and «открой первую» did nothing, 2026-11-27)
             import library
@@ -385,7 +388,7 @@ def local(text, person, r):
                 call = ("library_browse", {"kind": r.get("lib") or "video"})
             elif intent == "library_find" and (r.get("query") or "").strip():
                 call = ("library_browse", {"kind": r.get("lib") or "video", "query": r.get("query") or ""})
-            elif intent == "screen_back":
+            elif intent in ("screen_back", "screen_prev"):
                 call = ("library_browse", {"up": True})
             else:
                 n = int(r.get("n") or 0)
@@ -739,13 +742,22 @@ def on_phrase(item):
     # the local router first (shn-linux GPU): not for her / a simple command
     # done here / Claude. Without it (down): the old gate.
     last = history[-1]["content"] if history and history[-1]["role"] == "assistant" else None
-    r = router.route(text, named=maybe_named or called, in_dialog=in_dialog and not other,
+    # the media library's tiles on the TV (a minute since the last step): «открой один», «назад» are
+    # meant for the screen, whoever says them - the tiles open silently, so no answer opened the
+    # conversation window and «открой один» was "not for Eva" (2026-11-27 20:54). Only the router's
+    # local commands use this: an "ignore" here is dropped, never kept for Claude.
+    p0 = screen.state.get("p") or {}
+    screen_ctx = p0.get("kind") == "library" and time.time() - screen.state.get("touched", 0) < 60
+    r = router.route(text, named=maybe_named or called, in_dialog=(in_dialog and not other) or screen_ctx,
                      music_on=music.PLAYER.active(), screen=screen.describe() if screen.state["p"] else None,
                      last_reply=last if isinstance(last, str) else None)
     if r is None:
         addressed = maybe_named or in_dialog or called or gate(text)
     else:
         log(f"router {r['ms']}ms: {r['intent']} {({k: v for k, v in r.items() if k not in ('intent', 'ms')}) or ''}")
+        if screen_ctx and not (maybe_named or called or (in_dialog and not other)) \
+                and not r["intent"].startswith(("screen_", "library_", "video_")):
+            r["intent"] = "ignore"         # tiles up, no name, no talk with her: only the screen's commands
         if r["intent"] == "ignore" and (maybe_named or called):
             r["intent"] = "claude"         # called by name: never dropped
         addressed = r["intent"] != "ignore"
