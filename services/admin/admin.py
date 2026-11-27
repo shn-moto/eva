@@ -866,7 +866,7 @@ def music_search(q: str):
     of the Leopold song was "not available" (2026-11-27)."""
     import urllib.parse
     import urllib.request
-    if re.match(r"https?://\S+$", q.strip()):              # a link (a track page or a direct mp3): just check it
+    if re.match(r"https?://\S+$", q.strip()) or q.strip().startswith("/media/"):   # a link or a local file: check it
         return {"hits": [_music_check({"title": q.strip(), "url": q.strip()})]}
     with urllib.request.urlopen(f"{MUSIC}/search?q={urllib.parse.quote(q)}&kind=track&limit=6", timeout=150) as r:
         hits = json.loads(r.read())
@@ -885,6 +885,48 @@ def _music_check(t):
         return dict(t, **{k: v for k, v in i.items() if v and k != "url"}, error=i.get("error"))
     except Exception as e:
         return dict(t, error=str(e)[:200])
+
+
+MEDIA_DIR = os.environ.get("MEDIA_DIR", "/media")
+
+
+@app.get("/api/music/prefetch")
+def music_prefetch(url: str):
+    """A chosen YouTube track into the music service's cache now: the listener's song then starts at
+    once, not after YouTube's ~9 s (2026-11-27)."""
+    import urllib.parse
+    import urllib.request
+    with urllib.request.urlopen(f"{MUSIC}/prefetch?url={urllib.parse.quote(url, safe='')}", timeout=10) as r:
+        return json.loads(r.read())
+
+
+@app.get("/api/media")
+def media_list():
+    """The local audio files (~/eva-data/media on the hub), as a listener names them: /media/<name>."""
+    out = []
+    if os.path.isdir(MEDIA_DIR):
+        for root, _, files in os.walk(MEDIA_DIR):
+            for fn in sorted(files):
+                if fn.lower().endswith((".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac")):
+                    p = os.path.join(root, fn)
+                    out.append({"path": "/media/" + os.path.relpath(p, MEDIA_DIR).replace(os.sep, "/"),
+                                "bytes": os.path.getsize(p)})
+    return {"files": out}
+
+
+@app.post("/api/media")
+async def media_upload(request: Request, name: str):
+    """An audio file from the page (the raw body) -> /media/<name>."""
+    base = os.path.basename(name).strip()
+    if not re.fullmatch(r"[\w .()\-]+\.(mp3|m4a|aac|ogg|opus|wav|flac)", base, re.I | re.U):
+        raise HTTPException(400, "имя: буквы, цифры, пробел, .-() и расширение аудио")
+    body = await request.body()
+    if not 1000 < len(body) < 200_000_000:
+        raise HTTPException(400, "размер")
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    with open(os.path.join(MEDIA_DIR, base), "wb") as fo:
+        fo.write(body)
+    return {"path": "/media/" + base}
 
 
 @app.get("/api/music/stream")

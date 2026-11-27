@@ -8,11 +8,20 @@ part lives here and the Station only plays the stream with mpg123.
     GET /info?url=<watch url>                   -> {"title","artist","album","year","duration","thumb"}
     GET /stream?url=<watch url>                 -> audio/mpeg, 48 kHz, as it is decoded
     GET /beats?url=<watch url>                  -> {"bpm","first"}: tempo and first beat (Eva dances)
+    GET /prefetch?url=<watch url>               -> {"cached"}: download into the cache now (a listener's track)
+    GET /media                                  -> [{"path","bytes"}]: the local files
     GET /health
+A "url" may also be a direct link to an audio file (played by ffmpeg, no yt-dlp) or a local
+file "/media/<name>" (~/eva-data/media on the hub). A YouTube track played once is cached as
+mp3: YouTube took ~9 s from the command to the first sound, a listener's song wants it at once
+(2026-11-27).
 Ported from the old assistant.py (YouTube Music via yt-dlp -> ffmpeg -> mpg123).
 """
+import hashlib
 import json
+import os
 import re
+import threading
 import unicodedata
 import subprocess
 import sys
@@ -21,6 +30,86 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 8904
+MEDIA = os.environ.get("MEDIA_DIR", "/media")
+CACHE = os.environ.get("CACHE_DIR", "/cache")
+CACHE_MAX = float(os.environ.get("CACHE_MAX", 3e9))     # bytes; the least recently played go first
+AUDIO_EXT = (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac")
+FFMPEG_OUT = ["-vn", "-ar", "48000", "-ac", "2", "-f", "mp3", "-b:a", "160k", "pipe:1"]
+
+
+def _cached(url):
+    return os.path.join(CACHE, hashlib.sha1(url.encode()).hexdigest() + ".mp3")
+
+
+def source(url):
+    """-> ("file", path) | ("direct", url) | ("ytdlp", url) | (None, why)."""
+    if url.startswith("/media/"):
+        p = os.path.realpath(os.path.join(MEDIA, url[len("/media/"):]))
+        if not p.startswith(os.path.realpath(MEDIA) + os.sep) or not os.path.isfile(p):
+            return None, "нет такого файла"
+        return "file", p
+    if not url.startswith(("https://", "http://")):
+        return None, "url"
+    if os.path.isfile(_cached(url)):
+        return "cached", _cached(url)
+    if urllib.parse.urlparse(url).path.lower().endswith(AUDIO_EXT):
+        return "direct", url
+    return "ytdlp", url
+
+
+def decoder(url, extra_in=(), out=None):
+    """The decoding pipeline for a url: (yt-dlp process or None, ffmpeg process) with ffmpeg's
+    stdout piped. `out`: ffmpeg's output args."""
+    kind, where = source(url)
+    if kind is None:
+        raise ValueError(where)
+    dl = None
+    if kind == "ytdlp":
+        dl = subprocess.Popen(["yt-dlp", "-q", "--no-warnings", "-f", "bestaudio/best", "--no-playlist", "-o", "-", url],
+                              stdout=subprocess.PIPE, stderr=sys.stderr)
+        inp = ["-i", "pipe:0"]
+    else:
+        inp = ["-i", where]
+    ff = subprocess.Popen(["ffmpeg", "-v", "error", *extra_in, *inp, *(out or FFMPEG_OUT)],
+                          stdin=dl.stdout if dl else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=sys.stderr)
+    if dl:
+        dl.stdout.close()
+    return dl, ff
+
+
+def _prune():
+    try:
+        files = sorted((os.path.getatime(p), os.path.getsize(p), p) for p in
+                       (os.path.join(CACHE, f) for f in os.listdir(CACHE) if f.endswith(".mp3")))
+    except OSError:
+        return
+    total = sum(sz for _, sz, _ in files)
+    for _, sz, p in files:
+        if total <= CACHE_MAX:
+            break
+        os.remove(p)
+        total -= sz
+
+
+def prefetch(url):
+    """A YouTube track into the cache, whole (a background download)."""
+    kind, _ = source(url)
+    if kind != "ytdlp":
+        return kind in ("cached", "file", "direct")
+    os.makedirs(CACHE, exist_ok=True)
+    tmp = _cached(url) + f".{threading.get_ident()}.part"
+    dl, ff = decoder(url)
+    with open(tmp, "wb") as fo:
+        while chunk := ff.stdout.read(65536):
+            fo.write(chunk)
+    ok = ff.wait() == 0 and (dl.wait() == 0 if dl else True) and os.path.getsize(tmp) > 50000
+    if ok:
+        os.replace(tmp, _cached(url))
+        _prune()
+        err(f"cached {url} ({os.path.getsize(_cached(url)) // 1024} KB)")
+    else:
+        os.remove(tmp)
+    return ok
 
 
 def err(msg):
@@ -63,8 +152,32 @@ def search(q, kind="track", limit=5):
     return out
 
 
+def probe(where):
+    """A file or a direct link: its facts by ffprobe."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_format", "-of", "json", where],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode:
+        return {"error": (r.stderr.strip().splitlines() or [f"ffprobe {r.returncode}"])[-1][:200]}
+    fm = json.loads(r.stdout or "{}").get("format", {})
+    tags = {k.lower(): v for k, v in (fm.get("tags") or {}).items()}
+    name = os.path.splitext(os.path.basename(urllib.parse.unquote(urllib.parse.urlparse(where).path)))[0]
+    return {"title": tags.get("title") or name, "artist": tags.get("artist"), "album": tags.get("album"),
+            "duration": round(float(fm["duration"]), 1) if fm.get("duration") else None, "error": None}
+
+
 def info(url):
     """Full facts of one track (the flat search has no artist, length, cover)."""
+    kind, where = source(url)
+    if kind is None:
+        return {"url": url, "error": where}
+    if kind in ("file", "direct"):
+        return dict(probe(where), url=url)
+    meta = _cached(url)[:-4] + ".json"
+    if os.path.isfile(meta):
+        try:
+            return json.load(open(meta, encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
     r = subprocess.run(["yt-dlp", "-J", "--no-playlist", "--skip-download", url],
                        capture_output=True, text=True, timeout=60)
     why = None
@@ -74,9 +187,14 @@ def info(url):
         lines = [l for l in r.stderr.splitlines() if l.startswith("ERROR:")]
         why = re.sub(r"^ERROR:\s*(\[\w+\]\s*[\w-]+:\s*)?", "", lines[-1])[:200] if lines else f"yt-dlp {r.returncode}"
     j = json.loads(r.stdout or "{}") or {}        # a failed yt-dlp prints "null"
-    return {"title": j.get("track") or j.get("title"), "artist": j.get("artist") or j.get("uploader"),
-            "album": j.get("album"), "year": j.get("release_year"), "duration": j.get("duration"),
-            "thumb": j.get("thumbnail"), "url": url, "error": why}
+    out = {"title": j.get("track") or j.get("title"), "artist": j.get("artist") or j.get("uploader"),
+           "album": j.get("album"), "year": j.get("release_year"), "duration": j.get("duration"),
+           "thumb": j.get("thumbnail"), "url": url, "error": why}
+    if not why:
+        os.makedirs(CACHE, exist_ok=True)
+        with open(meta, "w", encoding="utf-8") as fo:
+            json.dump(out, fo, ensure_ascii=False)
+    return out
 
 
 BEATS = {}             # url -> {"bpm", "first"}: a track is measured once
@@ -91,12 +209,11 @@ def beats(url):
     if url in BEATS:
         return BEATS[url]
     sr, n, hop = 11025, 1024, 256
-    dl = subprocess.Popen(["yt-dlp", "-q", "-f", "bestaudio/best", "--no-playlist", "-o", "-", url],
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    ff = subprocess.run(["ffmpeg", "-v", "error", "-i", "pipe:0", "-t", "120", "-vn", "-ac", "1", "-ar", str(sr),
-                         "-f", "s16le", "pipe:1"], stdin=dl.stdout, capture_output=True, timeout=120)
-    dl.kill()
-    x = np.frombuffer(ff.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+    dl, ff = decoder(url, out=["-t", "120", "-vn", "-ac", "1", "-ar", str(sr), "-f", "s16le", "pipe:1"])
+    pcm, _ = ff.communicate(timeout=120)
+    if dl:
+        dl.kill()
+    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
     if len(x) < sr * 10:
         return {"bpm": 0, "first": 0}
     frames = np.lib.stride_tricks.sliding_window_view(x, n)[::hop] * np.hanning(n).astype(np.float32)
@@ -163,33 +280,70 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:
                 err(f"{u.path} {q}: {e!r}")
                 return self._json(500, {"error": str(e)[:300]})
+        if u.path == "/prefetch":
+            url = q.get("url", "")
+            threading.Thread(target=lambda: prefetch(url) if source(url)[0] == "ytdlp" else None, daemon=True).start()
+            return self._json(200, {"cached": source(url)[0] in ("cached", "file", "direct")})
+        if u.path == "/media":
+            out = []
+            for root, _, files in os.walk(MEDIA):
+                for fn in files:
+                    if fn.lower().endswith(AUDIO_EXT):
+                        p = os.path.join(root, fn)
+                        out.append({"path": "/media/" + os.path.relpath(p, MEDIA).replace(os.sep, "/"),
+                                    "bytes": os.path.getsize(p)})
+            return self._json(200, sorted(out, key=lambda x: x["path"]))
         if u.path == "/stream":
             url = q.get("url", "")
-            if not url.startswith(("https://", "http://")):
-                return self._json(400, {"error": "url"})
+            kind, where = source(url)
+            if kind is None:
+                return self._json(400, {"error": where})
             # their errors (quiet otherwise: -q, -v error) go to the container's log
-            err(f"stream {url}")
-            dl = subprocess.Popen(["yt-dlp", "-q", "--no-warnings", "-f", "bestaudio/best", "--no-playlist", "-o", "-", url],
-                                  stdout=subprocess.PIPE, stderr=sys.stderr)
-            ff = subprocess.Popen(["ffmpeg", "-v", "error", "-i", "pipe:0", "-vn", "-ar", "48000", "-ac", "2",
-                                   "-f", "mp3", "-b:a", "160k", "pipe:1"],
-                                  stdin=dl.stdout, stdout=subprocess.PIPE, stderr=sys.stderr)
-            dl.stdout.close()
+            err(f"stream {kind} {url}")
             self.send_response(200)
             self.send_header("Content-Type", "audio/mpeg")
             self.end_headers()
+            if kind == "cached":
+                # our own mp3, as it was made: no decoding, the sound starts at once
+                os.utime(where)
+                try:
+                    with open(where, "rb") as fi:
+                        while chunk := fi.read(65536):
+                            self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+            dl, ff = decoder(url)
+            # a YouTube track played to its end stays in the cache (a skip leaves nothing)
+            tmp = _cached(url) + f".{threading.get_ident()}.part" if kind == "ytdlp" else None
+            fo = None
+            if tmp:
+                os.makedirs(CACHE, exist_ok=True)
+                fo = open(tmp, "wb")
+            whole = False
             try:
                 while True:
                     chunk = ff.stdout.read(16384)
                     if not chunk:
+                        whole = ff.wait() == 0
                         break
+                    if fo:
+                        fo.write(chunk)
                     self.wfile.write(chunk)
             except (BrokenPipeError, ConnectionResetError):
                 pass          # the Station stopped or skipped the track
             finally:
                 for p in (ff, dl):
-                    if p.poll() is None:
+                    if p is not None and p.poll() is None:
                         p.kill()
+                if fo:
+                    fo.close()
+                    if whole and os.path.getsize(tmp) > 50000:
+                        os.replace(tmp, _cached(url))
+                        _prune()
+                        err(f"cached {url}")
+                    else:
+                        os.remove(tmp)
             return
         self._json(404, {"error": "not found"})
 

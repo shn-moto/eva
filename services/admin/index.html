@@ -1144,7 +1144,8 @@ function lsRender() {
     <span>Вопрос модели</span><textarea data-k="prompt" placeholder="необязательно: вопрос да/нет локальной модели, например «Человек злится или ругается?»">${esc(x.prompt || "")}</textarea>
     <span>Действие</span><select data-k="action">${opts(LACT, x.action || "say")}</select>
     <span>Текст</span><textarea data-k="text" placeholder="что сказать / написать / поручить; подстановки {phrase} {who} {children}">${esc(x.text || "")}</textarea>
-    <span class="mu">Трек</span><span class="mu"><button class="btn" id="ls-find">Найти трек</button> <span class="help" id="ls-track"></span>
+    <span class="mu">Трек</span><span class="mu"><button class="btn" id="ls-find">Найти трек</button> <button class="btn" id="ls-media">Файлы на хабе</button>
+      <label class="btn" style="cursor:pointer">Загрузить mp3<input type="file" id="ls-up" accept="audio/*" hidden></label> <span class="help" id="ls-track"></span>
       <div id="ls-hits"></div></span>
     <span class="tg">Кому написать</span><select class="tg" data-k="to"><option value="">— выбери —</option>${
       [...new Set([...FAMILY, ...(x.to && !FAMILY.includes(x.to) ? [x.to] : [])])].map(n => `<option value="${esc(n)}"${n === x.to ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>
@@ -1168,7 +1169,7 @@ function lsRender() {
   // the exact track (admin.py /api/music/search): words -> hits checked to play, a link (a track page or a
   // direct mp3) -> checked as it is; ▶ listens through the music service, «выбрать» puts the link in the text
   const ta = document.querySelector('#ls-edit [data-k="text"]');
-  const isLink = () => /^https?:\/\/\S+$/.test(ta.value.trim());
+  const isLink = () => /^https?:\/\/\S+$/.test(ta.value.trim()) || ta.value.trim().startsWith("/media/");
   const label = () => { $("#ls-find").textContent = isLink() ? "Проверить ссылку" : "Найти трек";
     $("#ls-track").textContent = isLink() ? (x.track && ta.value.trim() === x.trackUrl ? "выбран: " + x.track : "ссылка — включится она")
       : "по словам — поиск может включить другую песню; лучше найди и выбери трек"; };
@@ -1180,8 +1181,28 @@ function lsRender() {
     $("#ls-hits").innerHTML = '<div class="help">ищу и проверяю, играет ли (до минуты)…</div>';
     try {
       const r = await fetch("/api/music/search?q=" + encodeURIComponent(q)).then(r => r.json());
+      lsHits(r.hits || []);
+    } catch (e) { $("#ls-hits").innerHTML = `<div class="help err">ошибка: ${esc(String(e))}</div>`; }
+  };
+  // the hub's local files (/media): instant, no YouTube; listened to and chosen like a search hit
+  $("#ls-media").onclick = async () => {
+    const r = await fetch("/api/media").then(r => r.json());
+    lsHits((r.files || []).map(f => ({ title: f.path.replace(/^\/media\//, ""), url: f.path, local: true, bytes: f.bytes })));
+  };
+  $("#ls-up").onchange = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    $("#ls-track").textContent = `загружаю ${file.name}…`;
+    const r = await fetch("/api/media?name=" + encodeURIComponent(file.name), { method: "POST", body: file });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast("не загрузилось: " + (j.detail || r.status)); label(); return; }
+    ta.value = j.path; x.track = file.name; x.trackUrl = j.path; label(); $("#ls-track").textContent += " (сохрани)";
+  };
+  function lsHits(hits) {
+    {
+      const r = { hits };
       $("#ls-hits").innerHTML = (r.hits || []).map((h, i) => `<div class="hit${h.error ? " bad" : ""}" data-i="${i}">${h.error ? "✗" : ""} ${
         esc(h.title || "?")}${h.artist ? " — " + esc(h.artist) : ""}${dur(h.duration)}${
+        h.local ? ` <span class="help">${bxMB(h.bytes)}</span>` : ""}${
         h.error ? ` <span class="err">не играет: ${esc(h.error)}</span>`
           : ` <button class="btn sm" data-act="play">▶ слушать</button> <button class="btn sm primary" data-act="pick">выбрать</button>`}</div>`).join("") || '<div class="help">ничего не нашлось</div>';
       $("#ls-hits").insertAdjacentHTML("beforeend", '<audio id="ls-audio" preload="none"></audio>');
@@ -1200,9 +1221,11 @@ function lsRender() {
         ta.value = h.url; x.track = (h.title || "") + (h.artist ? " — " + h.artist : ""); x.trackUrl = h.url;
         label(); $("#ls-track").textContent += " (сохрани)";
         $("#ls-hits").innerHTML = "";
+        // a YouTube track goes into the music service's cache now: the tag then starts without YouTube's wait
+        if (/^https?:/.test(h.url)) fetch("/api/music/prefetch?url=" + encodeURIComponent(h.url)).catch(() => {});
       });
-    } catch (e) { $("#ls-hits").innerHTML = `<div class="help err">ошибка: ${esc(String(e))}</div>`; }
-  };
+    }
+  }
   const mode = () => document.querySelectorAll("#ls-edit .emo").forEach(e => e.style.display = $("#ls-mode").value === "emotion" ? "" : "none");
   $("#ls-mode").onchange = mode; mode();
   $("#ls-test").onclick = async () => {
