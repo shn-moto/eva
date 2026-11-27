@@ -313,6 +313,11 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
 #ew-list .li { cursor: pointer; padding: 5px 8px; border-radius: 6px; }
 #ew-list .li:hover, #ew-list .li.on { background: var(--line); }
 #ew-list .li.off { color: var(--mute); }
+#ew-list .li { display: flex; align-items: center; gap: 6px; }
+#ew-list .li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ew-list .li .del { border: 0; background: none; cursor: pointer; opacity: .35; padding: 0 2px; font-size: 13px; }
+#ew-list .li:hover .del { opacity: .8; }
+#ew-list .li .del:hover { opacity: 1; }
 #ey-tc.on, #ey-tj.on, #ey-tw.on { background: var(--accent-soft); color: var(--accent); }
 #ey-big { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: flex; align-items: center; justify-content: center; z-index: 60; }
 #ey-big[hidden] { display: none; }
@@ -1819,9 +1824,23 @@ async function ewLoad() {
 }
 function ewRender() {
   $("#ew-list").innerHTML = EW.items.map((x, i) =>
-    `<div class="li${i === EW.cur ? " on" : ""}${x.enabled ? "" : " off"}" data-i="${i}">${x.enabled ? "●" : "○"} ${esc(x.name || x.id)}</div>`).join("")
+    `<div class="li${i === EW.cur ? " on" : ""}${x.enabled ? "" : " off"}" data-i="${i}"><span>${x.enabled ? "●" : "○"} ${esc(x.name || x.id)}</span>
+      <button class="del" title="Удалить сценарий">🗑</button></div>`).join("")
     || '<div class="help">Сценариев нет — «Новый».</div>';
   document.querySelectorAll("#ew-list .li").forEach(e => e.onclick = () => { ewGrab(); EW.cur = +e.dataset.i; ewRender(); });
+  // the bin on the row deletes at once (saved): a delete waiting for «Сохранить» is easy to lose
+  document.querySelectorAll("#ew-list .li .del").forEach(b => b.onclick = async ev => {
+    ev.stopPropagation();
+    const i = +b.closest(".li").dataset.i, x = EW.items[i];
+    if (!confirm(`Удалить сценарий «${x.name || x.id}»?`)) return;
+    ewGrab();
+    const items = EW.items.filter((_, j) => j !== i);
+    try {
+      const r = await api("/api/watchers", { watchers: items });
+      EW.items = r.watchers; EW.log = r.log || {}; EW.cur = Math.min(EW.cur > i ? EW.cur - 1 : EW.cur, Math.max(0, EW.items.length - 1));
+      ewRender(); toast("Сценарий удалён");
+    } catch (er) { toast("Не удалилось: " + er.message); }
+  });
   const x = EW.items[EW.cur];
   if (!x) { $("#ew-edit").innerHTML = ""; return; }
   const ST = { ok: ["✓", "ok"], error: ["✗", "err"], pending: ["…", "pend"], skip: ["–", "skip"] };
@@ -1850,7 +1869,6 @@ function ewRender() {
     <span>Пауза, с</span><input data-k="cooldown" type="number" min="0" value="${x.cooldown ?? 600}">
     <span class="full help">Для «движения» пауза — как часто срабатывать, пока движение идёт (событие «ещё движется» приходит раз в 10 с).
       «Команда Еве» получает камеру и время; кадр она может посмотреть сама. «Сказать», «Телеграм», «музыка» — без Claude.</span>
-    <span></span><span><button class="btn" id="ew-del" style="color:var(--danger)">Удалить сценарий</button></span>
   </div><div class="lg">${lg ? "Последние срабатывания:" + lg : "Срабатываний за 14 дней нет."}</div>`;
   document.querySelectorAll("#ew-edit .lgrow").forEach(e => e.onclick = () => $("#ewd-" + e.dataset.n).classList.toggle("open"));
   const sel = k => document.querySelector(`#ew-edit [data-k="${k}"]`).value;
@@ -1877,7 +1895,6 @@ function ewRender() {
       if (/^https?:/.test(h.url)) fetch("/api/music/prefetch?url=" + encodeURIComponent(h.url)).catch(() => {});
     });
   };
-  $("#ew-del").onclick = () => { if (confirm("Удалить сценарий? (применится по «Сохранить»)")) { EW.items.splice(EW.cur, 1); EW.cur = 0; ewRender(); } };
 }
 function ewGrab() {
   const x = EW.items[EW.cur];
