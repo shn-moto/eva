@@ -46,9 +46,12 @@ def load():
         m = None
     if m != _state["mtime"]:
         _state["mtime"] = m
+        if m is None:                           # none made on the page yet
+            _state["items"] = []
+            return _state["items"]
         try:
             with open(FILE, encoding="utf-8") as f:
-                _state["items"] = json.load(f).get("watchers", []) if m else []
+                _state["items"] = json.load(f).get("watchers", [])
             log(f"watchers: {len([x for x in _state['items'] if x.get('enabled')])} on")
         except (OSError, ValueError) as e:
             log(f"watchers: bad file, kept the old ones: {e}")
