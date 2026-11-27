@@ -12,6 +12,7 @@ part lives here and the Station only plays the stream with mpg123.
     GET /media[?dir=/media/<folder>]            -> [{"path","bytes"}]: the local files (under a folder)
     GET /cover?url=/media/<file>                -> the image: cover.jpg (.png/.webp) beside it or in a folder above
     GET /health
+    /library/*, /dlna/*, /video/f/*: the media library and video on a DLNA renderer (video.py)
 A "url" may also be a direct link to an audio file (played by ffmpeg, no yt-dlp) or a local
 file "/media/<name>" (~/eva-data/media on the hub). A YouTube track played once is cached as
 mp3: YouTube took ~9 s from the command to the first sound, a listener's song wants it at once
@@ -29,6 +30,8 @@ import sys
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import video
 
 PORT = 8904
 MEDIA = os.environ.get("MEDIA_DIR", "/media")
@@ -49,6 +52,10 @@ def source(url):
         if not p.startswith(os.path.realpath(MEDIA) + os.sep) or not os.path.isfile(p):
             return None, "нет такого файла"
         return "file", p
+    if url.startswith("/"):
+        # a file under the music roots of the admin page «Ресурсы» (the media library)
+        p = video.inside(url, "music")
+        return ("file", p) if p and os.path.isfile(p) else (None, "нет такого файла")
     if not url.startswith(("https://", "http://")):
         return None, "url"
     if os.path.isfile(_cached(url)):
@@ -160,7 +167,10 @@ def cover(path):
     """A local file's cover: cover.jpg in its folder, else in the folders above it up to MEDIA
     (one cover.jpg in /media/<compilation>/ dresses all its tracks, 2026-11-27)."""
     top = os.path.realpath(MEDIA)
-    d = os.path.dirname(os.path.realpath(path))
+    rp = os.path.realpath(path)
+    if not rp.startswith(top + os.sep):
+        top = next((r for r in video.roots("music") if rp.startswith(r + os.sep)), top)
+    d = os.path.dirname(rp)
     while (d + os.sep).startswith(top + os.sep):
         names = {n.lower(): n for n in os.listdir(d)}
         for c in COVERS:
@@ -285,6 +295,8 @@ class H(BaseHTTPRequestHandler):
         q = dict(urllib.parse.parse_qsl(u.query))
         if u.path == "/health":
             return self._json(200, {"ok": True})
+        if u.path.startswith(("/library/", "/dlna/", "/video/")) and video.route(self, u.path, q):
+            return
         if u.path == "/search":
             try:
                 return self._json(200, search(q.get("q", ""), q.get("kind", "track"), int(q.get("limit", 5))))
@@ -388,6 +400,10 @@ class H(BaseHTTPRequestHandler):
                         os.remove(tmp)
             return
         self._json(404, {"error": "not found"})
+
+
+H.do_HEAD = lambda self: (video.serve_file(self, self.path.split("?")[0][len("/video/f/"):])
+                          if self.path.startswith("/video/f/") else self._json(404, {}))
 
 
 def self_update(every=24 * 3600):

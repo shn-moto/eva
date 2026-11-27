@@ -32,7 +32,7 @@ HISTORY_FILE = "/var/lib/eva/history.json"
 # how much she keeps: llm.HISTORY_CHARS (by volume, not by time - 2026-11-20)
 CONTINUE = "<продолжи>"
 # said when a tool call begins and she has not said anything yet (sounds cached at start)
-QUIET_TOOLS = {"music_play", "music_control"}   # done without a filler: the player shows it
+QUIET_TOOLS = {"music_play", "music_control", "library_play", "video_control"}   # done without a filler: the player shows it
 FILLERS = profile.tune("dialog.fillers", ["Секунду, сейчас посмотрю.", "Сейчас гляну.", "Погоди, посмотрю.", "Так, сейчас посмотрю."])
 
 # a call is the vocative: «почему ты назвал её Евой» is about her, not to her

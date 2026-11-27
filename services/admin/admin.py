@@ -894,6 +894,52 @@ def _music_check(t):
 
 
 MEDIA_DIR = os.environ.get("MEDIA_DIR", "/media")
+MEDIA_SETTINGS = os.environ.get("MEDIA_SETTINGS", "/settings/media.json")
+
+
+# ---- «Ресурсы»: the media library's roots and the DLNA renderer (services/music/video.py reads them) ----
+@app.get("/api/resources")
+def resources_get():
+    s = _jload(MEDIA_SETTINGS, {})
+    return {"video_roots": s.get("video_roots", []), "music_roots": s.get("music_roots", ["/media"]),
+            "renderer": s.get("renderer")}
+
+
+@app.post("/api/resources")
+async def resources_post(request: Request):
+    b = await request.json()
+    s = _jload(MEDIA_SETTINGS, {})
+    for k in ("video_roots", "music_roots"):
+        if k in b:
+            roots = [str(x).strip().rstrip("/") for x in b[k] if str(x).strip()]
+            bad = [r for r in roots if not r.startswith(("/home/", "/mnt/", "/media"))]
+            if bad:
+                raise HTTPException(400, f"папки только под /home, /mnt или /media: {', '.join(bad)}")
+            s[k] = roots
+    if "renderer" in b:
+        s["renderer"] = b["renderer"] or None
+    os.makedirs(os.path.dirname(MEDIA_SETTINGS), exist_ok=True)
+    with open(MEDIA_SETTINGS + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(s, f, ensure_ascii=False, indent=1)
+    os.replace(MEDIA_SETTINGS + ".tmp", MEDIA_SETTINGS)
+    return resources_get()
+
+
+@app.get("/api/mm/{path:path}")
+def media_proxy(path: str, request: Request):
+    """The music service's media library and DLNA control as they are (lists, posters, play, state)."""
+    import urllib.error
+    import urllib.request
+    from fastapi.responses import Response
+    if not path.startswith(("library/", "dlna/")):
+        raise HTTPException(404, "not found")
+    url = f"{MUSIC}/{path}" + (f"?{request.url.query}" if request.url.query else "")
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            return Response(r.read(), media_type=r.headers.get("Content-Type"),
+                            headers={"Cache-Control": r.headers.get("Cache-Control") or "no-store"})
+    except urllib.error.HTTPError as e:
+        return Response(e.read(), status_code=e.code, media_type=e.headers.get("Content-Type"))
 AUDIO_EXTS = (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac")
 
 

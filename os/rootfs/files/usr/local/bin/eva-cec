@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""HDMI-CEC from the Station (/dev/cec0, the kernel's CEC API - no cec-ctl on board).
+
+    eva-cec show       # wake the TV and switch it to the Station's input (Image View On + Active Source)
+    eva-cec info       # physical / logical address
+
+Why: the TV plays a film from the hub by its own DLNA renderer and stays on its black player
+screen afterwards; Eva's face comes back only if the Station claims the input (2026-11-27).
+"""
+import fcntl
+import glob
+import os
+import struct
+import sys
+import time
+
+DEV = "/dev/cec0"
+
+
+def _ioc(d, nr, size):
+    return (d << 30) | (size << 16) | (ord("a") << 8) | nr
+
+
+LOG_FMT = "4sHBBII15s4s4s4s48s"            # struct cec_log_addrs
+LOG_SIZE = struct.calcsize("=" + LOG_FMT)   # 91 -> padded to 92 by the kernel's alignment
+LOG_SIZE += (-LOG_SIZE) % 4
+MSG_SIZE = 56                               # struct cec_msg
+G_PHYS = _ioc(2, 1, 2)
+G_LOG = _ioc(2, 3, LOG_SIZE)
+S_LOG = _ioc(3, 4, LOG_SIZE)
+TRANSMIT = _ioc(3, 5, MSG_SIZE)
+
+
+def phys(fd):
+    b = bytearray(2)
+    fcntl.ioctl(fd, G_PHYS, b)
+    return struct.unpack("=H", b)[0]
+
+
+def log_addrs(fd):
+    b = bytearray(LOG_SIZE)
+    fcntl.ioctl(fd, G_LOG, b)
+    la = list(b[0:4])
+    num = b[7]
+    return la[:num]
+
+
+def claim(fd):
+    """One logical address as a playback device (blocks until the kernel has polled one)."""
+    las = log_addrs(fd)
+    if las and las[0] != 0xF:
+        return las[0]
+    b = bytearray(LOG_SIZE)
+    struct.pack_into("=" + LOG_FMT, b, 0, b"\xff" * 4, 0, 5, 1, 0xFFFFFF, 0, b"Eva",
+                     bytes([4, 0, 0, 0]), bytes([3, 0, 0, 0]), bytes([0x10, 0, 0, 0]), bytes(48))
+    fcntl.ioctl(fd, S_LOG, b)
+    for _ in range(30):
+        las = log_addrs(fd)
+        if las and las[0] != 0xF:
+            return las[0]
+        time.sleep(0.1)
+    raise RuntimeError("no logical address")
+
+
+def send(fd, data):
+    b = bytearray(MSG_SIZE)
+    struct.pack_into("=QQIIII", b, 0, 0, 0, len(data), 0, 0, 0)   # len, timeout (no reply awaited), sequence, flags
+    b[32:32 + len(data)] = bytes(data)
+    fcntl.ioctl(fd, TRANSMIT, b)
+    return b[50]      # tx_status: 1 = OK
+
+
+def main(cmd="show"):
+    fd = os.open(DEV, os.O_RDWR)
+    pa = phys(fd)
+    if cmd == "info":
+        print(f"physical {pa >> 12}.{pa >> 8 & 15}.{pa >> 4 & 15}.{pa & 15}, logical {log_addrs(fd)}")
+        return
+    if pa == 0xFFFF:
+        # the CEC driver had no physical address although the TV was connected and its EDID read
+        # (f.f.f.f, 2026-11-27); a re-probe of the connector hands the EDID's address (2.0.0.0) over
+        for st in glob.glob("/sys/class/drm/card*-HDMI-A-*/status"):
+            try:
+                open(st, "w").write("detect")
+            except OSError:
+                pass
+        time.sleep(1)
+        pa = phys(fd)
+    if pa == 0xFFFF:
+        sys.exit("no TV on HDMI")
+    la = claim(fd)
+    s1 = send(fd, [(la << 4) | 0x0, 0x04])                          # Image View On -> TV
+    time.sleep(0.3)
+    s2 = send(fd, [(la << 4) | 0xF, 0x82, pa >> 8, pa & 0xFF])      # Active Source, broadcast
+    print(f"logical {la}, physical {pa:04x}: image-view-on tx {s1}, active-source tx {s2}")
+
+
+if __name__ == "__main__":
+    main(*sys.argv[1:])

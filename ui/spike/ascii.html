@@ -54,6 +54,12 @@
     text-shadow: 0 0 6px #000, 0 0 2px #000; }
   .cell .c { position: absolute; right: 8px; bottom: 6px; font-size: 15px; color: #dfe6ff;
     text-shadow: 0 0 4px #000; }
+  /* the media library: the name is the point of a tile - wide, on a shade, a folder marked */
+  .cell.lib .c { left: 0; right: 0; bottom: 0; padding: 18px 10px 6px; font-size: 19px; color: #fff;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.85)); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }
+  .cell.lib.folder { box-shadow: inset 0 0 0 2px rgba(143, 233, 255, 0.5); }
+  .cell.lib.folder .c { color: #8fe9ff; }
   .full { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
   .full img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
   .card { flex: 0 0 300px; display: flex; flex-direction: column; gap: 10px; font-size: 20px; line-height: 1.35; }
@@ -425,8 +431,10 @@ function img(src) { const i = el("img"); i.decoding = "async"; i.src = src; retu
 function grid(items) {
   const g = el("div", "grid");
   for (const it of items) {
-    const c = el("div", "cell");
-    c.append(img("/img/" + it.id + "/thumb"), el("span", "n", it.n), el("span", "c", it.caption || ""));
+    const c = el("div", "cell" + (it.src ? " lib" : "") + (it.folder ? " folder" : ""));
+    // the media library's tiles bring their own poster url (the hub's music service), photos an archive id
+    const cap = it.folder ? "▸ " + (it.caption || "") + (it.count ? "  (" + it.count + ")" : "") : (it.caption || "");
+    c.append(img(it.src || "/img/" + it.id + "/thumb"), el("span", "n", it.n), el("span", "c", cap));
     g.append(c);
   }
   return g;
@@ -619,6 +627,10 @@ function showView(v) {
   vbody.replaceChildren();
   if (v.kind === "photos") {
     vhead.replaceChildren(el("span", "", v.title || "Фото"), el("span", "sub", (v.total || "") + " фото" + pages));
+    vbody.append(grid(v.items));
+  } else if (v.kind === "library") {
+    vhead.replaceChildren(el("span", "", (v.lib === "music" ? "Музыка: " : "Видео: ") + (v.title || "")),
+      el("span", "sub", (v.total || 0) + pages));
     vbody.append(grid(v.items));
   } else if (v.kind === "photo") {
     vhead.replaceChildren(el("span", "", v.caption || ""), el("span", "sub", v.count > 1 ? v.index + " из " + v.count : ""));

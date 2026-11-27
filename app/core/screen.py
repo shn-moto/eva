@@ -6,6 +6,8 @@ A tool returns a presentation (data, not UI):
     {"kind": "photo",  "id", "caption"}
     {"kind": "person", "name", "face", "lines": [...], "photos": [ids]}
     {"kind": "picture", "file_id", "caption"}   a picture she drew (skill artist)
+    {"kind": "library", "lib": "video"|"music", "title", "dir", "parent",
+     "items": [{"name", "path", "folder", "count", "src"}]}   the media library's tiles (skill library)
 The brain keeps what is on screen (so «дальше», «открой третью» work for any
 presentation) and sends the page a ready-to-draw "view" event; the page only
 draws it, with the face in a corner. Images come through ui_server (/img, /face).
@@ -55,7 +57,7 @@ _restore()
 
 def present(p):
     """A tool's presentation goes on the TV (voice channel)."""
-    if not p or p.get("kind") not in ("photos", "photo", "person", "html", "picture"):
+    if not p or p.get("kind") not in ("photos", "photo", "person", "html", "picture", "library"):
         return
     with _lock:
         state.update(p=p, page=0, open=None, touched=time.time())
@@ -67,7 +69,7 @@ def _items():
     p = state["p"]
     if not p:
         return []
-    if p["kind"] == "photos":
+    if p["kind"] in ("photos", "library"):
         return p["items"]
     if p["kind"] in ("html", "picture"):
         return []
@@ -127,6 +129,12 @@ def _send():
     page = min(state["page"], pages - 1)
     first = page * PER_PAGE
     grid = [dict(it, n=first + k + 1) for k, it in enumerate(items[first:first + PER_PAGE])]
+    if p["kind"] == "library":
+        ui({"type": "view", "kind": "library", "title": p.get("title", ""), "lib": p.get("lib"),
+            "items": [{"n": it["n"], "caption": it["name"], "src": it["src"], "folder": it["folder"],
+                       "count": it.get("count")} for it in grid],
+            "page": page + 1, "pages": pages, "total": len(items)})
+        return
     if p["kind"] == "person":
         ui({"type": "view", "kind": "person", "name": p["name"], "face": p.get("face"),
             "lines": p.get("lines", []), "items": grid, "page": page + 1, "pages": pages})
@@ -198,6 +206,12 @@ def describe():
     if p["kind"] == "html":
         return f"На экране твоя страница «{p.get('title', '')}»{' на весь экран' if p.get('full') else ' (в окне)'}."
     pages = max(1, (len(items) + PER_PAGE - 1) // PER_PAGE)
+    if p["kind"] == "library":
+        first = state["page"] * PER_PAGE
+        shown = "; ".join(f"{first + k + 1}. {it['name']}" + (" (папка)" if it["folder"] else "")
+                          for k, it in enumerate(items[first:first + PER_PAGE]))
+        return (f"На экране медиатека ({'видео' if p.get('lib') == 'video' else 'музыка'}): {p.get('title', '')}, "
+                f"страница {state['page'] + 1} из {pages}, всего {len(items)}: {shown}.")
     return (f"На экране {'карточка ' + p['name'] if p['kind'] == 'person' else 'фото: ' + p.get('title', '')}, "
             f"страница {state['page'] + 1} из {pages}, всего фото {len(items)} (пронумерованы).")
 
@@ -218,6 +232,8 @@ def act(action, n=None):
                 state["open"] = None
             else:
                 state.update(p=None, page=0)
+        elif action == "open" and state["p"]["kind"] == "library":
+            return "Это медиатека: папку открывает library_browse(n), файл включает library_play(n)."
         elif action == "open":
             if not n or not 1 <= n <= len(items):
                 return f"Нет фото с номером {n}: их {len(items)}."

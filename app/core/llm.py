@@ -34,7 +34,8 @@ AGENT_EFFORT = profile.tune("llm.agent_effort", "medium")
 # Tools after which nothing needs weighing (an action done, a picture shown): they
 # never count towards an escalation. «выключи музыку» once went Sonnet -> tool -> Opus,
 # and Opus (cold cache) wrote 26k tokens to say "Выключила музыку" - $0.16 (2026-11-21).
-LIGHT_TOOLS = profile.tune("llm.light_tools", {"music_play", "music_control", "screen", "panel", "avatar", "say_at_home", "send_message",
+LIGHT_TOOLS = profile.tune("llm.light_tools", {"music_play", "music_control", "library_browse", "library_play",
+               "video_control", "screen", "panel", "avatar", "say_at_home", "send_message",
                "eva_spend", "photo_indexing", "show_html", "show_feed", "weather",
                "home_api_index", "home_api_get",
                "file_print", "print_photos", "print_text", "print_url", "printer_status", "print_cancel",

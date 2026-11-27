@@ -71,6 +71,19 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; justify-content: center; align-items: stretch;
          padding: 4vh 4vw; z-index: 20; }
 .modal[hidden] { display: none; }
+.rc-set { display: grid; grid-template-columns: 1fr 1fr 1.2fr; gap: 14px; padding: 12px 16px; }
+.rc-set textarea { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; margin-top: 4px; }
+#rc-grid { flex: 1; overflow: auto; padding: 12px 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px; align-content: start; }
+.rc-t { position: relative; border-radius: 8px; overflow: hidden; background: #111725; aspect-ratio: 16 / 10; cursor: pointer; }
+.rc-t img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rc-t .nm { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 8px 5px; color: #fff; font-size: 13px;
+  background: linear-gradient(transparent, rgba(0,0,0,.85)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rc-t.dir { box-shadow: inset 0 0 0 2px #5fb3d9; }
+.rc-t.dir .nm { color: #9fe3ff; }
+.rc-t .act { position: absolute; top: 6px; right: 6px; display: none; gap: 4px; }
+.rc-t:hover .act { display: flex; }
+#rc-tv.on, #rc-tm.on { background: var(--accent, #3b82f6); color: #fff; }
 /* calendar */
 #cal-body { display: grid; grid-template-columns: 410px 1fr; min-height: 0; flex: 1; }
 #cal-body > div { min-height: 0; overflow: auto; padding: 10px 14px; }
@@ -280,6 +293,7 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
   <button id="ls-open" class="btn" title="Правила на каждую услышанную фразу">Слушатели</button>
   <button id="pl-open" class="btn" title="Отмеченные места: откуда звук слушать, а откуда нет">Места</button>
   <button id="bx-open" class="btn" title="Запись всего, что слышит ухо: 7 микрофонов, динамик, после AEC3">Чёрный ящик</button>
+  <button id="rc-open" class="btn" title="Медиатека: папки с видео и музыкой на хабе, телевизор для фильмов">Ресурсы</button>
   <datalist id="speakers"></datalist>
 </header>
 <div id="cal" class="modal" hidden>
@@ -328,6 +342,24 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
     <div id="bx-body"><div id="bx-list"></div><div id="bx-view"></div></div>
     <div class="bx-del">Удалить записи за период: с <input type="datetime-local" id="bx-from"> по <input type="datetime-local" id="bx-to">
       <button class="btn" id="bx-del" style="color:var(--danger)">Удалить</button> <span class="help" id="bx-del-res"></span></div>
+  </div>
+</div>
+<div id="rc" class="modal" hidden>
+  <div class="rs-box">
+    <div class="bar"><span class="title">Ресурсы</span><span class="sub">медиатека Евы: свои фильмы и музыка с хаба</span><span style="flex:1"></span>
+      <button class="btn" id="rc-close">Закрыть</button></div>
+    <div class="rc-set">
+      <div><b>Папки с видео</b> <span class="help">по одной в строке, под /home, /mnt или /media</span><textarea id="rc-video" rows="3"></textarea></div>
+      <div><b>Папки с музыкой</b> <span class="help">по одной в строке</span><textarea id="rc-music" rows="3"></textarea></div>
+      <div><b>Телевизор для фильмов</b> <span class="help">DLNA-плеер: фильм играет он сам, колонка не участвует</span>
+        <select id="rc-dmr"><option value="">— не выбран —</option></select> <button class="btn" id="rc-find">Найти в сети</button>
+        <div style="margin-top:8px"><button class="btn primary" id="rc-save">Сохранить</button> <span class="help" id="rc-now"></span></div></div>
+    </div>
+    <div class="bar" style="border-top:1px solid var(--line)"><button class="btn" id="rc-tv">Видео</button><button class="btn" id="rc-tm">Музыка</button>
+      <span id="rc-path" class="sub" style="margin-left:10px"></span><span style="flex:1"></span>
+      <input id="rc-q" type="search" placeholder="найти по названию" style="width:220px"></div>
+    <div id="rc-grid"></div>
+    <audio id="rc-audio" preload="none"></audio>
   </div>
 </div>
 <div id="ls" class="modal" hidden>
@@ -1376,6 +1408,73 @@ function bxStripWire(it) {
   document.querySelectorAll("#bx-view .bx-ph .bxr").forEach(r => r.onclick = () => seek(+r.dataset.t - 0.3));
   au.ontimeupdate = () => { const h = $("#bx-head"); if (h) h.style.left = (au.currentTime / L * 100) + "%"; };
 }
+// ---- «Ресурсы»: the media library (admin.py /api/resources, /api/mm/* -> services/music/video.py) ----
+const RC = { kind: "video", dir: "", parent: null };
+async function rcState() {
+  const s = await fetch("/api/mm/dlna/state").then(r => r.json()).catch(() => ({}));
+  $("#rc-now").innerHTML = s.count ? `на ТВ: ${esc(s.title)} (${s.state}${s.count > 1 ? `, ${s.index} из ${s.count}` : ""})
+    <button class="btn sm" id="rc-stop">стоп</button>` : "";
+  if ($("#rc-stop")) $("#rc-stop").onclick = async () => { await fetch("/api/mm/dlna/control?action=stop"); rcState(); };
+}
+async function rcList(dir, q) {
+  $("#rc-tv").classList.toggle("on", RC.kind === "video"); $("#rc-tm").classList.toggle("on", RC.kind === "music");
+  $("#rc-grid").innerHTML = '<div class="help">загружаю…</div>';
+  const url = q ? `/api/mm/library/find?kind=${RC.kind}&q=${encodeURIComponent(q)}`
+    : `/api/mm/library/list?kind=${RC.kind}&dir=${encodeURIComponent(dir || "")}`;
+  const r = await fetch(url).then(r => r.json()).catch(e => ({ error: String(e) }));
+  if (r.error) { $("#rc-grid").innerHTML = `<div class="help err">${esc(r.error)}</div>`; return; }
+  RC.dir = r.dir || ""; RC.parent = r.parent;
+  $("#rc-path").innerHTML = q ? `найдено «${esc(q)}»` : (RC.dir ? esc(RC.dir) : "корневые папки");
+  const up = (RC.dir && !q) ? [{ up: true, name: "↑ назад", folder: true }] : [];
+  const items = [...up, ...(r.items || [])];
+  $("#rc-grid").innerHTML = items.map((it, i) => `<div class="rc-t${it.folder ? " dir" : ""}" data-i="${i}">${
+    it.up ? "" : `<img loading="lazy" src="/api/mm${esc(it.poster)}" onerror="this.style.opacity=0">`}
+    <div class="act">${it.up ? "" : RC.kind === "video"
+      ? `<button class="btn sm primary" data-a="tv">${it.folder ? "▶ всё на ТВ" : "▶ на ТВ"}</button>`
+      : (it.folder ? "" : `<button class="btn sm" data-a="hear">▶ слушать</button>`)}</div>
+    <div class="nm">${it.folder && !it.up ? "▸ " : ""}${esc(it.name)}${it.count ? ` (${it.count})` : ""}</div></div>`).join("")
+    || '<div class="help">пусто — задай папки выше и сохрани</div>';
+  document.querySelectorAll("#rc-grid .rc-t").forEach(t => t.onclick = async e => {
+    const it = items[+t.dataset.i], a = e.target.dataset.a;
+    if (a === "tv") {
+      const r = await fetch(`/api/mm/dlna/play?path=${encodeURIComponent(it.path)}`).then(r => r.json());
+      toast(r.error ? "не получилось: " + r.error : "на ТВ: " + r.title); rcState(); return;
+    }
+    if (a === "hear") { const au = $("#rc-audio"); au.src = "/api/music/stream?url=" + encodeURIComponent(it.path); au.play(); return; }
+    if (it.up) rcList(RC.parent || "");
+    else if (it.folder) rcList(it.path);
+  });
+}
+$("#rc-open").onclick = async () => {
+  $("#rc").hidden = false;
+  const s = await api("/api/resources");
+  $("#rc-video").value = s.video_roots.join("\n"); $("#rc-music").value = s.music_roots.join("\n");
+  const sel = $("#rc-dmr");
+  sel.innerHTML = '<option value="">— не выбран —</option>' + (s.renderer ? `<option value="${esc(s.renderer.url)}" selected>${esc(s.renderer.name)}</option>` : "");
+  rcList(""); rcState();
+};
+$("#rc-close").onclick = () => { $("#rc").hidden = true; $("#rc-audio").pause(); };
+$("#rc-find").onclick = async () => {
+  $("#rc-find").textContent = "ищу…";
+  const list = await fetch("/api/mm/dlna/renderers").then(r => r.json()).catch(() => []);
+  $("#rc-find").textContent = "Найти в сети";
+  const cur = $("#rc-dmr").value;
+  $("#rc-dmr").innerHTML = '<option value="">— не выбран —</option>' + list.map(d =>
+    `<option value="${esc(d.url)}"${d.url === cur ? " selected" : ""}>${esc(d.name)} — ${esc(new URL(d.url).host)}</option>`).join("");
+  toast(list.length ? `найдено: ${list.length}` : "DLNA-плееров не нашлось (телевизор включён?)");
+};
+$("#rc-save").onclick = async () => {
+  const sel = $("#rc-dmr"), o = sel.options[sel.selectedIndex];
+  try {
+    await api("/api/resources", { video_roots: $("#rc-video").value.split("\n"), music_roots: $("#rc-music").value.split("\n"),
+      renderer: sel.value ? { url: sel.value, name: o.textContent.split(" — ")[0] } : null });
+    toast("Сохранено"); rcList("");
+  } catch (e) { toast("ошибка: " + e.message); }
+};
+$("#rc-tv").onclick = () => { RC.kind = "video"; rcList(""); };
+$("#rc-tm").onclick = () => { RC.kind = "music"; rcList(""); };
+$("#rc-q").onkeydown = e => { if (e.key === "Enter") rcList("", $("#rc-q").value.trim()); };
+
 $("#bx-open").onclick = () => {
   $("#bx").hidden = false;
   const now = new Date(), pad = n => String(n).padStart(2, "0");

@@ -57,13 +57,14 @@ def search(query, kind="track", limit=1):
     """One track comes with the next search hits as `alts`: YouTube Music's first hit can be a
     video that is "not available" here, and a listener's song never played (2026-11-27 12:23)."""
     u = query.strip()
-    if u.startswith("/media/") and not u.lower().endswith(AUDIO_EXT):
-        # a folder on the hub: all its tracks, shuffled (a listener «сборка», 2026-11-27)
-        files = _get(f"/media?dir={urllib.parse.quote(u)}", timeout=20)
-        tracks = [{"title": os.path.splitext(f["path"].rsplit("/", 1)[-1])[0], "url": f["path"]} for f in files]
+    if u.startswith("/") and not u.lower().endswith(AUDIO_EXT):
+        # a folder on the hub (/media or a music root of «Ресурсы»): all its tracks, shuffled
+        # (a listener «сборка», 2026-11-27)
+        files = _get(f"/library/files?kind=music&dir={urllib.parse.quote(u)}", timeout=20)
+        tracks = [{"title": os.path.splitext(f.rsplit("/", 1)[-1])[0], "url": f} for f in files]
         random.shuffle(tracks)
         return tracks
-    if re.match(r"https?://\S+$", u) or u.startswith("/media/"):
+    if re.match(r"https?://\S+$", u) or u.startswith("/"):
         # a link, not words: a listener's exact track chosen on the admin page (the search's
         # order drifts - the same words gave the Leopold song, then «Живите дружно», 2026-11-27)
         # or a direct mp3, or a local file "/media/<name>" on the hub (music_server.source)
