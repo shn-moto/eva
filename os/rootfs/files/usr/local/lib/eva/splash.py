@@ -77,7 +77,9 @@ def main():
         crtc = e[2] or next(crtcs[i] for i in range(ncrtc) if e[3] & (1 << i))
         break
     else:
-        sys.exit("splash: no connected display")
+        # no TV is a normal state, not a failure (the unit stood "failed" for it, 2026-11-27)
+        print("splash: no connected display - nothing to show", flush=True)
+        return
     w, h = mode[1], mode[6]
     # dumb buffer, black, logo in the middle
     d = ioctl(fd, CREATE_DUMB, "<4IIIQ", h, w, 32, 0, 0, 0, 0)

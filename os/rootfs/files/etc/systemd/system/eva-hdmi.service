@@ -1,0 +1,11 @@
+[Unit]
+Description=Eva: the UI follows the TV (started on HDMI connect, stopped on disconnect)
+After=eva-ui-http.service
+
+[Service]
+ExecStart=/bin/sh /usr/local/lib/eva/hdmi-watch.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

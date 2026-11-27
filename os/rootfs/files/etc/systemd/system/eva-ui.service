@@ -7,12 +7,18 @@ Wants=eva-ui-http.service
 Environment=XDG_RUNTIME_DIR=/run
 # the TV is Full HD; the page is composited at 720p (30 fps on Mali-400), the TV scales
 Environment=COG_PLATFORM_DRM_VIDEO_MODE=1280x720
+# No TV (HDMI disconnected) is a normal state, not an error: the unit is skipped quietly
+# (inactive, no restart loop) and eva-hdmi starts it when the screen appears. Before:
+# cog restarted every 4 s, 2386 times a night (2026-11-23), then a device-only drop-in
+# waited for HDMI forever in start-pre - "activating" for days (2026-11-27).
+# A cog crash when the TV goes away ends here too: the restart finds no screen.
+ExecCondition=/bin/sh -c 'grep -qx connected /sys/class/drm/card*-HDMI-A-1/status'
 ExecStartPre=/bin/sh -c 'for i in $(seq 100); do [ -e /dev/dri/renderD128 ] && curl -sf -o /dev/null http://127.0.0.1:8080/ && exit 0; sleep 0.2; done; exit 1'
 # the boot logo gives up DRM master; its picture stays until cog draws
 ExecStartPre=-/usr/bin/pkill -USR1 -f /usr/local/lib/eva/splash.py
 ExecStart=/usr/bin/cog -P drm -O renderer=gles --enable-webgl=true --enable-write-console-messages-to-stdout=true "http://127.0.0.1:8080/ascii.html?cw=5&ch=8&color=0.7&edge=3"
 Restart=always
-RestartSec=3
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

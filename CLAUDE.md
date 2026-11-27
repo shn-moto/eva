@@ -47,7 +47,7 @@ that spends money (paid APIs beyond a normal test), and flashing / rebooting the
 | print + office->PDF | `services/print` | `eva-print` :8909 (host net, CUPS) | `deploy/linux.sh print` |
 | local router (Qwen3-4B, llama.cpp CUDA) | no source, a prebuilt image | `eva-router` :8906 | `deploy/linux.sh router` |
 | GPU arbiter (router off while photolib indexes) | `services/gpu-arbiter` | `eva-gpu-arbiter` :8907 | `deploy/linux.sh gpu-arbiter` |
-| body: raw capture, playback, screen, LED, keys | `app/ear.py`, `app/body.py`, `ui/spike/`, `os/rootfs/files` | systemd `eva-ear`, `eva-body` (:8085), `eva-ui`, `eva-ui-http` on the Station | `deploy/station.sh` |
+| body: raw capture, playback, screen, LED, keys | `app/ear.py`, `app/body.py`, `ui/spike/`, `os/rootfs/files` | systemd `eva-ear`, `eva-body` (:8085), `eva-ui` (+ `eva-hdmi`: runs only with a TV), `eva-ui-http` on the Station | `deploy/station.sh` |
 
 The flow: Station `eva-ear` streams raw capture -> hub `ear_stream.py` (AEC3, Silero VAD, cut)
 -> `hear.py` (STT, direction, who, splits, sound verdict; emotion 1-2 s later) -> event stream
@@ -103,6 +103,9 @@ service log or `eva_log`. Say plainly what could not be checked live (e.g. no sp
 - **Admin corrections are enrollment**: a speaker fixed on the admin page trains the voice
   base automatically; never ask a child to enroll by voice.
 - Before writing audio/ML code ourselves, look for a ready-made part first.
+- **Nothing on the Station may hang or fail for a normal state** (no TV, no network yet, music
+  playing): skip quietly (`ExecCondition`), wait with a bound, never `TimeoutStartSec=infinity`.
+  Fix units in `os/rootfs/files` and ship by `deploy/station.sh` - never a drop-in only on the device.
 
 ## Docs
 

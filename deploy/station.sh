@@ -66,9 +66,14 @@ fi
 
 git archive "$sha" "${PARTS[@]}" | "${SSH[@]}" 'tar -x -C /opt/eva'
 git archive "$sha" "$ROOTFS" | "${SSH[@]}" "tar -x -C / --strip-components=3 --no-overwrite-dir"
+# a drop-in once put on the device by hand (never in git): it held eva-ui in start-pre
+# for days with the TV off; eva-ui + eva-hdmi do that job now (2026-11-27)
+"${SSH[@]}" "rm -f /etc/systemd/system/eva-ui.service.d/wait-hdmi.conf; rmdir /etc/systemd/system/eva-ui.service.d 2>/dev/null; true"
 "${SSH[@]}" "echo '$sha $(date -u +%FT%TZ)' > /opt/eva/DEPLOYED; systemctl daemon-reload"
-# units added since (the body, 2026-11-25) start with the next boot too
-"${SSH[@]}" "systemctl is-enabled -q eva-body 2>/dev/null || systemctl enable -q eva-body"
+# units added since (the body 2026-11-25, the HDMI watch 2026-11-27) start with the next boot too
+for u in eva-body eva-hdmi; do
+    "${SSH[@]}" "systemctl is-enabled -q $u 2>/dev/null || systemctl enable -q $u"
+done
 
 # restart what the change touches
 units=()
@@ -78,6 +83,7 @@ echo "$changed" | grep -q "/opt/eva/app/" && units+=(eva-ear eva-logship)
 # the body only when its own code changed: a restart of it cuts her voice and the music
 echo "$changed" | grep -q "/opt/eva/app/body.py\|/opt/eva/app/say.py\|/opt/eva/app/core/util.py\|/opt/eva/app/core/profile.py" && units+=(eva-body)
 echo "$changed" | grep -q "/opt/eva/ui/spike/ui_server.py" && units+=(eva-ui-http)
+echo "$rootfs_changed" | grep -q "hdmi-watch\|eva-hdmi" && units+=(eva-hdmi)
 echo "$changed $rootfs_changed" | grep -q "/opt/eva/ui/spike/\|eva-ui" && ui_reload=1 || ui_reload=0
 echo "$rootfs_changed" | grep -q "station-mics-init\|station-audio-init" && echo "note: audio init changed - applied at the next boot"
 if [ ${#units[@]} -gt 0 ]; then
@@ -85,7 +91,9 @@ if [ ${#units[@]} -gt 0 ]; then
     echo "restarting: $u"
     "${SSH[@]}" "systemctl restart $u"
 fi
-# the TV page: reload without blocking (eva-ui waits for HDMI and never "starts" with the TV off)
+# the TV page: reloaded without blocking; with the TV off eva-ui is skipped (its ExecCondition)
 [ "$ui_reload" = 1 ] && "${SSH[@]}" "systemctl restart --no-block eva-ui" && echo "TV page reloading"
+"${SSH[@]}" "systemctl is-active -q eva-hdmi || systemctl start eva-hdmi"
 sleep 5
-"${SSH[@]}" "systemctl is-active eva-body eva-ear eva-logship eva-ui-http | paste -sd' '; cat /opt/eva/DEPLOYED"
+"${SSH[@]}" "systemctl is-active eva-body eva-ear eva-logship eva-ui-http eva-hdmi | paste -sd' '; \
+echo \"TV: \$(cat /sys/class/drm/card0-HDMI-A-1/status), eva-ui \$(systemctl is-active eva-ui)\"; cat /opt/eva/DEPLOYED"
