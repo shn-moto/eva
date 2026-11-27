@@ -73,6 +73,7 @@ DEFAULTS = {
     "finance": "http://{hub}:8686",
     "power": "http://{hub}:8484",
     "print": "http://{hub}:8909",          # files sent in Telegram + the printer (services/print)
+    "eyes": "http://{hub}:8913",           # the cameras: motion, faces, journal (services/eyes)
 }
 
 
