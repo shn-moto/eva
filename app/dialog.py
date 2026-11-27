@@ -46,6 +46,7 @@ LOOSE_NAME = re.compile(r"(ева|евочка|евушка|эва|ев|эв|и�
 # 21 phrases in 4 days starting with "и" were not to her, and «и вырезаешь
 # что-то» got "Не расслышала, повтори" (2026-11-23)
 MAYBE_NAME = re.compile(r"^\s*(е|ив|иве|ева\w*|эва\w*|эв|ев)\b", re.I)
+FUSED_STOP = re.compile(r"(?:е|э|и)в[аоы]?(?:сто[пк]\w*|хватит|выключи?\w*)", re.I)   # see music_command
 # a call on its own, the question comes after a pause ("Ева, … кто такая Ольга"
 # arrived as "евро" + "кто такая ольга")
 CALL_ONLY = re.compile(r"^\s*(?:эй\s+|слушай\s+)?(ева\w{0,3}|эва\w{0,2}|ев\w{0,2}|эв\w{0,2}|ив\w?|иве)\s*$", re.I)
@@ -314,6 +315,9 @@ def local(text, person, r):
             else:
                 if r.get("listener"):
                     found[0]["listener"] = r["listener"]      # music.listener_log: ok on the first sound
+                    # a listener wants that song or nothing, never a stand-in: «Живите дружно»
+                    # played instead of the Leopold song (2026-11-27)
+                    found[0].pop("alts", None)
                 p.play(found)
                 t = found[0]
                 # silent: the history still learns what plays (the call below)
@@ -871,6 +875,11 @@ def music_command(words, item, addressed=False):
     2026-11-23: "интерраптить её должно только имя"). True if it was one."""
     if not music.PLAYER.active() or VOICE.speaking():
         return False
+    # «Ева, стоп» fused by the recogniser into one word over the music: «евосток» - the
+    # music could not be stopped (2026-11-27). One word only: «и восток» is two.
+    if len(words) == 1 and FUSED_STOP.match(words[0]):
+        log(f"music: {words[0]!r} taken for «Ева, стоп»")
+        words = ["ева", "стоп"]
     # her name, "please", "музыку" and a repeated word are not the command:
     # «ева выключи выключи музыку» went to Claude for $0.16 (2026-11-21)
     named = any(NAME.fullmatch(w) for w in words)

@@ -856,6 +856,31 @@ async def calendar_post(request: Request):
     return calendar_get()
 
 
+MUSIC = os.environ.get("MUSIC_URL", "http://host.docker.internal:8904")
+
+
+@app.get("/api/music/search")
+def music_search(q: str):
+    """YouTube Music hits for a listener's song, each checked to play: a listener keeps the
+    chosen track's link - by words the search drifted to another song, and the first hit
+    of the Leopold song was "not available" (2026-11-27)."""
+    import urllib.parse
+    import urllib.request
+    with urllib.request.urlopen(f"{MUSIC}/search?q={urllib.parse.quote(q)}&kind=track&limit=6", timeout=150) as r:
+        hits = json.loads(r.read())
+
+    def check(t):
+        try:
+            with urllib.request.urlopen(f"{MUSIC}/info?url={urllib.parse.quote(t['url'], safe='')}", timeout=90) as r:
+                i = json.loads(r.read())
+            return dict(t, **{k: v for k, v in i.items() if v and k != "url"}, error=i.get("error"))
+        except Exception as e:
+            return dict(t, error=str(e)[:200])
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(6) as ex:
+        return {"hits": list(ex.map(check, hits))}
+
+
 @app.get("/api/listeners")
 def listeners_get():
     items = _jload(LST, {"listeners": []}).get("listeners", [])

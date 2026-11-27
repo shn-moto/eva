@@ -194,5 +194,19 @@ class H(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
 
+def self_update(every=24 * 3600):
+    """yt-dlp and its challenge solver follow YouTube's player changes almost weekly; a month-old
+    copy failed on a song the family wanted (2026-11-27). Each call runs the yt-dlp binary anew,
+    so an update takes effect without a restart."""
+    while True:
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir", "-U",
+                            "yt-dlp[default]", "yt-dlp-ejs"], capture_output=True, text=True, timeout=600)
+        v = subprocess.run(["yt-dlp", "--version"], capture_output=True, text=True).stdout.strip()
+        err(f"yt-dlp {v}" + (f" (update failed: {r.stderr.strip()[-200:]})" if r.returncode else ""))
+        time.sleep(every)
+
+
 if __name__ == "__main__":
+    import threading
+    threading.Thread(target=self_update, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

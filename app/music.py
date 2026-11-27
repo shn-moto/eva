@@ -50,6 +50,10 @@ def _get(path, timeout=150):
 def search(query, kind="track", limit=1):
     """One track comes with the next search hits as `alts`: YouTube Music's first hit can be a
     video that is "not available" here, and a listener's song never played (2026-11-27 12:23)."""
+    if query.strip().startswith(("https://music.youtube.com/", "https://www.youtube.com/", "https://youtu.be/")):
+        # a listener's exact track, chosen once on the admin page: the search's order drifts
+        # (the same words gave the Leopold song, then «Живите дружно», 2026-11-27)
+        return [{"title": query.strip(), "url": query.strip()}]
     spare = 3 if kind == "track" and limit == 1 else 0
     found = _get(f"/search?q={urllib.parse.quote(query)}&kind={kind}&limit={limit + spare}")
     if spare and found:

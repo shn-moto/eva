@@ -109,6 +109,10 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .lgrow.pend .st, .lgrow.skip { opacity: .75; }
 .lgdet { display: none; margin: 2px 0 6px 1.6em; padding: 6px 8px; border-left: 2px solid var(--line); white-space: pre-wrap; }
 .lgdet.open { display: block; }
+#ls-hits .hit { cursor: pointer; padding: 3px 6px; border-radius: 4px; }
+#ls-hits .hit:hover { background: var(--line); }
+#ls-hits .hit.bad { cursor: default; opacity: .6; }
+#ls-hits .err, .help.err { color: var(--danger); }
 .help { color: var(--mute); font-size: 12px; }
 .rs-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: min(1100px, 100%);
           display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -1100,6 +1104,9 @@ function lsRender() {
     <span>Вопрос модели</span><textarea data-k="prompt" placeholder="необязательно: вопрос да/нет локальной модели, например «Человек злится или ругается?»">${esc(x.prompt || "")}</textarea>
     <span>Действие</span><select data-k="action">${opts(LACT, x.action || "say")}</select>
     <span>Текст</span><textarea data-k="text" placeholder="что сказать / написать / поручить; подстановки {phrase} {who} {children}">${esc(x.text || "")}</textarea>
+    <span class="mu">Трек</span><span class="mu"><button class="btn" id="ls-find">Найти трек</button> <span class="help" id="ls-track">${
+      x.track ? "выбран: " + esc(x.track) : /^https:\/\//.test(x.text || "") ? "ссылка на трек" : "по словам — поиск может включить другую песню; лучше найди и выбери трек"}</span>
+      <div id="ls-hits"></div></span>
     <span class="tg">Кому написать</span><select class="tg" data-k="to"><option value="">— выбери —</option>${
       [...new Set([...FAMILY, ...(x.to && !FAMILY.includes(x.to) ? [x.to] : [])])].map(n => `<option value="${esc(n)}"${n === x.to ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>
     <span>Пауза, с</span><input data-k="cooldown" type="number" min="0" value="${x.cooldown ?? 600}">
@@ -1115,7 +1122,29 @@ function lsRender() {
   $("#ls-who-name").style.display = $("#ls-guess-l").style.display = $("#ls-who").value === "person" ? "" : "none";
   const tg = () => document.querySelectorAll("#ls-edit .tg").forEach(e => e.style.display =
     document.querySelector('#ls-edit [data-k="action"]').value === "telegram" ? "" : "none");
-  document.querySelector('#ls-edit [data-k="action"]').onchange = tg; tg();
+  const mu = () => document.querySelectorAll("#ls-edit .mu").forEach(e => e.style.display =
+    document.querySelector('#ls-edit [data-k="action"]').value === "music" ? "" : "none");
+  document.querySelector('#ls-edit [data-k="action"]').onchange = () => { tg(); mu(); }; tg(); mu();
+  // the exact track (admin.py /api/music/search): its link goes into the text, the name into x.track
+  $("#ls-find").onclick = async () => {
+    const ta = document.querySelector('#ls-edit [data-k="text"]');
+    const q = /^https:\/\//.test(ta.value) ? (x.track || "") : ta.value.trim();
+    if (!q) { toast("Напиши в «Текст», что искать"); return; }
+    $("#ls-hits").innerHTML = '<div class="help">ищу и проверяю, играет ли каждый (до минуты)…</div>';
+    try {
+      const r = await fetch("/api/music/search?q=" + encodeURIComponent(q)).then(r => r.json());
+      $("#ls-hits").innerHTML = (r.hits || []).map((h, i) => `<div class="hit${h.error ? " bad" : ""}" data-i="${i}">${h.error ? "✗" : "▶"} ${
+        esc(h.title || "?")}${h.artist ? " — " + esc(h.artist) : ""}${h.duration ? ` (${Math.floor(h.duration / 60)}:${String(h.duration % 60).padStart(2, "0")})` : ""}${
+        h.error ? ` <span class="err">не играет: ${esc(h.error)}</span>` : ` <a href="${esc(h.url)}" target="_blank">открыть</a>`}</div>`).join("") || '<div class="help">ничего не нашлось</div>';
+      document.querySelectorAll("#ls-hits .hit:not(.bad)").forEach(e => e.onclick = ev => {
+        if (ev.target.tagName === "A") return;
+        const h = r.hits[+e.dataset.i];
+        ta.value = h.url; x.track = (h.title || "") + (h.artist ? " — " + h.artist : "");
+        $("#ls-track").textContent = "выбран: " + x.track + " (сохрани)";
+        $("#ls-hits").innerHTML = "";
+      });
+    } catch (e) { $("#ls-hits").innerHTML = `<div class="help err">ошибка: ${esc(String(e))}</div>`; }
+  };
   const mode = () => document.querySelectorAll("#ls-edit .emo").forEach(e => e.style.display = $("#ls-mode").value === "emotion" ? "" : "none");
   $("#ls-mode").onchange = mode; mode();
   $("#ls-test").onclick = async () => {
