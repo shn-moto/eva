@@ -1333,7 +1333,7 @@ function bxStrip(it) {
       <i id="bx-head"></i></div>
     <div class="bx-legend">${it.kind === "rec" ? '<span class="m"></span>играет музыка (пунктир — грузится) <span class="h"></span>говорит она ' : ""}<span class="p"></span>ухо вырезало фразу</div>
     <div class="bx-ph">${ph.length ? `<div class="help">Что ухо вырезало и распознало (время от начала этой минуты; нажми — перейти):</div>` + ph.map(p =>
-      `<div class="bxr" data-t="${p.t - w0}"><b>${mmss(p.t)}</b> ${p.src === "lin" ? "линейное вычитание" : "после AEC3"}: «${esc(p.text || "—")}»${p.raw_text != null ? ` · сырые микрофоны: «${esc(p.raw_text || "—")}»` : ""}</div>`).join("")
+      `<div class="bxr" data-t="${p.t - w0}"><b>${mmss(p.t)}</b> ${({ lin: "линейное вычитание", aec3: "после AEC3" })[p.src] || "распознано"}: «${esc(p.text || "—")}»${p.raw_text != null ? ` · сырые микрофоны: «${esc(p.raw_text || "—")}»` : ""}</div>`).join("")
       : '<div class="help">В эту минуту ухо не вырезало ни одной фразы.</div>'}</div>`;
 }
 function bxStripWire(it) {
