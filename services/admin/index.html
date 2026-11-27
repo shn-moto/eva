@@ -1309,8 +1309,10 @@ function bxStrip(it) {
   const [w0, w1] = bxWindow(it), L = w1 - w0;
   const pos = (a, b) => `left:${Math.max(0, (a - w0) / L * 100)}%;width:${Math.max(0.4, (Math.min(b, w1) - Math.max(a, w0)) / L * 100)}%`;
   const inW = ([a, b]) => b > w0 && a < w1;
-  const music = it.kind === "rec" ? bxSpans(it, 4).filter(inW) : [];
-  const her = it.kind === "rec" ? bxSpans(it, 2).filter(inW) : [];
+  // the player's flag, not the speaker's level: ducked music fell under the level's threshold and the
+  // strip broke off while it still played (2026-11-27); her voice shorter than 0.6 s is a music tail
+  const music = it.kind === "rec" ? bxSpans(it, 1).filter(inW) : [];
+  const her = it.kind === "rec" ? bxSpans(it, 2).filter(inW).filter(([a, b]) => b - a >= 0.6) : [];
   const ph = (it.phrases || []).filter(p => p.t + p.dur > w0 && p.t < w1);
   const mmss = t => bxDur(Math.max(0, t - w0));
   return `<div class="bx-strip" id="bx-strip" title="нажми — перейти к этому месту">
@@ -1318,7 +1320,7 @@ function bxStrip(it) {
       ${her.map(([a, b]) => `<span class="h" style="${pos(a, b)}"></span>`).join("")}
       ${ph.map(p => `<span class="p" style="${pos(p.t, p.t + p.dur)}" title="${esc(p.text || "(пусто)")}"></span>`).join("")}
       <i id="bx-head"></i></div>
-    <div class="bx-legend">${it.kind === "rec" ? '<span class="m"></span>играет динамик <span class="h"></span>говорит она ' : ""}<span class="p"></span>ухо вырезало фразу</div>
+    <div class="bx-legend">${it.kind === "rec" ? '<span class="m"></span>играет музыка <span class="h"></span>говорит она ' : ""}<span class="p"></span>ухо вырезало фразу</div>
     <div class="bx-ph">${ph.length ? `<div class="help">Что ухо вырезало и распознало (время от начала этой минуты; нажми — перейти):</div>` + ph.map(p =>
       `<div class="bxr" data-t="${p.t - w0}"><b>${mmss(p.t)}</b> после AEC3: «${esc(p.text || "—")}»${p.raw_text != null ? ` · сырые микрофоны: «${esc(p.raw_text || "—")}»` : ""}</div>`).join("")
       : '<div class="help">В эту минуту ухо не вырезало ни одной фразы.</div>'}</div>`;

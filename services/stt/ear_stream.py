@@ -159,10 +159,48 @@ class Vad:
         return p
 
 
-class Front:
-    """Mic + reference in, the echo-cancelled, denoised mic out (WebRTC APM, 10 ms frames)."""
+LIN_GAIN = _f("lin_gain", 4.0)        # the mic into SpeexDSP: int16 there, +12 dB off the ADC's level
+LIN_TAPS = int(_f("lin_taps", 1024))  # 64 ms of echo path (4096 read the same on 2026-11-27)
+
+
+class Linear:
+    """A linear echo canceller only (SpeexDSP's MDF, libspeexdsp through ctypes): the speaker's sound
+    is modelled from the reference and subtracted, nothing else is touched. Over music AEC3 gated the
+    room to -74 dB between words and the VAD stayed at 0.00 while the family said «Ева, стоп»; on
+    the same recording this read every «ева стоп» with the VAD at 0.96-1.00, the music only ~6 dB
+    down (2026-11-27 14:11). The ear cuts and recognises from it while music plays."""
 
     def __init__(self):
+        import ctypes
+        self.c = ctypes
+        self.lib = ctypes.CDLL("libspeexdsp.so.1")
+        self.lib.speex_echo_state_init.restype = ctypes.c_void_p
+        self.lib.speex_echo_state_init.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.lib.speex_echo_cancellation.argtypes = [ctypes.c_void_p] * 4
+        self.lib.speex_echo_ctl.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        self.st = self.lib.speex_echo_state_init(APM_N, LIN_TAPS)
+        sr = ctypes.c_int(SR)
+        self.lib.speex_echo_ctl(self.st, 24, ctypes.byref(sr))      # SPEEX_ECHO_SET_SAMPLING_RATE
+        self.out = np.zeros(APM_N, np.int16)
+
+    def __call__(self, mic, ref):
+        """mic, ref: one 10 ms frame, int16 -> int16."""
+        m = np.ascontiguousarray(np.clip(mic.astype(np.int32) * int(LIN_GAIN), -32767, 32767).astype(np.int16))
+        r = np.ascontiguousarray(ref)
+        self.lib.speex_echo_cancellation(self.st, m.ctypes.data, r.ctypes.data, self.out.ctypes.data)
+        return self.out.copy()
+
+
+class Front:
+    """Mic + reference in, the echo-cancelled, denoised mic out (WebRTC APM, 10 ms frames), and the
+    linear-only cancelled mic beside it (Linear) for the music."""
+
+    def __init__(self):
+        try:
+            self.lin = Linear()
+        except OSError as e:               # no libspeexdsp: AEC3 alone, as before
+            log(f"ear: no linear canceller ({e})")
+            self.lin = None
         self.apm = rtc.AudioProcessingModule(echo_cancellation=True, noise_suppression=True,
                                              high_pass_filter=True, auto_gain_control=False)
         self.apm.set_stream_delay_ms(0)        # the taps are on the mics' own TDM bus
@@ -173,12 +211,15 @@ class Front:
         self.silent = np.zeros(APM_N, dtype=np.int16)
 
     def process(self, mic, ref):
-        """mic, ref: int16 at the ADC's level. -> the processed mic (int16), any length."""
+        """mic, ref: int16 at the ADC's level. -> (AEC3's mic, the linear one at LIN_GAIN or None),
+        int16, any length."""
         self.mic = np.concatenate([self.mic, np.clip(self.hp(mic), -32768, 32767).astype(np.int16)])
         self.ref = np.concatenate([self.ref, np.clip(ref.astype(np.float64) * REF_GAIN, -32768, 32767).astype(np.int16)])
-        out = []
+        out, lin = [], []
         while len(self.mic) >= APM_N:
             rf = self.ref[:APM_N]
+            if self.lin is not None:
+                lin.append(self.lin(self.mic[:APM_N], rf))     # the reference as it is, not gated
             if float(np.sqrt(np.mean((rf.astype(np.float64) / 32768) ** 2))) > REF_GATE:
                 self.hold = REF_HOLD
             elif self.hold > 0:
@@ -189,7 +230,10 @@ class Front:
             self.apm.process_stream(f)
             out.append(np.frombuffer(bytes(f.data), dtype=np.int16))
             self.mic, self.ref = self.mic[APM_N:], self.ref[APM_N:]
-        return np.concatenate(out) if out else np.zeros(0, dtype=np.int16)
+        e = np.concatenate(out) if out else np.zeros(0, dtype=np.int16)
+        if self.lin is None:
+            return e, None
+        return e, (np.concatenate(lin) if lin else np.zeros(0, dtype=np.int16))
 
 
 class Ear:
@@ -207,9 +251,11 @@ class Ear:
         self.box_auto = 0.0
         self.collect_at = 0.0
         self.music_since = time.time()
+        self.music_at = 0.0                     # when the music flag was last on
         self.seq = 0
         # samples waiting for a whole VAD chunk: processed mic, its input, raw mics, ref, flags
         self.q_e, self.q_y = np.zeros(0, np.float32), np.zeros(0, np.float32)
+        self.q_l = np.zeros(0, np.float32)        # the linear canceller's mic (Linear)
         self.q_raw, self.q_ref = np.zeros((0, 7), np.int16), np.zeros(0, np.int16)
         self.pending_raw = collections.deque()
         self.flags = 0
@@ -262,20 +308,23 @@ class Ear:
         k = len(mono)
         mics, ref = self.d_raw[:k], self.d_ref[:k]
         self.d_raw, self.d_ref = self.d_raw[k:], self.d_ref[k:]
-        e = self.front.process(mono, ref)
+        e, lin = self.front.process(mono, ref)
         # the raw side, delayed with the processed one (APM holds up to 10 ms)
         self.q_y = np.concatenate([self.q_y, (mono * MIC_GAIN / 32768.0).astype(np.float32)])
         self.q_raw = np.concatenate([self.q_raw, mics])
         self.q_ref = np.concatenate([self.q_ref, ref])
         self.q_e = np.concatenate([self.q_e, (e.astype(np.float32) * MIC_GAIN / 32768.0)])
+        if lin is not None:      # the same scale as AEC3's output (it went in LIN_GAIN louder)
+            self.q_l = np.concatenate([self.q_l, (lin.astype(np.float32) * (MIC_GAIN / LIN_GAIN) / 32768.0)])
         while len(self.q_e) >= CHUNK and len(self.q_y) >= CHUNK:
             ce, cy = self.q_e[:CHUNK], self.q_y[:CHUNK]
             craw, cref = self.q_raw[:CHUNK], self.q_ref[:CHUNK]
+            cl = self.q_l[:CHUNK] if len(self.q_l) >= CHUNK else None
             self.q_e, self.q_y = self.q_e[CHUNK:], self.q_y[CHUNK:]
-            self.q_raw, self.q_ref = self.q_raw[CHUNK:], self.q_ref[CHUNK:]
-            self.chunk(ce, cy, craw, cref)
+            self.q_raw, self.q_ref, self.q_l = self.q_raw[CHUNK:], self.q_ref[CHUNK:], self.q_l[CHUNK:]
+            self.chunk(ce, cy, craw, cref, cl)
 
-    def chunk(self, e, y, raw, ref):
+    def chunk(self, e, y, raw, ref, lin=None):
         now = time.time()
         music, her_flag = bool(self.flags & 1), bool(self.flags & 2)
         x = ref.astype(np.float64) * REF_GAIN / 32768.0
@@ -285,7 +334,11 @@ class Ear:
         play_now = ref_on or now < self.playing_until or her_flag or music
         # HER voice (not music): what counts as her echo; music counted too once and every
         # command said over it was thrown away as her echo (2026-11-23)
-        her_now = her_flag or (now < self.playing_until and not music)
+        # the music's own tail after the player stops (~0.3 s still in the speaker) is not her voice: it
+        # showed as «говорит она» at every stop and counted as her echo (2026-11-27 14:12:33)
+        if music:
+            self.music_at = now
+        her_now = her_flag or (now < self.playing_until and not music and now - self.music_at > 1.0)
         en_in, en_out = float(np.mean(y.astype(np.float64) ** 2)), float(np.mean(e.astype(np.float64) ** 2))
         st = self.stats
         st["mic_peak"] = max(st["mic_peak"], float(np.abs(raw).max()) / 32768.0)
@@ -299,14 +352,21 @@ class Ear:
             st["aec_out"] += en_out
             st["play_n"] += 1
         st["clip"] += int(np.count_nonzero(np.abs(e) >= 1.0))
-        e = np.clip(e, -1.0, 1.0)
+        e3 = e = np.clip(e, -1.0, 1.0)
+        lin = np.clip(lin, -1.0, 1.0) if lin is not None else None
+        # while music plays (and not her voice) the cut and the STT take the linear canceller's mic:
+        # AEC3 erases the room under a song (Linear's docstring). Her own voice stays with AEC3 -
+        # linear subtraction leaves too much of it, and that echo is what the windows guard against.
+        if music and not her_now and lin is not None:
+            e = lin
+            st["lin"] += 1
         p = self.vad(e)
         # the 7 raw mics too, as they came (int16): the user listens to them himself - the mono mix
         # alone could not say whether his «стоп» was on the mics over the music (2026-11-27)
-        self.box.append((y.astype(np.float16), x.astype(np.float16), e.astype(np.float16), p,
+        self.box.append((y.astype(np.float16), x.astype(np.float16), e3.astype(np.float16), p,
                          1 * music + 2 * her_now + 4 * ref_on, raw.astype(np.int16)))
         if REC.on:
-            REC.write(raw, x, e, 1 * music + 2 * her_now + 4 * ref_on, now)
+            REC.write(raw, x, e3, lin, 1 * music + 2 * her_now + 4 * ref_on, now)
         if music and now - self.collect_at > COLLECT_EVERY and now - self.music_since > BOX_S - 5 \
                 and os.path.exists(COLLECT_FLAG):
             # over loud music the ear cuts no phrase at all (AEC3 gates the room to -73 dB, the VAD
@@ -401,6 +461,8 @@ class Ear:
                 line += f", ADC CLIPPED while playing {st['raw_clip']}"
         if st["clip"]:
             line += f", clipped {st['clip']}"
+        if st["lin"]:
+            line += f", linear canceller over music {st['lin'] * CHUNK / SR:.0f} s"
         log(line)
         STATE["minute"] = line
         self.stats_t, self.stats, self.sent = now, collections.Counter(), 0
@@ -431,7 +493,7 @@ class Ear:
 REC_DIR = os.path.join(os.environ.get("STT_LOG_DIR", "/log"), "ear-rec")
 REC_MAX = _f("rec_max", 3600.0)          # s: a recording left on stops by itself
 REC_MIN_FREE = _f("rec_min_free", 3e9)   # bytes free on the log's disk, else it stops
-TRACKS = ["mic1", "mic2", "mic3", "mic4", "mic5", "mic6", "mic7", "ref", "aec"]
+TRACKS = ["mic1", "mic2", "mic3", "mic4", "mic5", "mic6", "mic7", "ref", "aec", "lin"]
 
 
 class Recorder:
@@ -471,7 +533,7 @@ class Recorder:
         return {"on": self.on, "dir": os.path.basename(self.dir) if self.dir else None, "since": self.since,
                 "seconds": round(self.frames / SR, 1), "stopped": self.why}
 
-    def write(self, raw, x, e, flags, now):
+    def write(self, raw, x, e, lin, flags, now):
         with self.lock:
             if not self.on:
                 return
@@ -494,7 +556,8 @@ class Recorder:
             if flags != self.last_flag:
                 self.flags.append([round(self.frames / SR, 2), int(flags)])
                 self.last_flag = flags
-            side = np.clip(np.stack([x, e], axis=1) * 32767, -32767, 32767).astype(np.int16)
+            side = np.clip(np.stack([x, e, lin if lin is not None else np.zeros_like(e)], axis=1) * 32767,
+                           -32767, 32767).astype(np.int16)
             self.w.writeframes(np.ascontiguousarray(np.concatenate([raw.astype(np.int16), side], axis=1)).tobytes())
             self.frames += len(e)
 

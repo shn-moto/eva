@@ -49,6 +49,12 @@ MAYBE_NAME = re.compile(r"^\s*(е|ив|иве|ева\w*|эва\w*|эв|ев)\b",
 FUSED_STOP = re.compile(r"(?:е|э|и)в[аоы]?(?:сто[пк]\w*|хватит|выключи?\w*)", re.I)   # see music_command
 
 
+def _music_cmd(text):
+    """A word of a music command («стоп», «тише», «дальше»…) or a fused «евосток»."""
+    w = re.findall(r"\w+", text.lower())
+    return any(x in keys for x in w for keys, _ in MUSIC_WORDS) or any(FUSED_STOP.match(x) for x in w)
+
+
 def _named_or_stop(text):
     """Her name (or its start-of-phrase mangling) or a fused «Ева, стоп» in a phrase."""
     w = re.findall(r"\w+", text.lower())
@@ -543,7 +549,10 @@ def on_phrase(item):
         LATENCY["end"] = item["end"]
     VOICE.on_first = _first_sound
     raw = item.get("raw_text") or ""
-    if raw and music.PLAYER.active() and not _named_or_stop(text) and _named_or_stop(raw):
+    # «евас» passed for her name, so the raw «ева стоп» was not taken and the music only ducked
+    # (2026-11-27 14:11:58): the raw words win when only they hold the name, or a music command too
+    if raw and music.PLAYER.active() and _named_or_stop(raw) and (
+            not _named_or_stop(text) or (_music_cmd(raw) and not _music_cmd(text))):
         # the ear's canceller bit the words over the music, the raw mics did not (hear.py):
         # «евосток» there, «ева стоп» here (2026-11-27)
         log(f"over music: {text!r} -> the raw mics' {raw!r}")

@@ -1030,7 +1030,8 @@ REC_DIR = os.path.join(LOG_DIR, "ear-rec")
 BOX_DIR = os.path.join(LOG_DIR, "ear-box")
 COLLECT_FLAG = os.path.join(BOX_DIR, "COLLECT")
 TRACK_RU = {"mic1": "мик 1", "mic2": "мик 2", "mic3": "мик 3", "mic4": "мик 4", "mic5": "мик 5", "mic6": "мик 6",
-            "mic7": "мик 7", "mix": "смесь микрофонов", "ref": "динамик (опорный)", "aec": "после AEC3"}
+            "mic7": "мик 7", "mix": "смесь микрофонов", "ref": "динамик (опорный)", "aec": "после AEC3",
+            "lin": "линейное вычитание"}
 
 
 def _ear(path, body=None):
@@ -1146,7 +1147,7 @@ def _tracks_of(rel):
         with wave.open(p) as w:
             n, sr = w.getnchannels(), w.getframerate()
             a = np.frombuffer(w.readframes(w.getnframes()), np.int16).reshape(-1, n).astype(np.float32) / 32768
-        names = ["mic1", "mic2", "mic3", "mic4", "mic5", "mic6", "mic7", "ref", "aec"][:n]
+        names = ["mic1", "mic2", "mic3", "mic4", "mic5", "mic6", "mic7", "ref", "aec", "lin"][:n]
         out = {k: a[:, i] for i, k in enumerate(names)}
     else:
         d = np.load(p)
