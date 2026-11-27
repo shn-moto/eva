@@ -15,10 +15,17 @@ import json
 import re
 import unicodedata
 import subprocess
+import sys
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 8904
+
+
+def err(msg):
+    """Into the container's log: a track that would not play left no trace (2026-11-27)."""
+    print(time.strftime("%H:%M:%S"), msg, file=sys.stderr, flush=True)
 
 
 def _thumb(e):
@@ -60,6 +67,8 @@ def info(url):
     """Full facts of one track (the flat search has no artist, length, cover)."""
     r = subprocess.run(["yt-dlp", "-J", "--no-playlist", "--skip-download", url],
                        capture_output=True, text=True, timeout=60)
+    if r.returncode:
+        err(f"info {url}: yt-dlp {r.returncode}: {r.stderr.strip()[-400:]}")
     j = json.loads(r.stdout or "{}")
     return {"title": j.get("track") or j.get("title"), "artist": j.get("artist") or j.get("uploader"),
             "album": j.get("album"), "year": j.get("release_year"), "duration": j.get("duration"),
@@ -136,26 +145,31 @@ class H(BaseHTTPRequestHandler):
             try:
                 return self._json(200, search(q.get("q", ""), q.get("kind", "track"), int(q.get("limit", 5))))
             except Exception as e:
+                err(f"{u.path} {q}: {e!r}")
                 return self._json(500, {"error": str(e)[:300]})
         if u.path == "/info":
             try:
                 return self._json(200, info(q.get("url", "")))
             except Exception as e:
+                err(f"{u.path} {q}: {e!r}")
                 return self._json(500, {"error": str(e)[:300]})
         if u.path == "/beats":
             try:
                 return self._json(200, beats(q.get("url", "")))
             except Exception as e:
+                err(f"{u.path} {q}: {e!r}")
                 return self._json(500, {"error": str(e)[:300]})
         if u.path == "/stream":
             url = q.get("url", "")
             if not url.startswith("https://"):
                 return self._json(400, {"error": "url"})
-            dl = subprocess.Popen(["yt-dlp", "-q", "-f", "bestaudio", "--no-playlist", "-o", "-", url],
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            # their errors (quiet otherwise: -q, -v error) go to the container's log
+            err(f"stream {url}")
+            dl = subprocess.Popen(["yt-dlp", "-q", "--no-warnings", "-f", "bestaudio", "--no-playlist", "-o", "-", url],
+                                  stdout=subprocess.PIPE, stderr=sys.stderr)
             ff = subprocess.Popen(["ffmpeg", "-v", "error", "-i", "pipe:0", "-vn", "-ar", "48000", "-ac", "2",
                                    "-f", "mp3", "-b:a", "160k", "pipe:1"],
-                                  stdin=dl.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                                  stdin=dl.stdout, stdout=subprocess.PIPE, stderr=sys.stderr)
             dl.stdout.close()
             self.send_response(200)
             self.send_header("Content-Type", "audio/mpeg")

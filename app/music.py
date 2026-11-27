@@ -145,10 +145,20 @@ class Player:
             # after 10 s and the screen went back to the face, 2026-11-23): once more
             t = self.queue[self.index] if self.queue else {}
             played = time.time() - self.started
-            if played < EARLY_END and (t.get("duration") or 0) > 60 and not t.get("retried"):
+            # an unknown length counts as long: /info fails with the same hiccup that broke the
+            # stream, and a listener's song never played at all (2026-11-27 10:42)
+            retry = played < EARLY_END and (t.get("duration") or 999) > 60 and not t.get("retried")
+            if retry:
                 t["retried"] = True
-                log(f"music: {t.get('title')!r} ended after {played:.0f}s of {t.get('duration')}s - again")
-                self._load()
+                log(f"music: {t.get('title')!r} ended after {played:.0f}s of {t.get('duration') or '?'}s - again")
+        if retry:
+            time.sleep(2)                     # a hiccup of YouTube / yt-dlp passes in a moment (lock free: «стоп» works)
+            with self.lock:
+                if self.playing and self.queue and self.queue[self.index] is t:
+                    self._load()
+            return
+        with self.lock:
+            if not self.playing:
                 return
             if self.index + 1 < len(self.queue):
                 self.index += 1
