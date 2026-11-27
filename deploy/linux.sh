@@ -2,7 +2,7 @@
 # Deploy Eva's services on shn-linux from git - a commit that is on origin.
 # Run from Git Bash in the repo root:
 #
-#   deploy/linux.sh stt|music|router|gpu-arbiter|admin|print|brain [ref]      # default origin/main
+#   deploy/linux.sh stt|music|router|gpu-arbiter|admin|print|eyes|brain [ref]      # default origin/main
 #
 # The source of the service is taken from the commit (git archive), built into
 # an image tagged with the commit, and the container is recreated with the run
@@ -18,7 +18,7 @@ HUB_KEY=${HUB_KEY:?set HUB_KEY in deploy/local.env}
 HUB_KEY=${HUB_KEY/#\~/$HOME}
 SSH=(ssh -i "$HUB_KEY" -o ConnectTimeout=10 "$HOST")
 
-svc=${1:?service: stt | music | router | gpu-arbiter | admin | print | brain}
+svc=${1:?service: stt | music | router | gpu-arbiter | admin | print | eyes | brain}
 ref=${2:-origin/main}
 git fetch -q origin
 sha=$(git rev-parse --verify "$ref^{commit}")
@@ -57,9 +57,17 @@ admin)
     run="-p 8908:8908 --add-host=host.docker.internal:host-gateway --env-file \$HOME/eva-data/admin.env -e STT_LOG_DIR=/log -e KEEP_DIR=/keep \
 -e PGTZ=\$(cat /etc/timezone) -v /etc/localtime:/etc/localtime:ro \
 -v \$HOME/eva-data/stt-log:/log -v \$HOME/eva-data/stt-keep:/keep -v \$HOME/eva-data/brain/data:/brain -v /media:/media \
--v \$HOME/eva-data/media:/settings"
+-v \$HOME/eva-data/media:/settings -v \$HOME/eva-data/eyes:/eyes"
+    # /eyes: the cameras' list (eyes.json) and the eyes' event frames / face crops (services/eyes)
     # /brain: the brain's calendar and listeners, edited on the page (app/core/calendar.py, listeners.py)
     cmd=""; health=/api/days ;;
+eyes)
+    # the cameras (services/eyes/eyes.py): motion, faces, who by photolib; events into assistant_memory.
+    # ~/eva-data/eyes: eyes.json (the cameras, edited on the admin page «Глаза») + event frames and face crops
+    src=services/eyes; image=eva-eyes; name=eva-eyes; port=8913
+    run="-p 8913:8913 --add-host=host.docker.internal:host-gateway --env-file \$HOME/eva-data/admin.env --cpus 3 \
+-v /etc/localtime:/etc/localtime:ro -v \$HOME/eva-data/eyes:/eyes"
+    cmd=""; health=/health ;;
 print)
     # files sent to Eva in Telegram (kept a week) + printing through the home's CUPS
     # (cups_airprint, host network, its default queue)

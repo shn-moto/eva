@@ -14,6 +14,8 @@ service logs, search, keep / delete.
     GET  /api/speakers           who the phrases are written to (for the speaker field)
     GET  /audio/<day>/<name>.wav the sound
     POST /api/backfill           link phrases written before the sound was stored to their STT-log clips
+    GET/POST /api/eyes/cameras   the cameras (EYES_DIR/eyes.json); /api/eyes/live/* the eyes service;
+                                 /api/eyes/days, /api/eyes/events?d= the eyes' journal (eye_events, eye_faces)
 
 Home network only, like photolib: a request from the Cloudflare tunnel or a
 public address is refused - this is the family's voices.
@@ -1344,3 +1346,108 @@ async def box_delete(request: Request):
             if os.path.isdir(d) and not any(f.endswith(".wav") for f in os.listdir(d)):
                 shutil.rmtree(d, ignore_errors=True)
     return {"files": len(gone), "bytes": size, "dry": dry}
+
+
+# ---- «Глаза»: the cameras (services/eyes/eyes.py reads EYES_DIR/eyes.json) and their journal ----
+EYES_DIR = os.environ.get("EYES_DIR", "/eyes")
+EYES_CONF = os.path.join(EYES_DIR, "eyes.json")
+EYES_URL = os.environ.get("EYES_URL", "http://host.docker.internal:8913")
+CAM_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+@app.get("/api/eyes/cameras")
+def eyes_get():
+    c = _jload(EYES_CONF, {})
+    return {"cameras": c.get("cameras", []), "fps": c.get("fps", 5), "quiet_s": c.get("quiet_s", 8),
+            "id_threshold": c.get("id_threshold", 0.5)}
+
+
+@app.post("/api/eyes/cameras")
+async def eyes_post(request: Request):
+    """The whole list from the page; the eyes service follows the file within 3 s."""
+    b = await request.json()
+    c = _jload(EYES_CONF, {})
+    cams, seen = [], set()
+    for x in b.get("cameras", []):
+        cid = str(x.get("id", "")).strip().lower()
+        url = str(x.get("url", "")).strip()
+        if not CAM_ID.match(cid) or cid in seen:
+            raise HTTPException(400, f"id камеры: латиница/цифры/-_, без повторов: «{cid}»")
+        if not url.startswith(("http://", "https://", "rtsp://", "rtsps://")):
+            raise HTTPException(400, f"адрес камеры {cid}: http(s):// или rtsp://")
+        seen.add(cid)
+        cams.append({"id": cid, "name": str(x.get("name") or cid).strip()[:40], "url": url, "on": bool(x.get("on", True)),
+                     "motion": min(0.5, max(0.001, float(x.get("motion") or 0.01))), "faces": bool(x.get("faces", True))})
+    c["cameras"] = cams
+    for k, lo, hi in (("fps", 1, 15), ("quiet_s", 2, 120), ("id_threshold", 0.3, 0.9)):
+        if k in b:
+            c[k] = min(hi, max(lo, float(b[k])))
+    os.makedirs(EYES_DIR, exist_ok=True)
+    with open(EYES_CONF + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(c, f, ensure_ascii=False, indent=1)
+    os.replace(EYES_CONF + ".tmp", EYES_CONF)
+    return eyes_get()
+
+
+@app.get("/api/eyes/live/{path:path}")
+def eyes_live(path: str, request: Request):
+    """The eyes service as it is: the cameras' state, the newest frame, a probe of a URL."""
+    import urllib.error
+    import urllib.request
+    from fastapi.responses import Response
+    if not (path in ("cameras", "probe", "presence") or re.fullmatch(r"frame/[a-z0-9_-]+\.jpg", path)):
+        raise HTTPException(404, "not found")
+    url = f"{EYES_URL}/{path}" + (f"?{request.url.query}" if request.url.query else "")
+    try:
+        with urllib.request.urlopen(url, timeout=20) as r:
+            return Response(r.read(), media_type=r.headers.get("Content-Type"), headers={"Cache-Control": "no-store"})
+    except urllib.error.HTTPError as e:
+        return Response(e.read(), status_code=e.code, media_type=e.headers.get("Content-Type"))
+    except Exception as e:
+        return JSONResponse({"detail": f"глаза не отвечают: {e}"}, status_code=502)
+
+
+def _eyes_rows(q, args=()):
+    try:
+        with db() as c:
+            return c.execute(q, args).fetchall()
+    except psycopg.errors.UndefinedTable:          # the eyes service has not made its tables yet
+        return []
+
+
+@app.get("/api/eyes/days")
+def eyes_days():
+    rows = _eyes_rows("SELECT (started AT TIME ZONE current_setting('TimeZone'))::date d, count(*), "
+                      "count(*) FILTER (WHERE cardinality(people) > 0) FROM eye_events GROUP BY 1 ORDER BY 1 DESC LIMIT 60")
+    return {"days": [{"day": d.isoformat(), "events": n, "with_people": p} for d, n, p in rows]}
+
+
+@app.get("/api/eyes/events")
+def eyes_events(d: str, camera: str = ""):
+    day = datetime.date.fromisoformat(d)
+    rows = _eyes_rows(
+        "SELECT e.id, e.camera, e.started, e.ended, e.peak, e.snapshot, e.people, "
+        "coalesce(json_agg(json_build_object('id', f.id, 'crop', f.crop, 'person', f.person, 'sim', f.similarity, "
+        "'score', f.score, 'ts', f.ts) ORDER BY f.ts) FILTER (WHERE f.id IS NOT NULL), '[]') "
+        "FROM eye_events e LEFT JOIN eye_faces f ON f.event_id = e.id "
+        "WHERE (e.started AT TIME ZONE current_setting('TimeZone'))::date = %s AND (%s = '' OR e.camera = %s) "
+        "GROUP BY e.id ORDER BY e.started DESC", (day, camera, camera))
+    names = {x["id"]: x.get("name") or x["id"] for x in _jload(EYES_CONF, {}).get("cameras", [])}
+    out = []
+    for eid, cam, st, en, peak, snap, people, faces in rows:
+        for f in faces:
+            f["ts"] = _local(datetime.datetime.fromisoformat(f["ts"]))
+        out.append({"id": eid, "camera": cam, "place": names.get(cam, cam), "start": _local(st), "end": _local(en),
+                    "seconds": round((en - st).total_seconds()) if en else None, "peak": peak, "snapshot": snap,
+                    "people": people or [], "faces": faces})
+    return {"day": d, "events": out}
+
+
+@app.get("/api/eyes/img/{path:path}")
+def eyes_img(path: str):
+    if not re.fullmatch(r"(events|faces)/\d{4}-\d{2}-\d{2}/[\w-]+\.jpg", path):
+        raise HTTPException(404, "not found")
+    p = os.path.join(EYES_DIR, path)
+    if not os.path.exists(p):
+        raise HTTPException(404, "gone")
+    return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})

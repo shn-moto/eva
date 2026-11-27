@@ -1,0 +1,613 @@
+"""Eva's eyes on the hub: the home's cameras - motion, faces, who it is.
+
+The cameras are in EYES_DIR/eyes.json, edited on the admin page «Глаза»:
+
+    {"cameras": [{"id": "cam1", "name": "кабинет", "url": "http://<cam>:8080/stream", "on": true,
+                  "motion": 0.01, "faces": true}],
+     "fps": 5, "quiet_s": 8, "id_threshold": 0.5}
+
+    url      MJPEG over HTTP (multipart/x-mixed-replace), a JPEG snapshot URL (polled), or rtsp://
+    motion   the changed part of the frame that counts as motion (0.01 = 1 %)
+    faces    look for faces during motion and ask photolib who it is
+
+Per camera: a reader thread keeps only the newest frame (no decode), an analyser decodes it
+FPS times a second at 1/4 size (libjpeg scales while decoding - cheap) and compares it with
+a running background. Motion opens an event; while it lasts, a face pass every FACE_EVERY s
+(YuNet on the CPU, no VRAM - the GPU is full: photolib + router) crops the faces, and each
+logged face goes to photolib's /search/face: the family's faces are already there, named.
+A face keeps an event open only after motion within the last minute: a photo on the wall
+must not keep a camera "busy" forever.
+
+    GET /health
+    GET /cameras                 state: online, fps, motion now, the open event, who is seen
+    GET /frame/<id>.jpg?boxes=1  the newest frame, motion and faces drawn
+    GET /presence?minutes=10     who was seen where (from the database)
+    GET /probe?url=              one frame from a URL (the admin page's «Проверить»)
+
+Database (assistant_memory, ASSISTANT_PG_DSN), tables made here:
+    eye_events  one motion event: camera, started, ended, peak, snapshot, people
+    eye_faces   a face seen in an event: crop, box, person (photolib), similarity
+Files: EYES_DIR/events/<day>/<id>.jpg (the frame at the peak), faces/<day>/<id>.jpg; KEEP_DAYS.
+"""
+import datetime
+import json
+import os
+import threading
+import time
+import urllib.parse
+import urllib.request
+import uuid
+
+import cv2
+import numpy as np
+import psycopg
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
+
+EYES_DIR = os.environ.get("EYES_DIR", "/eyes")
+CONF = os.path.join(EYES_DIR, "eyes.json")
+DSN = os.environ.get("ASSISTANT_PG_DSN", "")
+PHOTOLIB = os.environ.get("PHOTOLIB_URL", "http://host.docker.internal:8000")
+YUNET = os.environ.get("YUNET_MODEL", "/models/face_detection_yunet_2023mar.onnx")
+KEEP_DAYS = int(os.environ.get("KEEP_DAYS", "30"))
+FACE_EVERY = 0.7          # s between face passes during an event
+IDLE_FACE_EVERY = 5.0     # s between face passes with no event (a person sitting still)
+FACE_LOG_EVERY = 3.0      # s between logged faces of one event: a person at the desk is not 400 rows
+MAX_IDS = 20              # photolib queries per event
+MAX_EVENT_S = 300         # a long presence is split into 5-minute events
+RECENT_MOTION_S = 60      # a face keeps an event only this long after the last motion
+LIGHT = 0.5               # more of the frame changed at once = the light, not a person
+cv2.setNumThreads(2)
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS eye_events (
+    id bigserial PRIMARY KEY, camera text NOT NULL, started timestamptz NOT NULL, ended timestamptz,
+    peak real, frames int, snapshot text, people text[] NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS eye_events_started ON eye_events (started);
+CREATE TABLE IF NOT EXISTS eye_faces (
+    id bigserial PRIMARY KEY, event_id bigint REFERENCES eye_events(id) ON DELETE CASCADE,
+    camera text NOT NULL, ts timestamptz NOT NULL, crop text, score real, box int[],
+    person_id int, person text, similarity real);
+CREATE INDEX IF NOT EXISTS eye_faces_ts ON eye_faces (ts);
+COMMENT ON TABLE eye_events IS 'Eva''s eyes: motion events per camera (services/eyes); people = names recognised';
+COMMENT ON TABLE eye_faces IS 'Eva''s eyes: faces seen during events; person from photolib, null = not recognised';
+"""
+
+
+def log(*a):
+    print(time.strftime("%H:%M:%S"), *a, flush=True)
+
+
+def now():
+    return datetime.datetime.now().astimezone()
+
+
+# ---- the database: one connection, reconnected; the eyes keep working without it ----
+_db = [None]
+_db_lock = threading.Lock()
+
+
+def sql(q, args=(), one=False):
+    if not DSN:
+        return None
+    with _db_lock:
+        for attempt in (0, 1):
+            try:
+                if _db[0] is None or _db[0].closed:
+                    _db[0] = psycopg.connect(DSN, autocommit=True, connect_timeout=5)
+                with _db[0].cursor() as c:
+                    c.execute(q, args)
+                    if c.description is None:
+                        return None
+                    return c.fetchone() if one else c.fetchall()
+            except psycopg.OperationalError as e:
+                _db[0] = None
+                if attempt:
+                    log("db:", e)
+            except Exception as e:
+                log("db:", e)
+                return None
+    return None
+
+
+def conf():
+    try:
+        with open(CONF, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"cameras": []}
+    except Exception as e:
+        log("eyes.json:", e)
+        return None
+
+
+def _save_jpg(kind, img, quality=85):
+    day = time.strftime("%Y-%m-%d")
+    rel = f"{kind}/{day}/{time.strftime('%H%M%S')}-{uuid.uuid4().hex[:6]}.jpg"
+    path = os.path.join(EYES_DIR, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    cv2.imwrite(path, img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    return rel
+
+
+def _multipart(field, name, data, ctype="image/jpeg"):
+    b = uuid.uuid4().hex
+    body = (f"--{b}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{name}\"\r\n"
+            f"Content-Type: {ctype}\r\n\r\n").encode() + data + f"\r\n--{b}--\r\n".encode()
+    return body, f"multipart/form-data; boundary={b}"
+
+
+def identify(jpg, threshold):
+    """A face crop -> (person_id, name, similarity) by photolib's face base, or (None, None, best)."""
+    body, ctype = _multipart("file", "face.jpg", jpg)
+    req = urllib.request.Request(f"{PHOTOLIB}/search/face?top_k=5&similarity_threshold=0.3",
+                                 data=body, headers={"Content-Type": ctype})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        res = json.loads(r.read()).get("results") or []
+    named = [x for x in res if x.get("person_id")]
+    if not named:
+        return None, None, (res[0]["similarity"] if res else None)
+    best = named[0]
+    # the top named face decides; a second face of the same person near it makes a weak match count
+    votes = sum(1 for x in named if x["person_id"] == best["person_id"] and x["similarity"] >= threshold - 0.08)
+    if best["similarity"] >= threshold or (votes >= 3 and best["similarity"] >= threshold - 0.05):
+        return best["person_id"], best.get("person_name"), round(best["similarity"], 3)
+    return None, None, round(best["similarity"], 3)
+
+
+# ---- reading a camera: only the newest frame is kept, nothing decoded here ----
+class Reader(threading.Thread):
+    def __init__(self, url, fps):
+        super().__init__(daemon=True)
+        self.url, self.fps, self.running = url, fps, True
+        self.frame = None          # (ts, "jpg", bytes) or (ts, "bgr", ndarray)
+        self.seq = 0
+        self.error = None
+        self.got = []              # arrival times, for the camera's fps
+
+    def put(self, kind, data):
+        t = time.time()
+        self.frame = (t, kind, data)
+        self.seq += 1
+        self.got = [x for x in self.got[-60:] if t - x < 5] + [t]
+
+    def stop(self):
+        self.running = False
+
+    def run(self):
+        while self.running:
+            try:
+                if self.url.startswith(("rtsp://", "rtsps://")):
+                    self._rtsp()
+                else:
+                    self._http()
+            except Exception as e:
+                self.error = str(e)[:200]
+            if self.running:
+                time.sleep(3)
+
+    def _http(self):
+        with urllib.request.urlopen(self.url, timeout=10) as r:
+            ctype = r.headers.get("Content-Type", "")
+            self.error = None
+            if ctype.startswith("image/"):
+                self.put("jpg", r.read())
+                return self._poll()
+            if "multipart" not in ctype:
+                raise IOError(f"not a camera stream: {ctype or 'no content type'}")
+            buf = bytearray()
+            while self.running:
+                chunk = r.read1(65536)
+                if not chunk:
+                    raise IOError("stream ended")
+                buf += chunk
+                while True:
+                    a = buf.find(b"\xff\xd8")
+                    if a < 0:
+                        del buf[:-1]
+                        break
+                    b = buf.find(b"\xff\xd9", a + 2)
+                    if b < 0:
+                        del buf[:a]
+                        break
+                    self.put("jpg", bytes(buf[a:b + 2]))
+                    del buf[:b + 2]
+                if len(buf) > 8_000_000:
+                    buf.clear()
+
+    def _poll(self):
+        while self.running:
+            time.sleep(1.0 / self.fps)
+            with urllib.request.urlopen(self.url, timeout=10) as r:
+                self.put("jpg", r.read())
+
+    def _rtsp(self):
+        cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+        try:
+            if not cap.isOpened():
+                raise IOError("rtsp: cannot open")
+            self.error = None
+            while self.running:
+                ok, img = cap.read()
+                if not ok:
+                    raise IOError("rtsp: no frame")
+                self.put("bgr", img)
+        finally:
+            cap.release()
+
+
+def decode(kind, data, reduce=1, gray=False):
+    if kind == "bgr":
+        img = cv2.cvtColor(data, cv2.COLOR_BGR2GRAY) if gray else data
+        return cv2.resize(img, None, fx=1 / reduce, fy=1 / reduce, interpolation=cv2.INTER_AREA) if reduce > 1 else img
+    flag = {(1, False): cv2.IMREAD_COLOR, (2, False): cv2.IMREAD_REDUCED_COLOR_2, (4, False): cv2.IMREAD_REDUCED_COLOR_4,
+            (8, False): cv2.IMREAD_REDUCED_COLOR_8, (1, True): cv2.IMREAD_GRAYSCALE, (2, True): cv2.IMREAD_REDUCED_GRAYSCALE_2,
+            (4, True): cv2.IMREAD_REDUCED_GRAYSCALE_4, (8, True): cv2.IMREAD_REDUCED_GRAYSCALE_8}[(reduce, gray)]
+    return cv2.imdecode(np.frombuffer(data, np.uint8), flag)
+
+
+# ---- one camera: motion, events, faces ----
+class Eye(threading.Thread):
+    def __init__(self, cam, g):
+        super().__init__(daemon=True)
+        self.cam, self.g = cam, g
+        self.id = cam["id"]
+        self.running = True
+        self.reader = Reader(cam["url"], g.get("fps", 5))
+        self.bg = None
+        self.reduce = None
+        self.size = None                 # (w, h) of the full frame
+        self.motion = 0.0                # changed part of the frame now
+        self.mbox = None                 # motion bbox (full coords)
+        self.faces = []                  # [(box, score, name)] of the last face pass
+        self.faces_ts = 0
+        self.event = None
+        self.last_motion = 0
+        self.last_face_pass = 0
+        self.light = 0
+        self.det = None
+        self.det_size = None
+        self.analysed = []
+
+    def stop(self):
+        self.running = False
+        self.reader.stop()
+
+    # -- state for the page --
+    def state(self):
+        t = time.time()
+        fr = self.reader.frame
+        online = bool(fr and t - fr[0] < 5)
+        ev = self.event
+        return {"id": self.id, "name": self.cam.get("name") or self.id, "online": online,
+                "error": None if online else (self.reader.error or "нет кадров"),
+                "fps": round(len(self.reader.got) / 5, 1), "analysed_fps": round(len([x for x in self.analysed if t - x < 5]) / 5, 1),
+                "size": self.size, "motion": round(self.motion, 4), "threshold": self.cam.get("motion", 0.01),
+                "event": {"id": ev["id"], "since": ev["started"].isoformat(timespec="seconds"),
+                          "people": sorted(ev["people"])} if ev else None,
+                "faces": [{"box": b, "score": round(s, 2), "name": n} for b, s, n in self.faces] if t - self.faces_ts < 3 else [],
+                "last_motion": datetime.datetime.fromtimestamp(self.last_motion).astimezone().isoformat(timespec="seconds")
+                if self.last_motion else None}
+
+    def frame_jpg(self, boxes=True):
+        fr = self.reader.frame
+        if not fr:
+            return None
+        if not boxes and fr[1] == "jpg":
+            return fr[2]
+        img = decode(fr[1], fr[2]).copy()
+        if boxes:
+            t = time.time()
+            if self.mbox and t - self.last_motion < 2:
+                x1, y1, x2, y2 = self.mbox
+                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 200, 255), 2)
+            if t - self.faces_ts < 3:
+                for (x, y, w, h), s, n in self.faces:
+                    cv2.rectangle(img, (x, y), (x + w, y + h), (80, 220, 80), 2)
+                    cv2.putText(img, translit(n) if n else f"? {s:.2f}", (x, max(14, y - 6)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (80, 220, 80), 2)
+        ok, b = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return b.tobytes() if ok else None
+
+    # -- the loop --
+    def run(self):
+        self.reader.start()
+        seen = -1
+        while self.running:
+            period = 1.0 / max(1, self.g.get("fps", 5))
+            t0 = time.time()
+            fr, seq = self.reader.frame, self.reader.seq
+            if fr and seq != seen and t0 - fr[0] < 5:
+                seen = seq
+                try:
+                    self.step(fr)
+                except Exception as e:
+                    log(f"{self.id}: step:", e)
+            elif self.event and (not fr or t0 - fr[0] > 10):
+                self.close_event()          # the camera went away mid-event
+            time.sleep(max(0.01, period - (time.time() - t0)))
+        if self.event:
+            self.close_event()
+
+    def step(self, fr):
+        t, kind, data = fr
+        if self.reduce is None:
+            full = decode(kind, data)
+            if full is None:
+                return
+            h, w = full.shape[:2]
+            self.size = (w, h)
+            self.reduce = 8 if w > 2600 else 4 if w > 1000 else 2 if w > 500 else 1
+        small = decode(kind, data, self.reduce, gray=True)
+        if small is None:
+            return
+        self.analysed = [x for x in self.analysed[-50:] if t - x < 5] + [t]
+        small = cv2.GaussianBlur(small, (5, 5), 0).astype(np.float32)
+        if self.bg is None or self.bg.shape != small.shape:
+            self.bg = small.copy()
+            return
+        diff = cv2.absdiff(small, self.bg)
+        mask = (diff > 22).astype(np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        frac = float(mask.mean())
+        cv2.accumulateWeighted(small, self.bg, 0.05)
+        thr = float(self.cam.get("motion", 0.01))
+        if frac > LIGHT:                   # the light changed: start the background again
+            self.bg = small.copy()
+            self.light = t
+            frac = 0.0
+        self.motion = frac
+        moving = frac >= thr
+        if frac >= thr / 4:
+            self.last_motion = t
+        if moving:
+            ys, xs = np.nonzero(mask)
+            r = self.reduce
+            self.mbox = (int(xs.min() * r), int(ys.min() * r), int(xs.max() * r), int(ys.max() * r))
+        ev = self.event
+        if moving and not ev:
+            self.open_event(t)
+            ev = self.event
+        if ev:
+            if moving:
+                ev["last_active"] = t
+                ev["frames"] += 1
+                if frac > ev["peak"]:
+                    ev["peak"], ev["peak_frame"] = frac, (kind, data)
+        # faces: often during an event, rarely without one (a still person is not motion)
+        want_faces = self.cam.get("faces", True) and t - self.light > 2
+        every = FACE_EVERY if ev else IDLE_FACE_EVERY
+        if want_faces and t - self.last_face_pass >= every and t - self.last_motion < RECENT_MOTION_S:
+            self.last_face_pass = t
+            found = self.face_pass(kind, data)
+            if found and not self.event:
+                self.open_event(t)
+            if found and self.event:
+                self.event["last_active"] = t
+                self.log_faces(found, kind, data, t)
+        ev = self.event
+        if ev and (t - ev["last_active"] > self.g.get("quiet_s", 8) or t - ev["t0"] > MAX_EVENT_S):
+            split = t - ev["last_active"] <= self.g.get("quiet_s", 8)
+            self.close_event()
+            if split:
+                self.open_event(t)
+
+    def face_pass(self, kind, data):
+        img = decode(kind, data)
+        if img is None:
+            return []
+        h, w = img.shape[:2]
+        s = min(1.0, 960 / w)
+        im = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1 else img
+        ih, iw = im.shape[:2]
+        if self.det is None:
+            self.det = cv2.FaceDetectorYN.create(YUNET, "", (iw, ih), 0.75, 0.3, 50)
+        if self.det_size != (iw, ih):
+            self.det.setInputSize((iw, ih))
+            self.det_size = (iw, ih)
+        _, res = self.det.detect(im)
+        out = []
+        for f in (res if res is not None else []):
+            x, y, fw, fh = (f[:4] / s).astype(int).tolist()
+            if min(fw, fh) < 28:
+                continue
+            out.append(((max(0, x), max(0, y), fw, fh), float(f[14]), img))
+        self.faces = [(b, sc, None) for b, sc, _ in out]
+        self.faces_ts = time.time()
+        return out
+
+    def log_faces(self, found, kind, data, t):
+        ev = self.event
+        if t - ev["last_face_log"] < FACE_LOG_EVERY:
+            # not logged this time, but a name seen already is drawn on the live frame
+            self.faces = [(b, sc, ev["names_at"].get(_cell(b))) for b, sc, _ in found]
+            return
+        ev["last_face_log"] = t
+        img = found[0][2]
+        H, W = img.shape[:2]
+        for (x, y, w, h), score, _ in found:
+            m = int(max(w, h) * 0.5)
+            crop = img[max(0, y - m):min(H, y + h + m), max(0, x - m):min(W, x + w + m)]
+            rel = _save_jpg("faces", crop, 90)
+            row = sql("INSERT INTO eye_faces (event_id, camera, ts, crop, score, box) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+                      (ev["id"], self.id, now(), rel, score, [x, y, w, h]), one=True)
+            fid = row[0] if row else None
+            if ev["ids"] < MAX_IDS and min(w, h) >= 40:
+                ev["ids"] += 1
+                ok, jpg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
+                if ok:
+                    threading.Thread(target=self._identify, args=(ev, fid, jpg.tobytes(), (x, y, w, h)), daemon=True).start()
+
+    def _identify(self, ev, fid, jpg, box):
+        try:
+            pid, name, sim = identify(jpg, float(self.g.get("id_threshold", 0.5)))
+        except Exception as e:
+            log(f"{self.id}: photolib:", e)
+            return
+        if fid:
+            sql("UPDATE eye_faces SET person_id=%s, person=%s, similarity=%s WHERE id=%s", (pid, name, sim, fid))
+        if name:
+            ev["names_at"][_cell(box)] = name
+            if name not in ev["people"]:
+                ev["people"].add(name)
+                log(f"{self.id}: {name} ({sim})")
+                if ev.get("id"):
+                    sql("UPDATE eye_events SET people=%s WHERE id=%s", (sorted(ev["people"]), ev["id"]))
+            self.faces = [(b, s, name if _cell(b) == _cell(box) else n) for b, s, n in self.faces]
+
+    def open_event(self, t):
+        st = now()
+        row = sql("INSERT INTO eye_events (camera, started) VALUES (%s,%s) RETURNING id", (self.id, st), one=True)
+        self.event = {"id": row[0] if row else None, "started": st, "t0": t, "last_active": t, "frames": 0,
+                      "peak": 0.0, "peak_frame": None, "people": set(), "ids": 0, "last_face_log": 0, "names_at": {}}
+
+    def close_event(self):
+        ev, self.event = self.event, None
+        if not ev:
+            return
+        snap = None
+        if ev["peak_frame"]:
+            img = decode(*ev["peak_frame"])
+            if img is not None:
+                s = min(1.0, 960 / img.shape[1])
+                snap = _save_jpg("events", cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1 else img, 80)
+        if ev["id"]:
+            sql("UPDATE eye_events SET ended=%s, peak=%s, frames=%s, snapshot=%s, people=%s WHERE id=%s",
+                (now(), ev["peak"], ev["frames"], snap, sorted(ev["people"]), ev["id"]))
+        log(f"{self.id}: event {ev['id']} {int(time.time() - ev['t0'])} s, peak {ev['peak']:.3f}, {sorted(ev['people'])}")
+
+
+def _cell(box):
+    """A face's place on the frame, coarse: the name found for a face stays on it between passes."""
+    x, y, w, h = box
+    return (int((x + w / 2) // 120), int((y + h / 2) // 120))
+
+
+_TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+               "a b v g d e e zh z i y k l m n o p r s t u f h ts ch sh sch  y  e yu ya".split(" ")))
+
+
+def translit(s):
+    """OpenCV draws ASCII only: a name on the live frame in Latin letters."""
+    return "".join(_TR.get(c.lower(), c) if c.lower() in _TR else c for c in s)
+
+
+# ---- the set of cameras, following eyes.json ----
+EYES = {}
+_conf_sig = [None]
+
+
+def sync():
+    c = conf()
+    if c is None:
+        return
+    sig = json.dumps(c, sort_keys=True)
+    if sig == _conf_sig[0]:
+        return
+    _conf_sig[0] = sig
+    want = {x["id"]: x for x in c.get("cameras", []) if x.get("id") and x.get("url") and x.get("on", True)}
+    for cid in list(EYES):
+        e = EYES[cid]
+        if cid not in want or want[cid]["url"] != e.cam["url"]:
+            e.stop()
+            del EYES[cid]
+            log(f"{cid}: off")
+        else:
+            e.cam, e.g = want[cid], c            # threshold / name / faces: live
+    for cid, cam in want.items():
+        if cid not in EYES:
+            EYES[cid] = Eye(cam, c)
+            EYES[cid].start()
+            log(f"{cid}: on ({cam.get('name')})")
+
+
+def cleanup():
+    cut = time.time() - KEEP_DAYS * 86400
+    for kind in ("events", "faces"):
+        root = os.path.join(EYES_DIR, kind)
+        for day in os.listdir(root) if os.path.isdir(root) else []:
+            try:
+                if datetime.datetime.strptime(day, "%Y-%m-%d").timestamp() < cut:
+                    d = os.path.join(root, day)
+                    for f in os.listdir(d):
+                        os.remove(os.path.join(d, f))
+                    os.rmdir(d)
+            except (ValueError, OSError):
+                pass
+
+
+def manager():
+    last_clean = 0
+    while True:
+        try:
+            sync()
+            if time.time() - last_clean > 6 * 3600:
+                last_clean = time.time()
+                cleanup()
+        except Exception as e:
+            log("manager:", e)
+        time.sleep(3)
+
+
+app = FastAPI()
+
+
+@app.on_event("startup")
+def start():
+    os.makedirs(EYES_DIR, exist_ok=True)
+    sql(SCHEMA)
+    # events left open by a restart: closed at their last face, or at the start
+    sql("UPDATE eye_events e SET ended = coalesce((SELECT max(ts) FROM eye_faces f WHERE f.event_id = e.id), e.started) "
+        "WHERE ended IS NULL")
+    threading.Thread(target=manager, daemon=True).start()
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "cameras": len(EYES), "online": sum(1 for e in EYES.values() if e.state()["online"])}
+
+
+@app.get("/cameras")
+def cameras():
+    return {"cameras": [e.state() for e in EYES.values()]}
+
+
+@app.get("/frame/{cid}.jpg")
+def frame(cid: str, boxes: int = 1):
+    e = EYES.get(cid)
+    jpg = e.frame_jpg(bool(boxes)) if e else None
+    if not jpg:
+        raise HTTPException(404, "no frame")
+    return Response(jpg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/presence")
+def presence(minutes: int = 10):
+    rows = sql("SELECT camera, person, max(ts), max(similarity), count(*) FROM eye_faces "
+               "WHERE ts > now() - make_interval(mins => %s) GROUP BY camera, person ORDER BY 3 DESC", (minutes,)) or []
+    names = {e.id: e.cam.get("name") or e.id for e in EYES.values()}
+    return {"minutes": minutes,
+            "cameras": [{"id": e.id, "name": names[e.id], "motion_now": e.event is not None,
+                         "last_motion": e.state()["last_motion"]} for e in EYES.values()],
+            "faces": [{"camera": c, "place": names.get(c, c), "person": p, "last": ts.isoformat(timespec="seconds"),
+                       "similarity": s, "count": n} for c, p, ts, s, n in rows]}
+
+
+@app.get("/probe")
+def probe(url: str):
+    """One frame from a URL: is it a camera, which size."""
+    if not url.startswith(("http://", "https://", "rtsp://", "rtsps://")):
+        raise HTTPException(400, "http(s):// or rtsp://")
+    r = Reader(url, 1)
+    r.start()
+    t = time.time()
+    while time.time() - t < 12 and not r.frame and not (r.error and time.time() - t > 2):
+        time.sleep(0.2)
+    r.stop()
+    if not r.frame:
+        return {"ok": False, "error": r.error or "нет кадра за 12 с"}
+    img = decode(r.frame[1], r.frame[2])
+    if img is None:
+        return {"ok": False, "error": "кадр не читается"}
+    return {"ok": True, "size": [img.shape[1], img.shape[0]],
+            "kind": "rtsp" if url.startswith("rtsp") else ("mjpeg" if len(r.got) > 1 else "jpeg")}

@@ -281,6 +281,33 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
 .dd .menu .q { display: flex; gap: 10px; padding: 4px 12px 6px; border-bottom: 1px solid var(--line); margin-bottom: 3px; }
 .dd .menu .q a { color: var(--accent); cursor: pointer; font-size: 12px; }
 .dd .menu .sw { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+/* eyes */
+#ey-cams { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; padding: 12px 14px;
+  max-height: 55vh; overflow: auto; flex-shrink: 0; }
+.ey-cam { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.ey-cam .live { position: relative; aspect-ratio: 4 / 3; background: #000; }
+.ey-cam .live img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.ey-cam .live .st { position: absolute; left: 6px; top: 6px; font-size: 11.5px; background: rgba(0,0,0,.6); color: #fff;
+  padding: 2px 7px; border-radius: 4px; }
+.ey-cam .live .st.mv { background: rgba(200,120,0,.85); }
+.ey-cam .live .st.off { background: rgba(179,64,46,.9); }
+.ey-cam .form { grid-template-columns: 90px 1fr; margin: 8px 10px 10px; }
+.ey-cam .form input[type=text] { width: 100%; min-width: 0; }
+#ey-log { overflow: auto; padding: 4px 14px 14px; flex: 1; min-height: 200px; }
+.ey-ev { display: grid; grid-template-columns: 130px 160px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line);
+  align-items: start; font-size: 13px; }
+.ey-ev .t { font-variant-numeric: tabular-nums; }
+.ey-ev .t .help { display: block; }
+.ey-ev img.snap { width: 160px; border-radius: 5px; cursor: zoom-in; display: block; }
+.ey-faces { display: flex; flex-wrap: wrap; gap: 6px; }
+.ey-face { width: 64px; text-align: center; font-size: 11px; color: var(--mute); }
+.ey-face img { width: 64px; height: 64px; object-fit: cover; border-radius: 5px; display: block; cursor: zoom-in; }
+.ey-face.known { color: var(--ink); font-weight: 600; }
+.ey-chip { display: inline-block; padding: 1px 8px; border-radius: 10px; background: var(--accent-soft); color: var(--accent);
+  margin: 0 4px 4px 0; font-size: 12px; }
+#ey-big { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: flex; align-items: center; justify-content: center; z-index: 60; }
+#ey-big[hidden] { display: none; }
+#ey-big img { max-width: 94vw; max-height: 94vh; }
 </style>
 </head>
 <body>
@@ -296,6 +323,7 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
   <label class="btn" id="paid-l" title="Выключено: Ева не обращается к Claude совсем (и не прогревает кеш); локальные команды работают">
     <input type="checkbox" id="paid"> платный API <span id="paid-usd" class="help"></span></label>
   <button id="rc-open" class="btn" title="Медиатека: папки с видео и музыкой на хабе, телевизор для фильмов">Ресурсы</button>
+  <button id="ey-open" class="btn" title="Камеры: движение, лица, кто это — и журнал">Глаза</button>
   <datalist id="speakers"></datalist>
 </header>
 <div id="cal" class="modal" hidden>
@@ -346,6 +374,21 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
       <button class="btn" id="bx-del" style="color:var(--danger)">Удалить</button> <span class="help" id="bx-del-res"></span></div>
   </div>
 </div>
+<div id="ey" class="modal" hidden>
+  <div class="rs-box" style="width:min(1300px,100%)">
+    <div class="bar"><span class="title">Глаза</span><span class="sub" id="ey-sub">камеры: движение, лица, кто это (по базе лиц photolib)</span>
+      <span style="flex:1"></span><button class="btn" id="ey-add">Добавить камеру</button><button class="btn primary" id="ey-save">Сохранить</button>
+      <button class="btn" id="ey-close">Закрыть</button></div>
+    <div id="ey-cams"></div>
+    <div class="bar" style="border-top:1px solid var(--line)"><b>Журнал</b>
+      <button class="btn" id="ey-prev">‹</button><input type="date" id="ey-day"><button class="btn" id="ey-next">›</button>
+      <select id="ey-cam"><option value="">все камеры</option></select>
+      <label class="tog"><input type="checkbox" id="ey-people"> только с лицами</label>
+      <span class="help" id="ey-count"></span></div>
+    <div id="ey-log"></div>
+  </div>
+</div>
+<div id="ey-big" hidden><img alt=""></div>
 <div id="rc" class="modal" hidden>
   <div class="rs-box">
     <div class="bar"><span class="title">Ресурсы</span><span class="sub">медиатека Евы: свои фильмы и музыка с хаба</span><span style="flex:1"></span>
@@ -1588,6 +1631,129 @@ $("#ls-save").onclick = async () => {
   try { const r = await api("/api/listeners", { listeners: LS.items }); LS.items = r.listeners; LS.log = r.log; lsRender(); toast("Сохранено — Ева подхватит сразу"); }
   catch (e) { toast("Не сохранилось: " + e.message); }
 };
+
+// ---- «Глаза»: the cameras (admin.py /api/eyes/* -> services/eyes/eyes.py) and their journal ----
+const EY = { cams: [], state: {}, timer: 0, logTimer: 0 };
+const eyToday = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+function eyStatus(id) {
+  const st = EY.state[id];
+  if (!st) return { cls: "off", txt: "не запущена" };
+  if (!st.online) return { cls: "off", txt: "нет связи: " + (st.error || "") };
+  const ppl = st.event && st.event.people.length ? " · " + st.event.people.join(", ") : "";
+  const fc = st.faces.length ? ` · лиц: ${st.faces.length}` : "";
+  return { cls: st.event ? "mv" : "", txt: `${st.event ? "движение" : "тихо"} ${(st.motion * 100).toFixed(1)}% · ${st.fps} к/с${fc}${ppl}` };
+}
+function eyRender() {
+  $("#ey-cams").innerHTML = EY.cams.map((c, i) => {
+    const s = eyStatus(c.id);
+    return `<div class="ey-cam" data-i="${i}">
+      <div class="live"><img data-id="${esc(c.id)}" alt=""><span class="st ${s.cls}">${esc(s.txt)}</span></div>
+      <div class="form">
+        <span>Название</span><input type="text" data-k="name" value="${esc(c.name)}" placeholder="кабинет, детская, зал">
+        <span>Id</span><input type="text" data-k="id" value="${esc(c.id)}" ${c.saved ? "disabled" : ""} placeholder="cam1">
+        <span>Адрес</span><input type="text" data-k="url" value="${esc(c.url)}" placeholder="http://камера:8080/stream или rtsp://…">
+        <span>Движение от</span><span><input class="num" style="width:4em" data-k="motion" value="${((c.motion ?? 0.01) * 100).toFixed(1)}">% кадра
+          <span class="help" data-now></span></span>
+        <span></span><span><label class="tog"><input type="checkbox" data-k="on" ${c.on !== false ? "checked" : ""}> включена</label>
+          <label class="tog"><input type="checkbox" data-k="faces" ${c.faces !== false ? "checked" : ""}> лица</label></span>
+        <span></span><span><button class="btn sm" data-a="probe">Проверить</button> <button class="btn sm" data-a="del" style="color:var(--danger)">Удалить</button>
+          <span class="help" data-r></span></span>
+      </div></div>`;
+  }).join("") || '<div class="help">Камер нет — «Добавить камеру».</div>';
+  document.querySelectorAll("#ey-cams .ey-cam").forEach(el => {
+    const c = EY.cams[+el.dataset.i];
+    el.querySelectorAll("[data-k]").forEach(inp => inp.onchange = () => {
+      const k = inp.dataset.k;
+      c[k] = inp.type === "checkbox" ? inp.checked : k === "motion" ? (parseFloat(inp.value.replace(",", ".")) || 1) / 100 : inp.value.trim();
+    });
+    el.querySelector("[data-a=probe]").onclick = async () => {
+      const r = el.querySelector("[data-r]"); r.textContent = "проверяю…";
+      const p = await api("/api/eyes/live/probe?url=" + encodeURIComponent(c.url)).catch(e => ({ error: e.message }));
+      r.textContent = p.ok ? `кадр есть: ${p.size[0]}×${p.size[1]}, ${p.kind}` : "нет: " + (p.error || p.detail || "");
+    };
+    el.querySelector("[data-a=del]").onclick = () => {
+      if (!confirm(`Убрать камеру «${c.name || c.id}»? Журнал её событий останется. (Сохранить — чтобы применить)`)) return;
+      EY.cams.splice(+el.dataset.i, 1); eyRender();
+    };
+  });
+  eyStates(); eyFrames();
+}
+function eyStates() {
+  document.querySelectorAll("#ey-cams .ey-cam").forEach(el => {
+    const c = EY.cams[+el.dataset.i]; if (!c) return;
+    const s = eyStatus(c.id), st = el.querySelector(".st"), live = EY.state[c.id];
+    st.className = "st " + s.cls; st.textContent = s.txt;
+    el.querySelector("[data-now]").textContent = live && live.online ? `сейчас ${(live.motion * 100).toFixed(1)}%` : "";
+  });
+}
+function eyFrames() {
+  // each live picture asks for the next one after it arrives: ~2 frames a second, no pile-up
+  document.querySelectorAll("#ey-cams .live img").forEach(img => {
+    const id = img.dataset.id, live = EY.state[id];
+    if (!live || !live.online) { img.removeAttribute("src"); img.onload = null; return; }
+    if (img.getAttribute("src")) return;
+    const load = () => { img.src = `/api/eyes/live/frame/${id}.jpg?boxes=1&t=${Date.now()}`; };
+    const next = d => { if (!$("#ey").hidden && img.isConnected && img.onload) setTimeout(load, d); };
+    img.onload = () => next(400); img.onerror = () => next(2000);
+    load();
+  });
+}
+async function eyPoll() {
+  clearTimeout(EY.timer);
+  if ($("#ey").hidden) return;
+  const r = await api("/api/eyes/live/cameras").catch(() => ({ cameras: [] }));
+  EY.state = Object.fromEntries((r.cameras || []).map(c => [c.id, c]));
+  eyStates(); eyFrames();
+  EY.timer = setTimeout(eyPoll, 1500);
+}
+function eyBig(src) { $("#ey-big img").src = src; $("#ey-big").hidden = false; }
+$("#ey-big").onclick = () => { $("#ey-big").hidden = true; };
+async function eyLog() {
+  clearTimeout(EY.logTimer);
+  const d = $("#ey-day").value || eyToday();
+  const r = await api(`/api/eyes/events?d=${d}&camera=${encodeURIComponent($("#ey-cam").value)}`).catch(e => ({ events: [], error: e.message }));
+  let evs = r.events || [];
+  if ($("#ey-people").checked) evs = evs.filter(e => e.faces.length);
+  $("#ey-count").textContent = r.error ? "ошибка: " + r.error : `событий: ${evs.length}`;
+  const dur = s => s == null ? "идёт" : s < 60 ? `${s} с` : `${Math.floor(s / 60)} мин ${s % 60} с`;
+  $("#ey-log").innerHTML = evs.map(e => `<div class="ey-ev">
+    <div class="t"><b>${esc(e.start)}</b>${e.end ? "–" + esc(e.end) : ""}<span class="help">${esc(e.place)} · ${dur(e.seconds)}${e.peak ? ` · ${(e.peak * 100).toFixed(1)}%` : ""}</span></div>
+    <div>${e.snapshot ? `<img class="snap" loading="lazy" src="/api/eyes/img/${esc(e.snapshot)}" data-big="/api/eyes/img/${esc(e.snapshot)}" alt="кадр удалён">` : '<span class="help">без кадра</span>'}</div>
+    <div>${e.people.map(p => `<span class="ey-chip">${esc(p)}</span>`).join("")}
+      <div class="ey-faces">${e.faces.map(f => `<div class="ey-face${f.person ? " known" : ""}" title="${esc(f.ts)} · лицо ${(f.score || 0).toFixed(2)}${f.sim != null ? ` · сходство ${f.sim.toFixed(2)}` : " · не опознавалось"}">
+        <img loading="lazy" src="/api/eyes/img/${esc(f.crop)}" data-big="/api/eyes/img/${esc(f.crop)}" alt="">${esc(f.person || "?")}</div>`).join("")}</div>
+      ${!e.faces.length && !e.people.length ? '<span class="help">лиц не было</span>' : ""}</div></div>`).join("")
+    || '<div class="help" style="padding:10px 0">За этот день событий нет.</div>';
+  document.querySelectorAll("#ey-log [data-big]").forEach(im => im.onclick = () => eyBig(im.dataset.big));
+  if (d === eyToday() && !$("#ey").hidden) EY.logTimer = setTimeout(eyLog, 15000);
+}
+function eyShift(n) {
+  const d = new Date(($("#ey-day").value || eyToday()) + "T12:00:00"); d.setDate(d.getDate() + n);
+  $("#ey-day").value = d.toISOString().slice(0, 10); eyLog();
+}
+$("#ey-prev").onclick = () => eyShift(-1); $("#ey-next").onclick = () => eyShift(1);
+$("#ey-day").onchange = eyLog; $("#ey-cam").onchange = eyLog; $("#ey-people").onchange = eyLog;
+$("#ey-open").onclick = async () => {
+  $("#ey").hidden = false;
+  const conf = await api("/api/eyes/cameras").catch(() => ({ cameras: [] }));
+  EY.cams = conf.cameras.map(c => ({ ...c, saved: true }));
+  $("#ey-cam").innerHTML = '<option value="">все камеры</option>' + EY.cams.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+  if (!$("#ey-day").value) $("#ey-day").value = eyToday();
+  eyRender(); eyPoll(); eyLog();
+};
+$("#ey-add").onclick = () => {
+  let n = EY.cams.length + 1; while (EY.cams.some(c => c.id === "cam" + n)) n++;
+  EY.cams.push({ id: "cam" + n, name: "", url: "", on: true, motion: 0.01, faces: true }); eyRender();
+};
+$("#ey-save").onclick = async () => {
+  if (document.activeElement) document.activeElement.blur();
+  try {
+    const r = await api("/api/eyes/cameras", { cameras: EY.cams });
+    EY.cams = r.cameras.map(c => ({ ...c, saved: true })); eyRender(); toast("Сохранено — глаза подхватят за пару секунд");
+    setTimeout(eyPoll, 3500);
+  } catch (e) { toast("Не сохранилось: " + e.message); }
+};
+$("#ey-close").onclick = () => { $("#ey").hidden = true; clearTimeout(EY.timer); clearTimeout(EY.logTimer); };
 </script>
 </body>
 </html>

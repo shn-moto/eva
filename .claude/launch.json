@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-c", "import os, runpy, sys; os.chdir('ui/spike'); sys.argv = ['spike_server.py', '8765']; runpy.run_path('spike_server.py', run_name='__main__')"],
       "port": 8765
+    },
+    {
+      "name": "admin-static",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8766", "-d", "services/admin"],
+      "port": 8766
     }
   ]
 }
