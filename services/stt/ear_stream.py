@@ -204,6 +204,7 @@ class Ear:
         self.box = collections.deque(maxlen=int(BOX_S * SR / CHUNK))
         self.box_auto = 0.0
         self.collect_at = 0.0
+        self.music_since = time.time()
         self.seq = 0
         # samples waiting for a whole VAD chunk: processed mic, its input, raw mics, ref, flags
         self.q_e, self.q_y = np.zeros(0, np.float32), np.zeros(0, np.float32)
@@ -300,6 +301,14 @@ class Ear:
         p = self.vad(e)
         self.box.append((y.astype(np.float16), x.astype(np.float16), e.astype(np.float16), p,
                          1 * music + 2 * her_now + 4 * ref_on))
+        if music and now - self.collect_at > COLLECT_EVERY and now - self.music_since > BOX_S - 5 \
+                and os.path.exists(COLLECT_FLAG):
+            # over loud music the ear cuts no phrase at all (AEC3 gates the room to -73 dB, the VAD
+            # stays at 0.00 for a whole song, 2026-11-27 13:48): a phrase cannot be the trigger
+            self.collect_at = now
+            threading.Thread(target=self.dump, args=("music",), daemon=True).start()
+        if not music:
+            self.music_since = now
         # a stuck VAD: loud in the room, no voice for VAD_STUCK s, not over her own voice. Over
         # music too: the VAD gave 0.00 for whole songs (2026-11-26); music alone scores above
         # 0.01 now and then, so a flat zero is the stuck state
