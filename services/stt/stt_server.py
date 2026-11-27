@@ -861,6 +861,21 @@ async def hear_box():
     return {"path": path}
 
 
+@app.get("/hear/rec")
+def hear_rec_status():
+    """The ear's recording (admin «Чёрный ящик»): on / since / seconds."""
+    import ear_stream
+    return ear_stream.REC.status()
+
+
+@app.post("/hear/rec")
+async def hear_rec(request: Request):
+    """{"on": true|false} - start or stop recording all the ear's tracks (ear_stream.Recorder)."""
+    import ear_stream
+    on = bool((await request.json()).get("on"))
+    return await run_in_threadpool(ear_stream.REC.start if on else ear_stream.REC.stop)
+
+
 @app.post("/hear/echo")
 async def hear_echo(request: Request):
     """{"audio": "<day>/<clip>"} - the brain heard her own voice in this clip."""

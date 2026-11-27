@@ -1019,3 +1019,175 @@ async def listeners_test(request: Request):
         except Exception as e:
             out["model"] = f"ошибка: {e}"
     return out
+
+
+# ---- the ear's black box (services/stt/ear_stream.py: Recorder, dump) -------------------
+# Recordings of everything the ear gets and makes (2026-11-27: «стоп» over a song never reached
+# the ear's cut, and the 60 s box held the mono mix only): started and stopped here, each of the
+# 9 tracks listened to here, deleted by a period here.
+EAR_URL = os.environ.get("EAR_URL", "http://host.docker.internal:8901")
+REC_DIR = os.path.join(LOG_DIR, "ear-rec")
+BOX_DIR = os.path.join(LOG_DIR, "ear-box")
+COLLECT_FLAG = os.path.join(BOX_DIR, "COLLECT")
+TRACK_RU = {"mic1": "мик 1", "mic2": "мик 2", "mic3": "мик 3", "mic4": "мик 4", "mic5": "мик 5", "mic6": "мик 6",
+            "mic7": "мик 7", "mix": "смесь микрофонов", "ref": "динамик (опорный)", "aec": "после AEC3"}
+
+
+def _ear(path, body=None):
+    import urllib.request
+    req = urllib.request.Request(EAR_URL + path, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read())
+
+
+def _box_items():
+    import wave
+    items = []
+    if os.path.isdir(REC_DIR):
+        for s in sorted(os.listdir(REC_DIR), reverse=True):
+            d = os.path.join(REC_DIR, s)
+            if not (re.fullmatch(r"\d{8}-\d{6}", s) and os.path.isdir(d)):
+                continue
+            try:
+                meta = json.load(open(os.path.join(d, "rec.json")))
+            except (OSError, ValueError):
+                meta = {}
+            start = meta.get("start") or datetime.datetime.strptime(s, "%Y%m%d-%H%M%S").timestamp()
+            parts = []
+            for f in sorted(os.listdir(d)):
+                if re.fullmatch(r"\d{6}\.wav", f):
+                    p = os.path.join(d, f)
+                    try:
+                        with wave.open(p) as w:
+                            sec = w.getnframes() / w.getframerate()
+                    except Exception:            # the minute being written now
+                        sec = 0
+                    parts.append({"file": f"ear-rec/{s}/{f}", "t": f[:2] + ":" + f[2:4] + ":" + f[4:],
+                                  "seconds": round(sec, 1), "bytes": os.path.getsize(p)})
+            items.append({"kind": "rec", "id": s, "start": start,
+                          "seconds": meta.get("seconds") or sum(p["seconds"] for p in parts),
+                          "on": meta.get("on"), "stopped": meta.get("stopped"), "flags": meta.get("flags", []),
+                          "parts": parts})
+    if os.path.isdir(BOX_DIR):
+        for f in sorted(os.listdir(BOX_DIR), reverse=True):
+            m = re.fullmatch(r"(\d{8}-\d{6})-([\w-]+)\.npz", f)
+            if m:
+                t = datetime.datetime.strptime(m.group(1), "%Y%m%d-%H%M%S").timestamp()
+                items.append({"kind": "box", "id": f, "start": t - 60, "end": t, "reason": m.group(2),
+                              "file": f"ear-box/{f}", "bytes": os.path.getsize(os.path.join(BOX_DIR, f))})
+    return sorted(items, key=lambda i: i["start"], reverse=True)
+
+
+@app.get("/api/box")
+def box_get():
+    try:
+        rec = _ear("/hear/rec")
+    except Exception as e:
+        rec = {"on": None, "error": str(e)[:200]}
+    return {"rec": rec, "collect": os.path.exists(COLLECT_FLAG), "items": _box_items(), "tracks": TRACK_RU,
+            "free": shutil.disk_usage(LOG_DIR).free}
+
+
+@app.post("/api/box/rec")
+async def box_rec(request: Request):
+    return _ear("/hear/rec", {"on": bool((await request.json()).get("on"))})
+
+
+@app.post("/api/box/collect")
+async def box_collect(request: Request):
+    """The ear's own boxes over her music / voice (ear_stream COLLECT_FLAG), on or off."""
+    if (await request.json()).get("on"):
+        os.makedirs(BOX_DIR, exist_ok=True)
+        open(COLLECT_FLAG, "a").close()
+    elif os.path.exists(COLLECT_FLAG):
+        os.remove(COLLECT_FLAG)
+    return {"collect": os.path.exists(COLLECT_FLAG)}
+
+
+def _tracks_of(rel):
+    """file -> {track: float32 array}, sample rate. A recording minute: 9 channels; a box: its arrays."""
+    import numpy as np
+    import wave
+    if not re.fullmatch(r"ear-rec/\d{8}-\d{6}/\d{6}\.wav|ear-box/[\w-]+\.npz", rel):
+        raise HTTPException(400, "file")
+    p = os.path.join(LOG_DIR, rel)
+    if not os.path.exists(p):
+        raise HTTPException(404, "file")
+    if rel.endswith(".wav"):
+        with wave.open(p) as w:
+            n, sr = w.getnchannels(), w.getframerate()
+            a = np.frombuffer(w.readframes(w.getnframes()), np.int16).reshape(-1, n).astype(np.float32) / 32768
+        names = ["mic1", "mic2", "mic3", "mic4", "mic5", "mic6", "mic7", "ref", "aec"][:n]
+        out = {k: a[:, i] for i, k in enumerate(names)}
+    else:
+        d = np.load(p)
+        sr = int(d["sr"]) if "sr" in d.files else 16000
+        out = {"mix": d["y"].astype(np.float32), "ref": d["x"].astype(np.float32), "aec": d["e"].astype(np.float32)}
+        if "raw7" in d.files:
+            r = d["raw7"].astype(np.float32) / 32768
+            out.update({f"mic{i + 1}": r[:, i] for i in range(r.shape[1])})
+    if "mix" not in out and "mic1" in out:
+        out["mix"] = np.mean([out[f"mic{i}"] for i in range(1, 8) if f"mic{i}" in out], axis=0)
+    return out, sr
+
+
+@app.get("/api/box/track")
+def box_track(file: str, track: str):
+    """One track as a mono wav, loud enough to hear: the 7 mics share one gain (their levels
+    compare), the others are each raised to a peak."""
+    import io
+    import numpy as np
+    import wave
+    from fastapi.responses import Response
+    tracks, sr = _tracks_of(file)
+    if track not in tracks:
+        raise HTTPException(404, "track")
+    a = tracks[track]
+    if track.startswith("mic"):
+        peak = max(float(np.abs(v).max()) for k, v in tracks.items() if k.startswith("mic"))
+    else:
+        peak = float(np.abs(a).max())
+    a = a * (0.89 / (peak or 1.0))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(np.clip(a * 32767, -32767, 32767).astype(np.int16).tobytes())
+    return Response(buf.getvalue(), media_type="audio/wav")
+
+
+@app.post("/api/box/delete")
+async def box_delete(request: Request):
+    """{"from": epoch, "to": epoch, "dry": bool} - recording minutes and boxes of the period
+    (the recording running now is never touched)."""
+    b = await request.json()
+    t0, t1, dry = float(b.get("from") or 0), float(b.get("to") or 0), bool(b.get("dry"))
+    if not t1 > t0:
+        raise HTTPException(400, "from < to")
+    gone, size = [], 0
+    for it in _box_items():
+        if it["kind"] == "box" and t0 <= it["end"] <= t1:
+            gone.append(it["file"])
+        elif it["kind"] == "rec" and not it.get("on"):
+            day = datetime.datetime.fromtimestamp(it["start"])
+            for p in it["parts"]:
+                hh, mm, ss = (int(x) for x in p["t"].split(":"))
+                t = day.replace(hour=hh, minute=mm, second=ss).timestamp()
+                if t < it["start"] - 1:
+                    t += 86400                     # past midnight
+                if t0 <= t <= t1:
+                    gone.append(p["file"])
+    for rel in gone:
+        p = os.path.join(LOG_DIR, rel)
+        if os.path.exists(p):
+            size += os.path.getsize(p)
+            if not dry:
+                os.remove(p)
+    if not dry and os.path.isdir(REC_DIR):
+        for s in os.listdir(REC_DIR):              # a recording with no minutes left goes whole
+            d = os.path.join(REC_DIR, s)
+            if os.path.isdir(d) and not any(f.endswith(".wav") for f in os.listdir(d)):
+                shutil.rmtree(d, ignore_errors=True)
+    return {"files": len(gone), "bytes": size, "dry": dry}

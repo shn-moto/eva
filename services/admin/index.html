@@ -95,6 +95,21 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .form input.num { width: 2.8em; text-align: center; font-variant-numeric: tabular-nums; padding: 4px 2px; }
 .form input.bad { border-color: var(--danger); outline: 1px solid var(--danger); }
 /* listeners */
+#bx-body { display: grid; grid-template-columns: 300px 1fr; min-height: 0; flex: 1; }
+#bx-body > div { min-height: 0; overflow: auto; padding: 10px 14px; }
+#bx-body > div + div { border-left: 1px solid var(--line); }
+#bx-list .li { cursor: pointer; padding: 5px 8px; border-radius: 6px; }
+#bx-list .li:hover, #bx-list .li.on { background: var(--line); }
+#bx-list .li.on { font-weight: 600; }
+#bx-list .li .help { display: block; font-weight: 400; }
+#bx-list .day { margin: 10px 0 4px; font-weight: 600; color: var(--mute); }
+.bx-del { border-top: 1px solid var(--line); padding: 8px 14px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.bx-tracks, .bx-parts { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+.bx-tracks .btn.on { background: var(--accent, #2f6fd0); color: #fff; }
+.bx-parts .btn.on { outline: 2px solid var(--accent, #2f6fd0); }
+#bx-view .btn.sm { padding: 2px 9px; font-size: 12px; }
+#bx-audio { width: 100%; margin-top: 6px; }
+.bx-flags { font-size: 12px; color: var(--mute); margin-top: 8px; white-space: pre-wrap; }
 #ls-body { display: grid; grid-template-columns: 240px 1fr; min-height: 0; flex: 1; }
 #ls-body > div { min-height: 0; overflow: auto; padding: 10px 14px; }
 #ls-body > div + div { border-left: 1px solid var(--line); }
@@ -253,6 +268,7 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
   <button id="cal-open" class="btn" title="Что Ева сделает по времени: напоминания, музыка, будильники, поручения">Календарь</button>
   <button id="ls-open" class="btn" title="Правила на каждую услышанную фразу">Слушатели</button>
   <button id="pl-open" class="btn" title="Отмеченные места: откуда звук слушать, а откуда нет">Места</button>
+  <button id="bx-open" class="btn" title="Запись всего, что слышит ухо: 7 микрофонов, динамик, после AEC3">Чёрный ящик</button>
   <datalist id="speakers"></datalist>
 </header>
 <div id="cal" class="modal" hidden>
@@ -289,6 +305,18 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
       <b>Звук</b> (глушить микрофонами): направленный фильтр по 7 микрофонам гасит звук места ещё до распознавания — тише на
       ~10 дБ, речь поверх него чище. Собирается из записей журнала (~20 с) при смене отмеченных мест. Работает отдельно от логики.</div>
     <div id="pl-list"></div>
+  </div>
+</div>
+<div id="bx" class="modal" hidden>
+  <div class="rs-box">
+    <div class="bar"><span class="title">Чёрный ящик</span><span class="sub" id="bx-sub"></span><span style="flex:1"></span>
+      <button class="btn primary" id="bx-rec">Начать запись</button><button class="btn" id="bx-refresh">Обновить</button><button class="btn" id="bx-close">Закрыть</button></div>
+    <div class="rs-note">Запись всего, что получает и делает ухо: 7 сырых микрофонов, сигнал динамика (опорный для AEC3) и что осталось после AEC3 —
+      минутными файлами, пока не остановишь (сама остановится через час или если кончается место).
+      <label class="tog" style="margin-left:10px"><input type="checkbox" id="bx-collect"> автосбор: ящик на минуту при фразе поверх музыки или её голоса и раз в 5 мин во время музыки</label></div>
+    <div id="bx-body"><div id="bx-list"></div><div id="bx-view"></div></div>
+    <div class="bx-del">Удалить записи за период: с <input type="datetime-local" id="bx-from"> по <input type="datetime-local" id="bx-to">
+      <button class="btn" id="bx-del" style="color:var(--danger)">Удалить</button> <span class="help" id="bx-del-res"></span></div>
   </div>
 </div>
 <div id="ls" class="modal" hidden>
@@ -1194,6 +1222,91 @@ $("#ls-open").onclick = async () => {
   VOICES = v; LS.items = r.listeners; LS.log = r.log; LS.cur = 0; lsRender();
 };
 $("#ls-close").onclick = () => { $("#ls").hidden = true; };
+
+/* the ear's black box (admin.py /api/box*, services/stt/ear_stream.py Recorder): record, listen to the 9 tracks, delete */
+const BX = { data: null, cur: null, part: 0, track: "mic1", timer: null };
+const bxTime = t => new Date(t * 1000).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const bxMB = b => (b / 1048576).toFixed(b > 104857600 ? 0 : 1) + " МБ";
+const bxDur = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+const BX_FLAG = f => [f & 1 ? "музыка" : "", f & 2 ? "её голос" : "", f & 4 ? "динамик звучит" : ""].filter(Boolean).join(", ") || "тихо";
+const BX_WHY = { "over-music": "фраза поверх музыки", "over-her": "фраза поверх её голоса", music: "во время музыки", asked: "по запросу", "deaf-music": "ухо глухое поверх музыки" };
+async function bxLoad() {
+  try { BX.data = await api("/api/box"); } catch (e) { $("#bx-sub").textContent = "ошибка: " + e.message; return; }
+  bxRender();
+}
+function bxRender() {
+  const d = BX.data, r = d.rec || {};
+  const total = d.items.reduce((n, i) => n + (i.bytes || (i.parts || []).reduce((m, p) => m + p.bytes, 0)), 0);
+  $("#bx-sub").textContent = (r.on === null || r.on === undefined ? "ухо не отвечает" : r.on ? `● идёт запись ${bxDur(r.seconds)}`
+    : r.stopped ? `запись остановлена (${r.stopped === "asked" ? "вручную" : r.stopped})` : "не пишет")
+    + ` · записей ${bxMB(total)} · свободно ${bxMB(d.free)}`;
+  $("#bx-rec").textContent = r.on ? "Остановить запись" : "Начать запись";
+  $("#bx-rec").classList.toggle("primary", !r.on);
+  $("#bx-rec").style.color = r.on ? "var(--danger)" : "";
+  $("#bx-collect").checked = !!d.collect;
+  let day = "";
+  $("#bx-list").innerHTML = d.items.map((it, i) => {
+    const dd = new Date(it.start * 1000).toLocaleDateString("ru-RU", { day: "2-digit", month: "long" });
+    const head = dd !== day ? `<div class="day">${dd}</div>` : ""; day = dd;
+    const what = it.kind === "rec"
+      ? `${it.on ? "● " : ""}Запись ${bxTime(it.start).slice(-8)}<span class="help">${bxDur(it.seconds)} · ${it.parts.length} мин · ${bxMB(it.parts.reduce((m, p) => m + p.bytes, 0))}</span>`
+      : `Ящик ${bxTime(it.end).slice(-8)}<span class="help">${BX_WHY[it.reason] || esc(it.reason)} · минута до · ${bxMB(it.bytes)}</span>`;
+    return head + `<div class="li${BX.cur === it.id ? " on" : ""}" data-i="${i}">${what}</div>`;
+  }).join("") || '<div class="help">Записей нет.</div>';
+  document.querySelectorAll("#bx-list .li").forEach(e => e.onclick = () => { BX.cur = d.items[+e.dataset.i].id; BX.part = 0; bxRender(); });
+  bxView();
+}
+function bxView() {
+  const it = ((BX.data || {}).items || []).find(i => i.id === BX.cur);
+  if (!it) { $("#bx-view").innerHTML = '<div class="help">Выбери запись слева.</div>'; return; }
+  const file = it.kind === "rec" ? (it.parts[BX.part] || {}).file : it.file;
+  const url = file ? `/api/box/track?file=${encodeURIComponent(file)}&track=${BX.track}` : "";
+  $("#bx-view").innerHTML = `<div style="font-weight:600">${it.kind === "rec" ? "Запись с " + bxTime(it.start) : "Ящик: минута до " + bxTime(it.end)}</div>
+    ${it.kind === "rec" ? `<div class="bx-parts">${it.parts.map((p, i) => `<button class="btn sm${i === BX.part ? " on" : ""}" data-p="${i}">${p.t} · ${bxDur(p.seconds)}</button>`).join("") || '<span class="help">минут ещё нет</span>'}</div>` : ""}
+    <div class="bx-tracks">${Object.entries(BX.data.tracks).map(([k, v]) => `<button class="btn sm${k === BX.track ? " on" : ""}" data-t="${k}">${esc(v)}</button>`).join("")}</div>
+    <div class="help">Микрофоны звучат с общей громкостью — их уровни можно сравнивать; остальные дорожки подняты до пика. Переключение дорожки держит позицию.
+      В старых ящиках (до 27.11 14:00) отдельных микрофонов нет — только смесь.</div>
+    ${file ? `<audio id="bx-audio" controls preload="none" src="${url}"></audio><div><a href="${url}" download="${esc(file.replace(/\//g, "_"))}-${BX.track}.wav">скачать эту дорожку</a></div>` : ""}
+    ${it.kind === "rec" && it.flags.length ? `<div class="bx-flags">Что звучало (от начала записи):\n${it.flags.map(([t, f]) => `${bxDur(t)}  ${BX_FLAG(f)}`).join("\n")}</div>` : ""}`;
+  document.querySelectorAll("#bx-view [data-p]").forEach(b => b.onclick = () => { BX.part = +b.dataset.p; bxView(); });
+  document.querySelectorAll("#bx-view [data-t]").forEach(b => b.onclick = () => {
+    const au = $("#bx-audio"), pos = au ? au.currentTime : 0, playing = au && !au.paused;
+    BX.track = b.dataset.t; bxView();
+    const n = $("#bx-audio"); if (!n) return;
+    n.addEventListener("loadedmetadata", () => { n.currentTime = pos; if (playing) n.play(); }, { once: true });
+    n.load();
+  });
+}
+$("#bx-open").onclick = () => {
+  $("#bx").hidden = false;
+  const now = new Date(), pad = n => String(n).padStart(2, "0");
+  const loc = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (!$("#bx-from").value) { $("#bx-from").value = loc(new Date(now - 86400000)); $("#bx-to").value = loc(now); }
+  bxLoad();
+  clearInterval(BX.timer);
+  BX.timer = setInterval(() => { if (!$("#bx").hidden && BX.data && BX.data.rec && BX.data.rec.on) bxLoad(); }, 5000);
+};
+$("#bx-close").onclick = () => { $("#bx").hidden = true; clearInterval(BX.timer); const au = $("#bx-audio"); if (au) au.pause(); };
+$("#bx-refresh").onclick = bxLoad;
+$("#bx-rec").onclick = async () => {
+  try { await api("/api/box/rec", { on: !(BX.data.rec || {}).on }); } catch (e) { toast("ошибка: " + e.message); }
+  bxLoad();
+};
+$("#bx-collect").onchange = async e => {
+  try { await api("/api/box/collect", { on: e.target.checked }); toast(e.target.checked ? "Автосбор включён" : "Автосбор выключен"); }
+  catch (er) { toast("ошибка: " + er.message); }
+  bxLoad();
+};
+$("#bx-del").onclick = async () => {
+  const t0 = new Date($("#bx-from").value).getTime() / 1000, t1 = new Date($("#bx-to").value).getTime() / 1000;
+  if (!(t1 > t0)) { toast("Период: «с» раньше «по»"); return; }
+  const dry = await api("/api/box/delete", { from: t0, to: t1, dry: true });
+  if (!dry.files) { $("#bx-del-res").textContent = "за этот период записей нет"; return; }
+  if (!confirm(`Удалить ${dry.files} файл(ов), ${bxMB(dry.bytes)}? Это не отменить.`)) return;
+  const r = await api("/api/box/delete", { from: t0, to: t1 });
+  $("#bx-del-res").textContent = `удалено ${r.files} файл(ов), ${bxMB(r.bytes)}`;
+  BX.cur = null; bxLoad();
+};
 
 /* places: the modes the hub listens by (services/stt/hear.py muted_place) */
 function plRender() {

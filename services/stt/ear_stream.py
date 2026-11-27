@@ -21,10 +21,12 @@ looks deaf over music.
 """
 import collections
 import json
+import shutil
 import os
 import socket
 import threading
 import time
+import wave
 
 import numpy as np
 import onnxruntime as ort
@@ -303,6 +305,8 @@ class Ear:
         # alone could not say whether his «стоп» was on the mics over the music (2026-11-27)
         self.box.append((y.astype(np.float16), x.astype(np.float16), e.astype(np.float16), p,
                          1 * music + 2 * her_now + 4 * ref_on, raw.astype(np.int16)))
+        if REC.on:
+            REC.write(raw, x, e, 1 * music + 2 * her_now + 4 * ref_on, now)
         if music and now - self.collect_at > COLLECT_EVERY and now - self.music_since > BOX_S - 5 \
                 and os.path.exists(COLLECT_FLAG):
             # over loud music the ear cuts no phrase at all (AEC3 gates the room to -73 dB, the VAD
@@ -423,6 +427,90 @@ class Ear:
         log(f"black box: {path} ({len(items) * CHUNK / SR:.0f} s)")
         return path
 
+
+REC_DIR = os.path.join(os.environ.get("STT_LOG_DIR", "/log"), "ear-rec")
+REC_MAX = _f("rec_max", 3600.0)          # s: a recording left on stops by itself
+REC_MIN_FREE = _f("rec_min_free", 3e9)   # bytes free on the log's disk, else it stops
+TRACKS = ["mic1", "mic2", "mic3", "mic4", "mic5", "mic6", "mic7", "ref", "aec"]
+
+
+class Recorder:
+    """The black box page's recording (admin «Чёрный ящик», 2026-11-27): everything the ear gets and
+    makes, for as long as it is on - the 7 raw mics as they came, the speaker reference as AEC3
+    sees it, AEC3's output - one 9-channel wav per minute in ear-rec/<start>/, the music / her
+    voice flags in its json. The 60 s box could not hold a whole try at «стоп» over a song."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.on, self.dir, self.since, self.w, self.w_t0 = False, None, 0.0, None, 0.0
+        self.frames, self.flags, self.last_flag, self.why = 0, [], None, None
+
+    def start(self):
+        with self.lock:
+            if self.on:
+                return self.status()
+            self.since = time.time()
+            self.dir = os.path.join(REC_DIR, time.strftime("%Y%m%d-%H%M%S", time.localtime(self.since)))
+            os.makedirs(self.dir, exist_ok=True)
+            self.frames, self.flags, self.last_flag, self.why = 0, [], None, None
+            self.on = True
+            self._meta()
+            log(f"recording: {self.dir}")
+            return self.status()
+
+    def stop(self, why="asked"):
+        with self.lock:
+            if self.on:
+                self.on, self.why = False, why
+                self._close()
+                self._meta()
+                log(f"recording stopped ({why}): {self.frames / SR:.0f} s in {self.dir}")
+            return self.status()
+
+    def status(self):
+        return {"on": self.on, "dir": os.path.basename(self.dir) if self.dir else None, "since": self.since,
+                "seconds": round(self.frames / SR, 1), "stopped": self.why}
+
+    def write(self, raw, x, e, flags, now):
+        with self.lock:
+            if not self.on:
+                return
+            if now - self.since > REC_MAX:
+                self.on, self.why = False, "time limit"
+            elif self.frames % (SR * 10) < len(e) and shutil.disk_usage(REC_DIR).free < REC_MIN_FREE:
+                self.on, self.why = False, "disk almost full"
+            if not self.on:
+                self._close()
+                self._meta()
+                log(f"recording stopped ({self.why})")
+                return
+            if self.w is None or now - self.w_t0 >= 60:
+                self._close()
+                self.w_t0 = now
+                self.w = wave.open(os.path.join(self.dir, time.strftime("%H%M%S", time.localtime(now)) + ".wav"), "wb")
+                self.w.setnchannels(len(TRACKS))
+                self.w.setsampwidth(2)
+                self.w.setframerate(SR)
+            if flags != self.last_flag:
+                self.flags.append([round(self.frames / SR, 2), int(flags)])
+                self.last_flag = flags
+            side = np.clip(np.stack([x, e], axis=1) * 32767, -32767, 32767).astype(np.int16)
+            self.w.writeframes(np.ascontiguousarray(np.concatenate([raw.astype(np.int16), side], axis=1)).tobytes())
+            self.frames += len(e)
+
+    def _close(self):
+        if self.w is not None:
+            self.w.close()
+            self.w = None
+
+    def _meta(self):
+        with open(os.path.join(self.dir, "rec.json"), "w") as f:
+            json.dump({"start": self.since, "seconds": round(self.frames / SR, 1), "on": self.on, "stopped": self.why,
+                       "sr": SR, "tracks": TRACKS, "flags": self.flags,
+                       "flag_bits": {"1": "music", "2": "her voice", "4": "speaker signal"}}, f)
+
+
+REC = Recorder()
 
 EAR = {"ear": None}
 
