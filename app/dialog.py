@@ -238,6 +238,12 @@ def answer(text, person, owner=None, note=None):
         rounds = []                    # her tool calls and their results, for the history
         r = llm.stream(system("voice", person), history, person, on_chunk, on_show=show, on_tool=on_tool,
                        record=rounds)
+    except cost.PaidOff as e:
+        history.pop()
+        log(f"not to Claude: {e}: {text!r}")
+        # silent (her voice is a paid call too); the screen says why nothing happens
+        ui({"type": "hear", "state": "ignored", "text": text + "  — платный API выключен"})
+        return
     except cost.OverBudget as e:
         history.pop()                  # not answered: not in the conversation
         log("over the daily limit:", e)
@@ -301,6 +307,10 @@ LOCAL_SAY = {"unclear": "Не расслышала. Повтори, пожалу
 AVATAR_SAY = {"ascii": "Лицо из символов.", "image": "Аниме лицо.", "eq": "Эквалайзер.", "live2d": "Живая модель."}
 
 
+class _Done(Exception):
+    """A local branch finished early (its result and reply are set)."""
+
+
 def local(text, person, r):
     """A command from the router's catalog, done without Claude. Whatever it
     says goes into the history too, so Claude knows it later."""
@@ -313,10 +323,17 @@ def local(text, person, r):
         elif intent == "music_play":
             query = (r.get("query") or "").strip()
             if not query:
-                # «Ева, включи музыку» - nothing to search for: the whole phrase went
-                # to the search and «Винтаж - Ева я любила тебя» played (2026-11-23).
-                # Claude knows what was played before and can choose or ask.
-                raise LookupError("no query")
+                # «Ева, включи музыку» - nothing to search for: the whole phrase went to the search
+                # and «Винтаж - Ева я любила тебя» played (2026-11-23); then Claude asked «какую?»
+                # for $0.19 (2026-11-27). Now the home's own music library opens - pick by number.
+                import library
+                out = library.browse({"kind": "music"}, person)
+                if getattr(out, "show", None):
+                    screen.present(out.show)
+                result = getattr(out, "text", out)
+                r["_call"] = ("library_browse", {"kind": "music"})
+                reply = None if getattr(out, "show", None) else result
+                raise _Done()
             kind = r.get("kind") or "track"
             found = music.search(query, "album" if kind == "album" else "track",
                                  {"track": 1, "selection": 8, "album": 1}.get(kind, 1))
@@ -411,6 +428,8 @@ def local(text, person, r):
                 raise PermissionError("screen")
             out = result = import_module("skills.print").print_screen({}, person)
             reply = "Печатаю." if out.startswith("Отправила") else out
+    except _Done:
+        pass
     except Exception as e:
         log(f"local {intent} failed: {e} - to Claude")
         if r.get("listener"):

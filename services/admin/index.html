@@ -293,6 +293,8 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
   <button id="ls-open" class="btn" title="Правила на каждую услышанную фразу">Слушатели</button>
   <button id="pl-open" class="btn" title="Отмеченные места: откуда звук слушать, а откуда нет">Места</button>
   <button id="bx-open" class="btn" title="Запись всего, что слышит ухо: 7 микрофонов, динамик, после AEC3">Чёрный ящик</button>
+  <label class="btn" id="paid-l" title="Выключено: Ева не обращается к Claude совсем (и не прогревает кеш); локальные команды работают">
+    <input type="checkbox" id="paid"> платный API <span id="paid-usd" class="help"></span></label>
   <button id="rc-open" class="btn" title="Медиатека: папки с видео и музыкой на хабе, телевизор для фильмов">Ресурсы</button>
   <datalist id="speakers"></datalist>
 </header>
@@ -1408,6 +1410,19 @@ function bxStripWire(it) {
   document.querySelectorAll("#bx-view .bx-ph .bxr").forEach(r => r.onclick = () => seek(+r.dataset.t - 0.3));
   au.ontimeupdate = () => { const h = $("#bx-head"); if (h) h.style.left = (au.currentTime / L * 100) + "%"; };
 }
+// ---- the paid API switch (admin.py /api/paid) ----
+async function paidLoad() {
+  const s = await api("/api/paid").catch(() => null); if (!s) return;
+  $("#paid").checked = s.on; $("#paid-usd").textContent = `$${s.today.toFixed(2)} сегодня`;
+  $("#paid-l").style.color = s.on ? "" : "var(--danger)";
+}
+$("#paid").onchange = async e => {
+  try { await api("/api/paid", { on: e.target.checked }); toast(e.target.checked ? "Платный API включён" : "Платный API выключен: Claude не вызывается"); }
+  catch (er) { toast("ошибка: " + er.message); }
+  paidLoad();
+};
+paidLoad(); setInterval(paidLoad, 60000);
+
 // ---- «Ресурсы»: the media library (admin.py /api/resources, /api/mm/* -> services/music/video.py) ----
 const RC = { kind: "video", dir: "", parent: null };
 async function rcState() {

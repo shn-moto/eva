@@ -455,6 +455,8 @@ def warm_due(now=None):
     warm and the one 50 min after every brain restart, $0.56 of a day without a
     single conversation (2026-11-27)."""
     now = now or time.time()
+    if not cost.paid_on():
+        return False                     # the paid API is off (admin page)
     touched = max(LAST_VOICE[0], WARMED[0])
     if not LAST_VOICE[0] or time.strftime("%Y-%m-%d", time.localtime(LAST_VOICE[0])) \
             != time.strftime("%Y-%m-%d", time.localtime(now)):

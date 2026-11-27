@@ -897,6 +897,28 @@ MEDIA_DIR = os.environ.get("MEDIA_DIR", "/media")
 MEDIA_SETTINGS = os.environ.get("MEDIA_SETTINGS", "/settings/media.json")
 
 
+# ---- the paid API switch (app/core/cost.py paid_on): off - the brain makes no Claude call ----
+PAID = os.path.join(os.environ.get("BRAIN_DATA", "/brain"), "paid.json")
+
+
+@app.get("/api/paid")
+def paid_get():
+    s = _jload(PAID, {})
+    spend = _jload(os.path.join(os.environ.get("BRAIN_DATA", "/brain"), "spend.json"), {})
+    today = spend.get(datetime.date.today().isoformat(), {})
+    return {"on": s.get("on", True) is not False, "today": round(today.get("usd", 0.0), 2),
+            "by_channel": today.get("by_channel", {})}
+
+
+@app.post("/api/paid")
+async def paid_post(request: Request):
+    on = bool((await request.json()).get("on"))
+    with open(PAID + ".tmp", "w", encoding="utf-8") as f:
+        json.dump({"on": on, "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}, f)
+    os.replace(PAID + ".tmp", PAID)
+    return paid_get()
+
+
 # ---- «Ресурсы»: the media library's roots and the DLNA renderer (services/music/video.py reads them) ----
 @app.get("/api/resources")
 def resources_get():

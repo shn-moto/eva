@@ -24,6 +24,28 @@ WEB_SEARCH_USD = 0.01
 _lock = threading.Lock()
 
 
+# The admin page's switch «Платный API» (services/admin, /api/paid): off - no Claude call at all, no
+# cache warm; the router's local commands go on. Asked for while testing: a bug must not burn money
+# (2026-11-27, $1.21 on a day without one clever question).
+PAID_FILE = os.environ.get("EVA_PAID", "/var/lib/eva/paid.json")
+_paid = {"mtime": None, "on": True}
+
+
+def paid_on():
+    try:
+        m = os.path.getmtime(PAID_FILE)
+    except OSError:
+        return True
+    if m != _paid["mtime"]:
+        try:
+            with open(PAID_FILE, encoding="utf-8") as f:
+                _paid["on"] = json.load(f).get("on", True) is not False
+        except (OSError, ValueError):
+            _paid["on"] = True
+        _paid["mtime"] = m
+    return _paid["on"]
+
+
 class OverBudget(Exception):
     """Today's limit is spent."""
 
@@ -114,9 +136,15 @@ def today():
 
 
 def check():
-    """Before a call: raise OverBudget once today's limit is spent."""
+    """Before a call: raise OverBudget once today's limit is spent, PaidOff when the switch is off."""
+    if not paid_on():
+        raise PaidOff("the paid API is off (admin page)")
     if DAILY_LIMIT > 0 and today()["usd"] >= DAILY_LIMIT:
         raise OverBudget(f"{today()['usd']:.2f} of {DAILY_LIMIT:.2f} USD")
+
+
+class PaidOff(OverBudget):
+    """The admin page switched the paid API off."""
 
 
 def summary(days=7):

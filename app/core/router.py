@@ -108,6 +108,9 @@ SYSTEM = ("Ты классификатор фраз для домашнего г
 "ева открой видеотеку" -> {"to_eva":true,"intent":"library_open","lib":"video"}
 "покажи мультики" -> {"to_eva":true,"intent":"library_open","lib":"video"}
 "открой нашу музыку" -> {"to_eva":true,"intent":"library_open","lib":"music"}
+"переключи на музыку" -> {"to_eva":true,"intent":"library_open","lib":"music"}
+"покажи видео" -> {"to_eva":true,"intent":"library_open","lib":"video"}
+"ева включи музыку" -> {"to_eva":true,"intent":"music_play"}
 "найди в видеотеке историю игрушек" -> {"to_eva":true,"intent":"library_find","lib":"video","query":"история игрушек"}
 "включи мультик тачки" -> {"to_eva":true,"intent":"library_find","lib":"video","query":"тачки"}
 "открой первую" -> {"to_eva":true,"intent":"screen_open","n":1}

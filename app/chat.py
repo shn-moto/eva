@@ -55,6 +55,11 @@ def reply(text, person, key):
     rounds = []                    # the real tool calls and results go into the history
     try:
         out = llm.complete(system("chat", person), msgs, person, on_show=shows.append, record=rounds)
+    except cost.PaidOff as e:
+        log(f"chat: {e}")
+        with LOCK:
+            CHATS[key].pop()
+        return "Платный API сейчас выключен (админка). Умные ответы недоступны.", []
     except cost.OverBudget as e:
         log("over the daily limit:", e)
         with LOCK:
