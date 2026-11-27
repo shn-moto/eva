@@ -859,18 +859,39 @@ async def calendar_post(request: Request):
 @app.get("/api/listeners")
 def listeners_get():
     items = _jload(LST, {"listeners": []}).get("listeners", [])
-    fired = {}
+    return {"listeners": items, "log": _listener_events()}
+
+
+def _listener_events(per=12):
+    """The brain's listener lines grouped into firings: "fired on ..." opens one, its
+    "ok: ..." / "error: ..." line (the brain logs one per firing since 2026-11-27) is the
+    status, anything else in between is detail. A firing without a status yet is
+    "pending"; a line with no firing before it (the local model said no) stands alone."""
+    by = {}
     try:
         with db() as c:
-            for ts, msg in c.execute("SELECT ts, msg FROM eva_log WHERE msg LIKE 'listener %%' "
-                                     "AND ts > now() - interval '14 days' ORDER BY ts DESC LIMIT 200"):
-                m = re.match(r"listener (\S+): (.*)", msg)
-                if m:
-                    fired.setdefault(m.group(1), []).append(
-                        {"t": ts.astimezone().strftime("%d.%m %H:%M:%S"), "msg": m.group(2)[:200]})
+            rows = c.execute("SELECT ts, msg FROM eva_log WHERE msg LIKE 'listener %%' "
+                             "AND ts > now() - interval '14 days' ORDER BY ts DESC LIMIT 600").fetchall()
     except Exception:
-        pass
-    return {"listeners": items, "log": {k: v[:10] for k, v in fired.items()}}
+        return {}
+    for ts, msg in reversed(rows):
+        m = re.match(r"listener (\S+): (.*)", msg)
+        if not m:
+            continue
+        lid, text = m.group(1), m.group(2)
+        line = {"t": ts.astimezone().strftime("%d.%m %H:%M:%S"), "msg": text[:500]}
+        evs = by.setdefault(lid, [])
+        st = re.match(r"(ok|error): (.*)", text, re.S)
+        if text.startswith("fired on "):
+            evs.append(dict(line, msg=text[9:][:300], status="pending", details=[]))
+        elif st and evs and evs[-1]["status"] == "pending":
+            evs[-1]["status"], evs[-1]["result"] = st.group(1), st.group(2)[:500]
+            evs[-1]["details"].append(line)
+        elif evs and evs[-1]["status"] == "pending":
+            evs[-1]["details"].append(line)
+        else:
+            evs.append(dict(line, status="error" if st and st.group(1) == "error" else "skip", details=[line]))
+    return {k: list(reversed(v))[:per] for k, v in by.items()}
 
 
 @app.post("/api/listeners")

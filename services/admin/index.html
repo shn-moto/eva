@@ -101,6 +101,14 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .li { padding: 6px 8px; border-radius: 6px; cursor: pointer; }
 .li:hover { background: var(--sel); } .li.on { background: var(--accent-soft); } .li.off { color: var(--faint); }
 .lg { font-family: var(--mono); font-size: 11.5px; color: var(--mute); margin-top: 10px; white-space: pre-wrap; }
+.lgrow { cursor: pointer; padding: 2px 4px; border-radius: 4px; white-space: normal; }
+.lgrow:hover { background: var(--line); }
+.lgrow .st { display: inline-block; width: 1.2em; text-align: center; font-weight: 700; }
+.lgrow.ok .st { color: #3fb950; }
+.lgrow.err .st, .lgrow.err .res { color: var(--danger); }
+.lgrow.pend .st, .lgrow.skip { opacity: .75; }
+.lgdet { display: none; margin: 2px 0 6px 1.6em; padding: 6px 8px; border-left: 2px solid var(--line); white-space: pre-wrap; }
+.lgdet.open { display: block; }
 .help { color: var(--mute); font-size: 12px; }
 .rs-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: min(1100px, 100%);
           display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -1060,7 +1068,12 @@ function lsRender() {
   document.querySelectorAll("#ls-list .li").forEach(e => e.onclick = () => { lsGrab(); LS.cur = +e.dataset.i; lsRender(); });
   const x = LS.items[LS.cur];
   if (!x) { $("#ls-edit").innerHTML = ""; return; }
-  const lg = (LS.log[x.id] || []).map(l => `${l.t}  ${l.msg}`).join("\n");
+  // firings with their status (admin.py _listener_events): a row opens what happened, the error's text too
+  const ST = { ok: ["✓", "ok", "выполнено"], error: ["✗", "err", "ошибка"], pending: ["…", "pend", "без статуса"], skip: ["–", "skip", "не сработал"] };
+  const lg = (LS.log[x.id] || []).map((l, i) => { const s = ST[l.status] || ST.pending;
+    return `<div class="lgrow ${s[1]}" data-n="${i}" title="${s[2]} — нажми, чтобы раскрыть"><span class="st">${s[0]}</span> ${esc(l.t)}  ${esc(l.msg)}${
+      l.result ? `<span class="res"> → ${esc(l.result)}</span>` : ""}</div><div class="lgdet" id="lgd-${i}">${
+      (l.details || []).map(d => esc(`${d.t}  ${d.msg}`)).join("\n") || "статуса нет: срабатывание до 27.11 или действие ещё идёт"}</div>`; }).join("");
   const em = { label: "angry", window: 300, min_count: 3, share: 0.6, min_score: 0.5, neutral: true, ...(x.emotion || {}) };
   $("#ls-edit").innerHTML = `<div class="form">
     <span>Название</span><input data-k="name" value="${esc(x.name || "")}">
@@ -1093,7 +1106,8 @@ function lsRender() {
     <span class="full" style="margin-top:8px;font-weight:600">Проверить на фразе</span>
     <input class="full" id="ls-sample" placeholder="фраза, как её распознала бы Ева">
     <span></span><span><button class="btn" id="ls-test">Проверить</button> <button class="btn" id="ls-del" style="color:var(--danger)">Удалить слушателя</button> <span id="ls-res" class="help"></span></span>
-  </div><div class="lg">${lg ? "Последние срабатывания:\n" + esc(lg) : "Срабатываний за 14 дней нет."}</div>`;
+  </div><div class="lg">${lg ? "Последние срабатывания (нажми строку — подробности):" + lg : "Срабатываний за 14 дней нет."}</div>`;
+  document.querySelectorAll("#ls-edit .lgrow").forEach(e => e.onclick = () => $("#lgd-" + e.dataset.n).classList.toggle("open"));
   const whoSel = () => { $("#ls-who-name").style.display = $("#ls-who").value === "person" ? "" : "none";
     $("#ls-guess-l").style.display = $("#ls-who").value === "person" ? "" : "none";
     if ($("#ls-who").value === "person") $("#ls-who-name").focus(); };

@@ -309,7 +309,11 @@ def local(text, person, r):
                                  {"track": 1, "selection": 8, "album": 1}.get(kind, 1))
             if not found:
                 reply = f"Не нашла ничего по запросу «{query}»."
+                if r.get("listener"):
+                    log(f"listener {r['listener']}: error: nothing found for {query!r}")
             else:
+                if r.get("listener"):
+                    found[0]["listener"] = r["listener"]      # music.listener_log: ok on the first sound
                 p.play(found)
                 t = found[0]
                 # silent: the history still learns what plays (the call below)
@@ -361,6 +365,8 @@ def local(text, person, r):
             reply = "Печатаю." if out.startswith("Отправила") else out
     except Exception as e:
         log(f"local {intent} failed: {e} - to Claude")
+        if r.get("listener"):
+            log(f"listener {r['listener']}: error: {intent}: {e} - passed to Claude")
         answer(text, person)
         return
     log(f"local {intent}: {reply!r}")

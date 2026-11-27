@@ -67,12 +67,16 @@ def info(url):
     """Full facts of one track (the flat search has no artist, length, cover)."""
     r = subprocess.run(["yt-dlp", "-J", "--no-playlist", "--skip-download", url],
                        capture_output=True, text=True, timeout=60)
+    why = None
     if r.returncode:
         err(f"info {url}: yt-dlp {r.returncode}: {r.stderr.strip()[-400:]}")
+        # its last ERROR line ("This video is not available") - the brain shows it as the reason
+        lines = [l for l in r.stderr.splitlines() if l.startswith("ERROR:")]
+        why = re.sub(r"^ERROR:\s*(\[\w+\]\s*[\w-]+:\s*)?", "", lines[-1])[:200] if lines else f"yt-dlp {r.returncode}"
     j = json.loads(r.stdout or "{}") or {}        # a failed yt-dlp prints "null"
     return {"title": j.get("track") or j.get("title"), "artist": j.get("artist") or j.get("uploader"),
             "album": j.get("album"), "year": j.get("release_year"), "duration": j.get("duration"),
-            "thumb": j.get("thumbnail"), "url": url}
+            "thumb": j.get("thumbnail"), "url": url, "error": why}
 
 
 BEATS = {}             # url -> {"bpm", "first"}: a track is measured once

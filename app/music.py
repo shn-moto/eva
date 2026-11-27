@@ -48,7 +48,21 @@ def _get(path, timeout=150):
 
 
 def search(query, kind="track", limit=1):
-    return _get(f"/search?q={urllib.parse.quote(query)}&kind={kind}&limit={limit}")
+    """One track comes with the next search hits as `alts`: YouTube Music's first hit can be a
+    video that is "not available" here, and a listener's song never played (2026-11-27 12:23)."""
+    spare = 3 if kind == "track" and limit == 1 else 0
+    found = _get(f"/search?q={urllib.parse.quote(query)}&kind={kind}&limit={limit + spare}")
+    if spare and found:
+        found[0]["alts"] = found[1:]
+        found = found[:1]
+    return found
+
+
+def listener_log(t, ok, what):
+    """A listener's music request ends here: its status line for the admin page."""
+    lid = t.pop("listener", None)
+    if lid:
+        log(f"listener {lid}: {'ok' if ok else 'error'}: {what}")
 
 
 class Player:
@@ -85,6 +99,9 @@ class Player:
             # 3-5 s earlier, while shn-linux finds the stream (the progress ran ahead)
             self.loading = False
             self.started = time.time()
+            if self.queue:
+                t = self.queue[self.index]
+                listener_log(t, True, f"playing {t.get('title')!r}")
             self.view()
         elif line.startswith(("@E", "@I", "@P")) and line != "@P 2":
             log(f"music: mpg123 {line[:160]}")    # errors, stream info, state: why a track stopped
@@ -132,6 +149,8 @@ class Player:
         try:
             t.update({k: v for k, v in _get("/info?url=" + urllib.parse.quote(t["url"], safe=""), 60).items() if v})
             t["info"] = True
+            if t.get("error"):
+                log(f"music: info {t.get('title')!r}: {t['error']}")
         except (OSError, ValueError) as e:
             log(f"music: info {t.get('title')!r}: {e}")
         if self.queue and self.queue[self.index] is t:
@@ -160,6 +179,18 @@ class Player:
         with self.lock:
             if not self.playing:
                 return
+            if played < EARLY_END and t.get("alts"):
+                # it would not play even twice: the next search hit instead of silence
+                nxt = dict(t["alts"][0], alts=t["alts"][1:])
+                if t.get("listener"):
+                    nxt["listener"] = t["listener"]
+                log(f"music: {t.get('title')!r} would not play ({t.get('error') or 'broke off'}) - "
+                    f"the next hit {nxt.get('title')!r}")
+                self.queue[self.index] = nxt
+                self._load()
+                return
+            if played < EARLY_END:
+                listener_log(t, False, f"{t.get('title')!r} would not play: {t.get('error') or 'the stream broke off'}")
             if self.index + 1 < len(self.queue):
                 self.index += 1
                 self._load()

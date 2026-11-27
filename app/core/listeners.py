@@ -207,6 +207,10 @@ def _act(x, ts, text, name, kids, extra=None, why=None):
     log(f"listener {x['id']}: fired on {who}: " + (f"{why}: " if why else "") + f"{text!r}"
         + (f" (children: {', '.join(kids)})" if kids else ""))
     heard = f"{why}: {text}" if why else f"«{text}»"
+    # every firing ends in a status line "listener <id>: ok: ..." / "error: ..." (the admin page
+    # shows it): «давайте жить дружно» fired three times and nothing said the song never played
+    # (2026-11-27). Music reports from the player, when the sound starts or the track fails.
+    status = lambda ok, what: log(f"listener {x['id']}: {'ok' if ok else 'error'}: {what}")
     if action == "say" and msg:
         import dialog
         dialog.VOICE.say(msg)
@@ -214,19 +218,23 @@ def _act(x, ts, text, name, kids, extra=None, why=None):
                                                                f"{heard} ({who})] {msg}"})
         dialog.state["last_spoke"] = time.time()
         dialog.save_history()
+        status(True, f"said {msg!r}")
     elif action == "telegram" and msg and x.get("to"):
         from skills.home import send
         from core.identity import Person
         try:
-            send({"name": x["to"], "text": msg}, Person("Ева"))
+            out = send({"name": x["to"], "text": msg}, Person("Ева"))
+            status(True, f"telegram to {x['to']}: {str(out)[:150]}")
         except Exception as e:
-            log(f"listener {x['id']}: telegram: {e}")
+            status(False, f"telegram to {x['to']}: {e}")
     elif action == "music" and msg:
         # exactly the query written, no interpretation, no Claude: «Наутилус - Казанова»
         import dialog
         from core.identity import Person
         dialog.WORK.put((f"[слушатель «{x.get('name')}»] включи {msg}", Person("Ева", channel="voice"),
-                         {"intent": "music_play", "query": msg, "kind": "track"}))
+                         {"intent": "music_play", "query": msg, "kind": "track", "listener": x["id"]}))
+    elif action == "log" or not msg:
+        status(True, "logged")
     elif action == "eva" and msg:
         import dialog
         from core.identity import Person
@@ -235,12 +243,16 @@ def _act(x, ts, text, name, kids, extra=None, why=None):
         r = router.route(msg, named=True, in_dialog=True)
         if r and r.get("intent") not in (None, "claude", "ignore", "unclear", "ack"):
             log(f"listener {x['id']}: by the router: {r['intent']} {({k: v for k, v in r.items() if k not in ('intent', 'ms')})}")
-            dialog.WORK.put((f"[слушатель «{x.get('name')}»] {msg}", Person("Ева", channel="voice"), r))
+            dialog.WORK.put((f"[слушатель «{x.get('name')}»] {msg}", Person("Ева", channel="voice"),
+                             dict(r, listener=x["id"])))
+            if r["intent"] != "music_play":          # music reports itself when it sounds
+                status(True, f"done locally: {r['intent']}")
             return
         dialog.WORK.put((msg, Person("Ева", channel="voice"), None,
                          f"[система: это сработал слушатель «{x.get('name')}». Услышано: {heard} "
                          f"({who}). Недавно дома говорили:\n{_context(ts)}\nСделай, что сказано; "
                          f"если делать нечего - ответь <молчу>]"))
+        status(True, "passed to Eva (Claude)")
 
 
 def _try(x, ts, text, name, known, child, label=None, near=None, waited=False):
@@ -266,7 +278,7 @@ def _try(x, ts, text, name, known, child, label=None, near=None, waited=False):
     try:
         _act(x, ts, text, name, kids)
     except Exception as e:
-        log(f"listener {x['id']}: {e}")
+        log(f"listener {x['id']}: error: {e!r}")
 
 
 def _check(ts, text, name, known, child, label, near):
@@ -321,7 +333,7 @@ def _try_emo(x, now):
         _act(x, now, text, who, kids, why=why,
              extra={"emotion": EMO_RU.get(lab, lab), "count": len(hits), "total": len(pool), "minutes": f"{win / 60:g}"})
     except Exception as e:
-        log(f"listener {x['id']}: {e}")
+        log(f"listener {x['id']}: error: {e!r}")
 
 
 def _emo_add(p, ev, now):
