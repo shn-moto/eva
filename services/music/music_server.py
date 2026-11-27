@@ -403,7 +403,9 @@ class H(BaseHTTPRequestHandler):
 
 
 H.do_HEAD = lambda self: (video.serve_file(self, self.path.split("?")[0][len("/video/f/"):])
-                          if self.path.startswith("/video/f/") else self._json(404, {}))
+                          if self.path.startswith("/video/f/") else
+                          video.serve_remux(self, self.path.split("?")[0][len("/video/t/"):])
+                          if self.path.startswith("/video/t/") else self._json(404, {}))
 
 
 def self_update(every=24 * 3600):

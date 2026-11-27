@@ -11,6 +11,8 @@ Settings: SETTINGS (json, written by the admin page «Ресурсы»):
     GET /library/poster?kind=..&path=<p> -> image: a film's frame / a track's embedded cover; a folder: its
                                             cover.jpg (poster.jpg, folder.jpg) or its first file's
     GET /video/f/<token>.<ext>       -> the file itself with Range (what the renderer fetches)
+    GET /video/t/<token>.ts          -> the film remuxed live: video as it is, the sound made MP2 (MPEG-TS),
+                                        a start time by DLNA TimeSeekRange (npt=) or by a byte Range
     GET /dlna/renderers              -> [{"name","url"}]: MediaRenderers answering SSDP
     GET /dlna/play?path=<p>[&all=1][&renderer=<url>]   -> a film, or the folder from it on, as a series
     GET /dlna/control?action=pause|resume|stop|next|previous|seek[&to=hh:mm:ss]
@@ -245,8 +247,83 @@ def _self(renderer):
         s.close()
 
 
+# The TV's DLNA player plays no AC3 / E-AC3 / DTS - a film had picture and silence; MP2 sounded
+# (2026-11-27, TP Vision). Such films go through ffmpeg: the video copied, the sound -> MP2 stereo.
+PLAYABLE_AUDIO = tuple(x for x in os.environ.get("DLNA_AUDIO", "mp2,mp3").split(",") if x)
+TS_MIME = "video/vnd.dlna.mpeg-tts"
+
+
+def audio_track(path):
+    """(stream index, codec) of the sound to play: the first Russian track, else the first one."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
+                        "stream=index,codec_name:stream_tags=language", "-of", "json", path],
+                       capture_output=True, text=True, timeout=30)
+    try:
+        st = json.loads(r.stdout).get("streams") or []
+    except ValueError:
+        st = []
+    if not st:
+        return None, None
+    pick = next((s for s in st if (s.get("tags") or {}).get("language", "").lower() in ("rus", "ru")), st[0])
+    return pick["index"], pick.get("codec_name")
+
+
+def needs_remux(path):
+    _, codec = audio_track(path)
+    return bool(codec) and codec not in PLAYABLE_AUDIO
+
+
 def file_url(path, renderer):
+    if needs_remux(path):
+        return f"{_self(renderer)}/video/t/{token(path)}.ts"
     return f"{_self(renderer)}/video/f/{token(path)}{os.path.splitext(path)[1].lower()}"
+
+
+def serve_remux(h, tok):
+    """The film through ffmpeg (video copied, sound -> MP2) as MPEG-TS. A seek comes as a start
+    time (TimeSeekRange.dlna.org: npt=<s>-) or as a byte offset, mapped onto time by the file's size."""
+    try:
+        p = inside(untoken(tok))
+    except (ValueError, UnicodeDecodeError):
+        p = None
+    if not p or not os.path.isfile(p):
+        return h._json(404, {"error": "нет такого файла"})
+    dur = duration(p)
+    start, ts_hdr = 0.0, None
+    m = re.search(r"npt=([\d.:]+)-", h.headers.get("TimeSeekRange.dlna.org", ""))
+    if m:
+        v = m.group(1)
+        start = _secs(v) if ":" in v else float(v)
+        ts_hdr = f"npt={start:.3f}-{dur:.3f}/{dur:.3f}" if dur else None
+    else:
+        b = re.match(r"bytes=(\d+)-", h.headers.get("Range", ""))
+        if b and int(b.group(1)) > 0 and dur:
+            start = dur * int(b.group(1)) / max(1, os.path.getsize(p))
+    start = max(0.0, min(start, max(0.0, dur - 5))) if dur else start
+    S["base"] = start if S["queue"] and S["queue"][S["index"]] == p else 0.0
+    h.send_response(200)
+    h.send_header("Content-Type", TS_MIME)
+    h.send_header("transferMode.dlna.org", "Streaming")
+    h.send_header("contentFeatures.dlna.org", "DLNA.ORG_PN=MPEG_TS_HD_NA_ISO;DLNA.ORG_OP=10;DLNA.ORG_CI=1;"
+                                              "DLNA.ORG_FLAGS=01700000000000000000000000000000")
+    if ts_hdr:
+        h.send_header("TimeSeekRange.dlna.org", ts_hdr)
+    h.end_headers()
+    if h.command == "HEAD":
+        return
+    aidx, _ = audio_track(p)
+    ff = subprocess.Popen(["ffmpeg", "-v", "error", "-ss", f"{start:.2f}", "-i", p, "-map", "0:v:0",
+                           "-map", f"0:{aidx}", "-c:v", "copy", "-c:a", "mp2", "-b:a", "256k", "-ac", "2",
+                           "-ar", "48000", "-f", "mpegts", "pipe:1"], stdout=subprocess.PIPE, stderr=sys.stderr)
+    err(f"remux from {start:.0f} s: {os.path.basename(p)}")
+    try:
+        while chunk := ff.stdout.read(188 * 1400):
+            h.wfile.write(chunk)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    finally:
+        if ff.poll() is None:
+            ff.kill()
 
 
 def serve_file(h, tok):
@@ -361,7 +438,7 @@ def _secs(t):
 
 
 S = {"renderer": None, "queue": [], "index": 0, "state": "idle", "pos": 0.0, "dur": 0.0, "seen_play": False,
-     "stopped_by_us": False, "at": 0.0}
+     "stopped_by_us": False, "at": 0.0, "base": 0.0}
 _slock = threading.Lock()
 
 
@@ -376,14 +453,24 @@ def _start(i):
     p = S["queue"][i]
     url = file_url(p, S["renderer"])
     title = os.path.splitext(os.path.basename(p))[0]
-    mime = MIME.get(os.path.splitext(p)[1].lower(), "video/x-matroska")
+    remux = "/video/t/" in url
+    mime = TS_MIME if remux else MIME.get(os.path.splitext(p)[1].lower(), "video/x-matroska")
+    # time seek declared for the remuxed stream (DLNA.ORG_OP=10): «перемотай» comes as npt=
+    pinfo = f"http-get:*:{mime}:" + ("DLNA.ORG_OP=10;DLNA.ORG_CI=1" if remux else "*")
     didl = (f'<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" '
             f'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="1" parentID="0" restricted="1">'
             f'<dc:title>{escape(title)}</dc:title><upnp:class>object.item.videoItem.movie</upnp:class>'
-            f'<res protocolInfo="http-get:*:{mime}:*">{escape(url)}</res></item></DIDL-Lite>')
+            f'<res protocolInfo="{pinfo}">{escape(url)}</res></item></DIDL-Lite>')
+    try:
+        # the TV answers 500 to a new file while one plays (2026-11-27): stop it first
+        S["stopped_by_us"] = True
+        soap(S["renderer"], "Stop")
+    except OSError:
+        pass
     soap(S["renderer"], "SetAVTransportURI", f"<CurrentURI>{escape(url)}</CurrentURI><CurrentURIMetaData>{escape(didl)}</CurrentURIMetaData>")
     soap(S["renderer"], "Play", "<Speed>1</Speed>")
-    S.update(index=i, state="starting", pos=0.0, dur=duration(p), seen_play=False, stopped_by_us=False, at=time.time())
+    S.update(index=i, state="starting", pos=0.0, dur=duration(p), seen_play=False, stopped_by_us=False, at=time.time(),
+             base=0.0)
     err(f"play {i + 1}/{len(S['queue'])}: {p}")
 
 
@@ -455,6 +542,8 @@ def watch():
                 err(f"renderer: {e}")
                 continue
             pos = _secs(_tag(pi, "RelTime"))
+            if S["base"] and pos < S["base"] - 5:
+                pos += S["base"]          # a remuxed stream started at a seek point counts from there
             if st in ("PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING"):
                 S["seen_play"] = S["seen_play"] or st == "PLAYING"
                 S["state"] = {"PLAYING": "playing", "PAUSED_PLAYBACK": "paused"}.get(st, "starting")
@@ -501,6 +590,9 @@ def route(h, path, q):
             return True
         if path.startswith("/video/f/"):
             serve_file(h, path[len("/video/f/"):])
+            return True
+        if path.startswith("/video/t/"):
+            serve_remux(h, path[len("/video/t/"):])
             return True
         if path == "/dlna/renderers":
             return h._json(200, renderers()) or True
