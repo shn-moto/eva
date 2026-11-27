@@ -82,7 +82,8 @@ def listener_log(t, ok, what):
     """A listener's music request ends here: its status line for the admin page."""
     lid = t.pop("listener", None)
     if lid:
-        log(f"listener {lid}: {'ok' if ok else 'error'}: {what}")
+        from core.listeners import tag
+        log(f"{tag(lid)}: {'ok' if ok else 'error'}: {what}")
 
 
 class Player:

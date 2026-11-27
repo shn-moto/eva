@@ -212,25 +212,41 @@ def _match(x, ts, text, name, known, child, label=None, near=None):
     return True, kids
 
 
-def _act(x, ts, text, name, kids, extra=None, why=None):
-    """`extra`: more {placeholders}; `why`: what fired it, when not one phrase (a run of emotion)."""
+KINDS = {"listener": "слушатель", "watcher": "сценарий камеры"}
+
+
+def tag(ref):
+    """A firing's id as the music / dialog paths carry it -> its log prefix: "watcher:<id>" (a camera
+    scenario, core/watchers.py) -> "watcher <id>", a plain id -> "listener <id>"."""
+    kind, _, xid = str(ref).partition(":")
+    return f"{kind} {xid}" if xid and kind in KINDS else f"listener {ref}"
+
+
+def _act(x, ts, text, name, kids, extra=None, why=None, kind="listener", context=None):
+    """`extra`: more {placeholders}; `why`: what fired it, when not one phrase (a run of emotion).
+    kind="watcher": a camera scenario (core/watchers.py) - the same actions, its own log lines;
+    `context` then replaces the recent phrases in an instruction to her."""
+    ref = x["id"] if kind == "listener" else f"{kind}:{x['id']}"
+    pre = tag(ref)
+    ru = KINDS[kind]
     who = name or "неизвестный голос"
     msg = (x.get("text") or "").replace("{phrase}", text).replace("{who}", who) \
         .replace("{children}", ", ".join(kids))
     for k, v in (extra or {}).items():
         msg = msg.replace("{" + k + "}", str(v))
     action = x.get("action", "log")
-    log(f"listener {x['id']}: fired on {who}: " + (f"{why}: " if why else "") + f"{text!r}"
+    log(f"{pre}: fired on {who}: " + (f"{why}: " if why else "") + f"{text!r}"
         + (f" (children: {', '.join(kids)})" if kids else ""))
     heard = f"{why}: {text}" if why else f"«{text}»"
     # every firing ends in a status line "listener <id>: ok: ..." / "error: ..." (the admin page
     # shows it): «давайте жить дружно» fired three times and nothing said the song never played
     # (2026-11-27). Music reports from the player, when the sound starts or the track fails.
-    status = lambda ok, what: log(f"listener {x['id']}: {'ok' if ok else 'error'}: {what}")
+    status = lambda ok, what: log(f"{pre}: {'ok' if ok else 'error'}: {what}")
     if action == "say" and msg:
         import dialog
         dialog.VOICE.say(msg)
-        dialog.history.append({"role": "assistant", "content": f"[слушатель «{x.get('name')}»: услышала "
+        dialog.history.append({"role": "assistant", "content": f"[{ru} «{x.get('name')}»: "
+                                                               f"{'услышала ' if kind == 'listener' else ''}"
                                                                f"{heard} ({who})] {msg}"})
         dialog.state["last_spoke"] = time.time()
         dialog.save_history()
@@ -247,8 +263,8 @@ def _act(x, ts, text, name, kids, extra=None, why=None):
         # exactly the query written, no interpretation, no Claude: «Наутилус - Казанова»
         import dialog
         from core.identity import Person
-        dialog.WORK.put((f"[слушатель «{x.get('name')}»] включи {msg}", Person("Ева", channel="voice"),
-                         {"intent": "music_play", "query": msg, "kind": "track", "listener": x["id"],
+        dialog.WORK.put((f"[{ru} «{x.get('name')}»] включи {msg}", Person("Ева", channel="voice"),
+                         {"intent": "music_play", "query": msg, "kind": "track", "listener": ref,
                           # the name chosen on the admin page: a link's own name is "watch" until /info
                           # answers (the log and the screen said 'watch', 2026-11-27 16:11)
                           "title": x.get("track") if x.get("trackUrl") == msg.strip() else None}))
@@ -261,16 +277,17 @@ def _act(x, ts, text, name, kids, extra=None, why=None):
         # Наутилус», «громче», «распечатай это») is done locally, free; Claude only for the rest
         r = router.route(msg, named=True, in_dialog=True)
         if r and r.get("intent") not in (None, "claude", "ignore", "unclear", "ack"):
-            log(f"listener {x['id']}: by the router: {r['intent']} {({k: v for k, v in r.items() if k not in ('intent', 'ms')})}")
-            dialog.WORK.put((f"[слушатель «{x.get('name')}»] {msg}", Person("Ева", channel="voice"),
-                             dict(r, listener=x["id"])))
+            log(f"{pre}: by the router: {r['intent']} {({k: v for k, v in r.items() if k not in ('intent', 'ms')})}")
+            dialog.WORK.put((f"[{ru} «{x.get('name')}»] {msg}", Person("Ева", channel="voice"),
+                             dict(r, listener=ref)))
             if r["intent"] != "music_play":          # music reports itself when it sounds
                 status(True, f"done locally: {r['intent']}")
             return
         dialog.WORK.put((msg, Person("Ева", channel="voice"), None,
-                         f"[система: это сработал слушатель «{x.get('name')}». Услышано: {heard} "
-                         f"({who}). Недавно дома говорили:\n{_context(ts)}\nСделай, что сказано; "
-                         f"если делать нечего - ответь <молчу>]"))
+                         f"[система: это сработал {ru} «{x.get('name')}». "
+                         + (f"Услышано: {heard} ({who}). Недавно дома говорили:\n{_context(ts)}"
+                            if context is None else f"Событие: {heard} ({who}). {context}")
+                         + "\nСделай, что сказано; если делать нечего - ответь <молчу>]"))
         status(True, "passed to Eva (Claude)")
 
 

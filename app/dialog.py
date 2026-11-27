@@ -340,7 +340,7 @@ def local(text, person, r):
             if not found:
                 reply = f"Не нашла ничего по запросу «{query}»."
                 if r.get("listener"):
-                    log(f"listener {r['listener']}: error: nothing found for {query!r}")
+                    log(f"{listeners.tag(r['listener'])}: error: nothing found for {query!r}")
             else:
                 if r.get("listener"):
                     found[0]["listener"] = r["listener"]      # music.listener_log: ok on the first sound
@@ -436,7 +436,7 @@ def local(text, person, r):
     except Exception as e:
         log(f"local {intent} failed: {e} - to Claude")
         if r.get("listener"):
-            log(f"listener {r['listener']}: error: {intent}: {e} - passed to Claude")
+            log(f"{listeners.tag(r['listener'])}: error: {intent}: {e} - passed to Claude")
         answer(text, person)
         return
     log(f"local {intent}: {reply!r}")

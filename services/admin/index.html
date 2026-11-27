@@ -305,6 +305,14 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
 .ey-face.known { color: var(--ink); font-weight: 600; }
 .ey-chip { display: inline-block; padding: 1px 8px; border-radius: 10px; background: var(--accent-soft); color: var(--accent);
   margin: 0 4px 4px 0; font-size: 12px; }
+#ey-w { display: grid; grid-template-columns: 240px 1fr; min-height: 200px; flex: 1; }
+#ey-w[hidden] { display: none; }
+#ey-w > div { min-height: 0; overflow: auto; padding: 10px 14px; }
+#ey-w > div + div { border-left: 1px solid var(--line); }
+#ew-list .li { cursor: pointer; padding: 5px 8px; border-radius: 6px; }
+#ew-list .li:hover, #ew-list .li.on { background: var(--line); }
+#ew-list .li.off { color: var(--mute); }
+#ey-tj.on, #ey-tw.on { background: var(--accent-soft); color: var(--accent); }
 #ey-big { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: flex; align-items: center; justify-content: center; z-index: 60; }
 #ey-big[hidden] { display: none; }
 #ey-big img { max-width: 94vw; max-height: 94vh; }
@@ -377,15 +385,20 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
 <div id="ey" class="modal" hidden>
   <div class="rs-box" style="width:min(1300px,100%)">
     <div class="bar"><span class="title">Глаза</span><span class="sub" id="ey-sub">камеры: движение, лица, кто это (по базе лиц photolib)</span>
+      <label class="tog" title="Выключено: камеры только показывают картинку — ни событий, ни лиц, ни сценариев"><input type="checkbox" id="ey-motion-on"> движение</label>
+      <label class="tog" title="Искать лица и узнавать по базе photolib"><input type="checkbox" id="ey-faces-on"> лица</label>
       <span style="flex:1"></span><button class="btn" id="ey-add">Добавить камеру</button><button class="btn primary" id="ey-save">Сохранить</button>
       <button class="btn" id="ey-close">Закрыть</button></div>
     <div id="ey-cams"></div>
-    <div class="bar" style="border-top:1px solid var(--line)"><b>Журнал</b>
-      <button class="btn" id="ey-prev">‹</button><input type="date" id="ey-day"><button class="btn" id="ey-next">›</button>
+    <div class="bar" style="border-top:1px solid var(--line)"><button class="btn on" id="ey-tj">Журнал</button><button class="btn" id="ey-tw">Сценарии</button>
+      <span id="ey-jbar" style="display:contents"><button class="btn" id="ey-prev">‹</button><input type="date" id="ey-day"><button class="btn" id="ey-next">›</button>
       <select id="ey-cam"><option value="">все камеры</option></select>
       <label class="tog"><input type="checkbox" id="ey-people"> только с лицами</label>
-      <span class="help" id="ey-count"></span></div>
+      <span class="help" id="ey-count"></span></span>
+      <span id="ey-wbar" style="display:none"><button class="btn" id="ew-new">Новый</button> <button class="btn primary" id="ew-save">Сохранить</button>
+        <span class="help">что делать, когда камера что-то видит — те же действия, что у слушателей</span></span></div>
     <div id="ey-log"></div>
+    <div id="ey-w" hidden><div id="ew-list"></div><div id="ew-edit"></div></div>
   </div>
 </div>
 <div id="ey-big" hidden><img alt=""></div>
@@ -1639,6 +1652,8 @@ function eyStatus(id) {
   const st = EY.state[id];
   if (!st) return { cls: "off", txt: "не запущена" };
   if (!st.online) return { cls: "off", txt: "нет связи: " + (st.error || "") };
+  const c = EY.cams.find(x => x.id === id) || {};
+  if (!$("#ey-motion-on").checked || c.watch === false) return { cls: "", txt: `слежение выключено · ${st.fps} к/с` };
   const ppl = st.event && st.event.people.length ? " · " + st.event.people.join(", ") : "";
   const fc = st.faces.length ? ` · лиц: ${st.faces.length}` : "";
   return { cls: st.event ? "mv" : "", txt: `${st.event ? "движение" : "тихо"} ${(st.motion * 100).toFixed(1)}% · ${st.fps} к/с${fc}${ppl}` };
@@ -1654,8 +1669,9 @@ function eyRender() {
         <span>Адрес</span><input type="text" data-k="url" value="${esc(c.url)}" placeholder="http://камера:8080/stream или rtsp://…">
         <span>Движение от</span><span><input class="num" style="width:4em" data-k="motion" value="${((c.motion ?? 0.01) * 100).toFixed(1)}">% кадра
           <span class="help" data-now></span></span>
-        <span></span><span><label class="tog"><input type="checkbox" data-k="on" ${c.on !== false ? "checked" : ""}> включена</label>
-          <label class="tog"><input type="checkbox" data-k="faces" ${c.faces !== false ? "checked" : ""}> лица</label></span>
+        <span></span><span><label class="tog" title="Подключаться к камере (картинка)"><input type="checkbox" data-k="on" ${c.on !== false ? "checked" : ""}> камера</label>
+          <label class="tog" title="Следить за движением: события, журнал, сценарии"><input type="checkbox" data-k="watch" ${c.watch !== false ? "checked" : ""}> движение</label>
+          <label class="tog" title="Искать и узнавать лица"><input type="checkbox" data-k="faces" ${c.faces !== false ? "checked" : ""}> лица</label></span>
         <span></span><span><button class="btn sm" data-a="probe">Проверить</button> <button class="btn sm" data-a="del" style="color:var(--danger)">Удалить</button>
           <span class="help" data-r></span></span>
       </div></div>`;
@@ -1737,13 +1753,14 @@ $("#ey-open").onclick = async () => {
   $("#ey").hidden = false;
   const conf = await api("/api/eyes/cameras").catch(() => ({ cameras: [] }));
   EY.cams = conf.cameras.map(c => ({ ...c, saved: true }));
+  $("#ey-motion-on").checked = conf.motion_on !== false; $("#ey-faces-on").checked = conf.faces_on !== false;
   $("#ey-cam").innerHTML = '<option value="">все камеры</option>' + EY.cams.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
   if (!$("#ey-day").value) $("#ey-day").value = eyToday();
   eyRender(); eyPoll(); eyLog();
 };
 $("#ey-add").onclick = () => {
   let n = EY.cams.length + 1; while (EY.cams.some(c => c.id === "cam" + n)) n++;
-  EY.cams.push({ id: "cam" + n, name: "", url: "", on: true, motion: 0.01, faces: true }); eyRender();
+  EY.cams.push({ id: "cam" + n, name: "", url: "", on: true, watch: true, motion: 0.01, faces: true }); eyRender();
 };
 $("#ey-save").onclick = async () => {
   if (document.activeElement) document.activeElement.blur();
@@ -1754,6 +1771,112 @@ $("#ey-save").onclick = async () => {
   } catch (e) { toast("Не сохранилось: " + e.message); }
 };
 $("#ey-close").onclick = () => { $("#ey").hidden = true; clearTimeout(EY.timer); clearTimeout(EY.logTimer); };
+
+// ---- the switches for all cameras (eyes.json motion_on / faces_on) ----
+["motion", "faces"].forEach(k => $(`#ey-${k}-on`).onchange = async e => {
+  try {
+    await api("/api/eyes/cameras", { [`${k}_on`]: e.target.checked });
+    toast(`${k === "motion" ? "Слежение за движением" : "Лица"} ${e.target.checked ? "включено" : "выключено"} на всех камерах`);
+    eyStates();
+  } catch (er) { toast("ошибка: " + er.message); e.target.checked = !e.target.checked; }
+});
+
+// ---- camera scenarios (admin.py /api/watchers -> app/core/watchers.py) ----
+const EW = { items: [], log: {}, cur: 0 };
+const WON = { motion: "движение началось", person: "узнан человек", unknown: "незнакомое лицо", quiet: "тихо N минут после движения" };
+function eyTab(w) {
+  $("#ey-tj").classList.toggle("on", !w); $("#ey-tw").classList.toggle("on", w);
+  $("#ey-jbar").style.display = w ? "none" : "contents"; $("#ey-wbar").style.display = w ? "" : "none";
+  $("#ey-log").hidden = w; $("#ey-w").hidden = !w;
+  $("#ey-cams").style.maxHeight = w ? "26vh" : "";          // the editor needs the room
+  if (w) ewLoad();
+}
+$("#ey-tj").onclick = () => eyTab(false);
+$("#ey-tw").onclick = () => eyTab(true);
+async function ewLoad() {
+  const [r] = await Promise.all([api("/api/watchers").catch(e => ({ watchers: [], log: {}, error: e.message })), loadFamily()]);
+  EW.items = r.watchers; EW.log = r.log || {}; EW.cur = Math.min(EW.cur, Math.max(0, EW.items.length - 1)); ewRender();
+}
+function ewRender() {
+  $("#ew-list").innerHTML = EW.items.map((x, i) =>
+    `<div class="li${i === EW.cur ? " on" : ""}${x.enabled ? "" : " off"}" data-i="${i}">${x.enabled ? "●" : "○"} ${esc(x.name || x.id)}</div>`).join("")
+    || '<div class="help">Сценариев нет — «Новый».</div>';
+  document.querySelectorAll("#ew-list .li").forEach(e => e.onclick = () => { ewGrab(); EW.cur = +e.dataset.i; ewRender(); });
+  const x = EW.items[EW.cur];
+  if (!x) { $("#ew-edit").innerHTML = ""; return; }
+  const ST = { ok: ["✓", "ok"], error: ["✗", "err"], pending: ["…", "pend"], skip: ["–", "skip"] };
+  const lg = (EW.log[x.id] || []).map((l, i) => { const s = ST[l.status] || ST.pending;
+    return `<div class="lgrow ${s[1]}" data-n="${i}"><span class="st">${s[0]}</span> ${esc(l.t)}  ${esc(l.msg)}${
+      l.result ? `<span class="res"> → ${esc(l.result)}</span>` : ""}</div><div class="lgdet" id="ewd-${i}">${
+      (l.details || []).map(d => esc(`${d.t}  ${d.msg}`)).join("\n")}</div>`; }).join("");
+  const cams = { any: "любая", ...Object.fromEntries(EY.cams.map(c => [c.id, c.name || c.id])) };
+  $("#ew-edit").innerHTML = `<div class="form">
+    <span>Название</span><input data-k="name" value="${esc(x.name || "")}">
+    <span>Включён</span><label class="tog"><input type="checkbox" data-k="enabled"${x.enabled ? " checked" : ""}> да</label>
+    <span>Камера</span><select data-k="camera">${opts(cams, x.camera || "any")}</select>
+    <span>Событие</span><select data-k="on">${opts(WON, x.on || "motion")}</select>
+    <span class="w-person">Кто</span><input class="w-person" data-k="who" value="${esc(x.who && x.who !== "any" ? x.who : "")}" placeholder="имя как в photolib; пусто — любой узнанный">
+    <span class="w-unknown">Неузнанных лиц</span><input class="w-unknown" data-k="unknown_count" type="number" min="1" value="${x.unknown_count || 2}">
+    <span class="w-quiet">Тихо, мин</span><input class="w-quiet" data-k="quiet_min" type="number" min="1" value="${x.quiet_min || 10}">
+    <span>Время суток</span><input data-k="hours" value="${esc(x.hours || "")}" placeholder="22:00-07:00 — только в это время; пусто — всегда">
+    <span class="full help">«Узнан человек» — раз за событие. «Незнакомое лицо» — photolib не узнал лицо N раз за одно событие и никого в нём не узнал.
+      «Тихо» — после движения его не было N минут (один раз, до следующего движения).</span>
+    <span>Действие</span><select data-k="action">${opts(LACT, x.action || "telegram")}</select>
+    <span>Текст</span><textarea data-k="text" placeholder="что сказать / написать / поручить; подстановки {camera} {who} {time}">${esc(x.text || "")}</textarea>
+    <span class="w-mu">Трек</span><span class="w-mu"><button class="btn" id="ew-find">Найти трек</button> <span class="help" id="ew-track">${
+      x.track && x.trackUrl === (x.text || "").trim() ? "выбран: " + esc(x.track) : "слова для поиска или ссылка"}</span><div id="ew-hits"></div></span>
+    <span class="w-tg">Кому написать</span><select class="w-tg" data-k="to"><option value="">— выбери —</option>${
+      [...new Set([...FAMILY, ...(x.to && !FAMILY.includes(x.to) ? [x.to] : [])])].map(n => `<option value="${esc(n)}"${n === x.to ? " selected" : ""}>${esc(n)}</option>`).join("")}</select>
+    <span>Пауза, с</span><input data-k="cooldown" type="number" min="0" value="${x.cooldown ?? 600}">
+    <span class="full help">«Команда Еве» получает камеру и время; кадр она может посмотреть сама. «Сказать», «Телеграм», «музыка» — без Claude.</span>
+    <span></span><span><button class="btn" id="ew-del" style="color:var(--danger)">Удалить сценарий</button></span>
+  </div><div class="lg">${lg ? "Последние срабатывания:" + lg : "Срабатываний за 14 дней нет."}</div>`;
+  document.querySelectorAll("#ew-edit .lgrow").forEach(e => e.onclick = () => $("#ewd-" + e.dataset.n).classList.toggle("open"));
+  const sel = k => document.querySelector(`#ew-edit [data-k="${k}"]`).value;
+  const vis = () => {
+    const on = sel("on"), act = sel("action");
+    [["w-person", on === "person"], ["w-unknown", on === "unknown"], ["w-quiet", on === "quiet"],
+     ["w-tg", act === "telegram"], ["w-mu", act === "music"]].forEach(([c, v]) =>
+      document.querySelectorAll("#ew-edit ." + c).forEach(e => e.style.display = v ? "" : "none"));
+  };
+  document.querySelector('#ew-edit [data-k="on"]').onchange = vis;
+  document.querySelector('#ew-edit [data-k="action"]').onchange = vis; vis();
+  $("#ew-find").onclick = async () => {
+    const ta = document.querySelector('#ew-edit [data-k="text"]'), q = ta.value.trim();
+    if (!q) { toast("Напиши в «Текст», что искать, или вставь ссылку"); return; }
+    $("#ew-hits").innerHTML = '<div class="help">ищу и проверяю, играет ли (до минуты)…</div>';
+    const r = await fetch("/api/music/search?q=" + encodeURIComponent(q)).then(r => r.json()).catch(e => ({ hits: [], error: String(e) }));
+    const hits = (r.hits || []).filter(h => !h.error);
+    $("#ew-hits").innerHTML = hits.map((h, i) => `<div class="hit" data-i="${i}">${esc(h.title || "?")}${h.artist ? " — " + esc(h.artist) : ""}
+      <button class="btn sm primary">выбрать</button></div>`).join("") || '<div class="help">ничего не нашлось</div>';
+    document.querySelectorAll("#ew-hits .hit button").forEach(b => b.onclick = () => {
+      const h = hits[+b.closest(".hit").dataset.i];
+      ta.value = h.url; x.track = (h.title || "") + (h.artist ? " — " + h.artist : ""); x.trackUrl = h.url;
+      $("#ew-track").textContent = "выбран: " + x.track + " (сохрани)"; $("#ew-hits").innerHTML = "";
+      if (/^https?:/.test(h.url)) fetch("/api/music/prefetch?url=" + encodeURIComponent(h.url)).catch(() => {});
+    });
+  };
+  $("#ew-del").onclick = () => { if (confirm("Удалить сценарий? (применится по «Сохранить»)")) { EW.items.splice(EW.cur, 1); EW.cur = 0; ewRender(); } };
+}
+function ewGrab() {
+  const x = EW.items[EW.cur];
+  if (!x || !document.querySelector("#ew-edit [data-k]")) return;
+  document.querySelectorAll("#ew-edit [data-k]").forEach(e => {
+    const k = e.dataset.k; x[k] = e.type === "checkbox" ? e.checked : e.type === "number" ? +e.value : e.value.trim();
+  });
+  x.who = x.who || "any";
+}
+$("#ew-new").onclick = () => {
+  ewGrab();
+  EW.items.push({ id: "w" + Date.now().toString(36), name: "Новый сценарий", enabled: false, camera: "any", on: "unknown",
+                  who: "any", unknown_count: 2, quiet_min: 10, hours: "", action: "telegram", text: "Незнакомое лицо: {camera}, {time}", to: "", cooldown: 600 });
+  EW.cur = EW.items.length - 1; ewRender();
+};
+$("#ew-save").onclick = async () => {
+  ewGrab();
+  try { const r = await api("/api/watchers", { watchers: EW.items }); EW.items = r.watchers; EW.log = r.log || {}; ewRender(); toast("Сохранено — Ева подхватит сразу"); }
+  catch (e) { toast("Не сохранилось: " + e.message); }
+};
 </script>
 </body>
 </html>

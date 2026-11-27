@@ -1029,7 +1029,7 @@ def listeners_get():
     return {"listeners": items, "log": _listener_events()}
 
 
-def _listener_events(per=12):
+def _listener_events(per=12, kind="listener"):
     """The brain's listener lines grouped into firings: "fired on ..." opens one, its
     "ok: ..." / "error: ..." line (the brain logs one per firing since 2026-11-27) is the
     status, anything else in between is detail. A firing without a status yet is
@@ -1037,12 +1037,12 @@ def _listener_events(per=12):
     by = {}
     try:
         with db() as c:
-            rows = c.execute("SELECT ts, msg FROM eva_log WHERE msg LIKE 'listener %%' "
-                             "AND ts > now() - interval '14 days' ORDER BY ts DESC LIMIT 600").fetchall()
+            rows = c.execute("SELECT ts, msg FROM eva_log WHERE msg LIKE %s "
+                             "AND ts > now() - interval '14 days' ORDER BY ts DESC LIMIT 600", (kind + " %",)).fetchall()
     except Exception:
         return {}
     for ts, msg in reversed(rows):
-        m = re.match(r"listener (\S+): (.*)", msg)
+        m = re.match(kind + r" (\S+): (.*)", msg, re.S)
         if not m:
             continue
         lid, text = m.group(1), m.group(2)
@@ -1359,7 +1359,8 @@ CAM_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 def eyes_get():
     c = _jload(EYES_CONF, {})
     return {"cameras": c.get("cameras", []), "fps": c.get("fps", 5), "quiet_s": c.get("quiet_s", 8),
-            "id_threshold": c.get("id_threshold", 0.5)}
+            "id_threshold": c.get("id_threshold", 0.5), "motion_on": c.get("motion_on", True) is not False,
+            "faces_on": c.get("faces_on", True) is not False}
 
 
 @app.post("/api/eyes/cameras")
@@ -1367,6 +1368,11 @@ async def eyes_post(request: Request):
     """The whole list from the page; the eyes service follows the file within 3 s."""
     b = await request.json()
     c = _jload(EYES_CONF, {})
+    for k in ("motion_on", "faces_on"):          # the switches for all the cameras
+        if k in b:
+            c[k] = bool(b[k])
+    if "cameras" not in b:
+        b["cameras"] = c.get("cameras", [])
     cams, seen = [], set()
     for x in b.get("cameras", []):
         cid = str(x.get("id", "")).strip().lower()
@@ -1377,7 +1383,8 @@ async def eyes_post(request: Request):
             raise HTTPException(400, f"адрес камеры {cid}: http(s):// или rtsp://")
         seen.add(cid)
         cams.append({"id": cid, "name": str(x.get("name") or cid).strip()[:40], "url": url, "on": bool(x.get("on", True)),
-                     "motion": min(0.5, max(0.001, float(x.get("motion") or 0.01))), "faces": bool(x.get("faces", True))})
+                     "motion": min(0.5, max(0.001, float(x.get("motion") or 0.01))), "faces": bool(x.get("faces", True)),
+                     "watch": bool(x.get("watch", True))})
     c["cameras"] = cams
     for k, lo, hi in (("fps", 1, 15), ("quiet_s", 2, 120), ("id_threshold", 0.3, 0.9)):
         if k in b:
@@ -1451,3 +1458,39 @@ def eyes_img(path: str):
     if not os.path.exists(p):
         raise HTTPException(404, "gone")
     return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+
+# ---- camera scenarios (app/core/watchers.py reads /brain/watchers.json) ----
+WTC = os.path.join(BRAIN, "watchers.json")
+W_ON = ("motion", "person", "unknown", "quiet")
+W_ACT = ("say", "telegram", "music", "eva", "log")
+
+
+@app.get("/api/watchers")
+def watchers_get():
+    return {"watchers": _jload(WTC, {"watchers": []}).get("watchers", []), "log": _listener_events(kind="watcher")}
+
+
+@app.post("/api/watchers")
+async def watchers_post(request: Request):
+    items = (await request.json()).get("watchers")
+    if not isinstance(items, list):
+        raise HTTPException(400, "watchers: []")
+    seen = set()
+    for x in items:
+        x["id"] = re.sub(r"[^\w-]", "_", str(x.get("id") or os.urandom(3).hex()))[:40]
+        if x["id"] in seen:
+            raise HTTPException(400, f"id {x['id']} twice")
+        seen.add(x["id"])
+        if x.get("on") not in W_ON or x.get("action", "log") not in W_ACT:
+            raise HTTPException(400, f"«{x.get('name') or x['id']}»: событие / действие")
+        h = (x.get("hours") or "").replace(" ", "")
+        if h and not re.fullmatch(r"\d{1,2}(:\d{2})?-\d{1,2}(:\d{2})?", h):
+            raise HTTPException(400, f"«{x.get('name') or x['id']}»: время — как 22:00-07:00")
+        x["hours"] = h
+        if x.get("enabled") and x.get("on") == "motion" and x.get("action") in ("say", "eva", "music") \
+                and not h and float(x.get("cooldown") or 0) < 60:
+            # every passer-by would set it off: motion with a voice action needs a pause or hours
+            raise HTTPException(400, f"«{x.get('name') or x['id']}»: на любое движение вслух — задай паузу от 60 с или время")
+    _jsave(WTC, {"watchers": items})
+    return watchers_get()

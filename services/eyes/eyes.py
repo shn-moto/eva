@@ -8,7 +8,9 @@ The cameras are in EYES_DIR/eyes.json, edited on the admin page «Глаза»:
 
     url      MJPEG over HTTP (multipart/x-mixed-replace), a JPEG snapshot URL (polled), or rtsp://
     motion   the changed part of the frame that counts as motion (0.01 = 1 %)
+    watch    track motion (false: the live frame only, no events)
     faces    look for faces during motion and ask photolib who it is
+    motion_on / faces_on (top level): the same two switches for all the cameras
 
 Per camera: a reader thread keeps only the newest frame (no decode), an analyser decodes it
 FPS times a second at 1/4 size (libjpeg scales while decoding - cheap) and compares it with
@@ -24,6 +26,7 @@ must not keep a camera "busy" forever.
     GET /presence?minutes=10     who was seen where (from the database)
     GET /journal?hours=2         events of a period with who was recognised (camera=, person=, since=, until=)
     GET /probe?url=              one frame from a URL (the admin page's «Проверить»)
+    GET /events                  SSE: motion / face / end, for the brain's camera scenarios
 
 Database (assistant_memory, ASSISTANT_PG_DSN), tables made here:
     eye_events  one motion event: camera, started, ended, peak, snapshot, people
@@ -33,6 +36,7 @@ Files: EYES_DIR/events/<day>/<id>.jpg (the frame at the peak), faces/<day>/<id>.
 import datetime
 import json
 import os
+import queue
 import threading
 import time
 import urllib.parse
@@ -155,6 +159,21 @@ def identify(jpg, threshold):
     if best["similarity"] >= threshold or (votes >= 3 and best["similarity"] >= threshold - 0.05):
         return best["person_id"], best.get("person_name"), round(best["similarity"], 3)
     return None, None, round(best["similarity"], 3)
+
+
+# ---- events out (GET /events, SSE): the brain's camera scenarios (app/core/watchers.py) ----
+_subs = []
+_subs_lock = threading.Lock()
+
+
+def publish(ev):
+    ev = dict(ev, ts=time.time())
+    with _subs_lock:
+        for q in list(_subs):
+            try:
+                q.put_nowait(ev)
+            except queue.Full:
+                pass
 
 
 # ---- reading a camera: only the newest frame is kept, nothing decoded here ----
@@ -331,8 +350,17 @@ class Eye(threading.Thread):
         if self.event:
             self.close_event()
 
+    def watching(self):
+        """Motion tracking on (the page's switches: all cameras, this one); off - the live frame only."""
+        return self.g.get("motion_on", True) is not False and self.cam.get("watch", True) is not False
+
     def step(self, fr):
         t, kind, data = fr
+        if not self.watching():
+            if self.event:
+                self.close_event()
+            self.bg, self.motion, self.faces = None, 0.0, []
+            return
         if self.reduce is None:
             full = decode(kind, data)
             if full is None:
@@ -377,7 +405,8 @@ class Eye(threading.Thread):
                 if frac > ev["peak"]:
                     ev["peak"], ev["peak_frame"] = frac, (kind, data)
         # faces: often during an event, rarely without one (a still person is not motion)
-        want_faces = self.cam.get("faces", True) and t - self.light > 2
+        want_faces = (self.g.get("faces_on", True) is not False and self.cam.get("faces", True) is not False
+                      and t - self.light > 2)
         every = FACE_EVERY if ev else IDLE_FACE_EVERY
         if want_faces and t - self.last_face_pass >= every and t - self.last_motion < RECENT_MOTION_S:
             self.last_face_pass = t
@@ -455,6 +484,8 @@ class Eye(threading.Thread):
             return
         if fid:
             sql("UPDATE eye_faces SET person_id=%s, person=%s, similarity=%s WHERE id=%s", (pid, name, sim, fid))
+        publish({"type": "face", "camera": self.id, "place": self.cam.get("name") or self.id, "event_id": ev.get("id"),
+                 "person": name, "similarity": sim})
         if name:
             ev["names_at"][_cell(box)] = (pid, name, sim, time.time())
             if name not in ev["people"]:
@@ -469,6 +500,7 @@ class Eye(threading.Thread):
         row = sql("INSERT INTO eye_events (camera, started) VALUES (%s,%s) RETURNING id", (self.id, st), one=True)
         self.event = {"id": row[0] if row else None, "started": st, "t0": t, "last_active": t, "frames": 0,
                       "peak": 0.0, "peak_frame": None, "people": set(), "last_query": 0, "last_face_log": 0, "names_at": {}}
+        publish({"type": "motion", "camera": self.id, "place": self.cam.get("name") or self.id, "event_id": self.event["id"]})
 
     def close_event(self):
         ev, self.event = self.event, None
@@ -484,6 +516,8 @@ class Eye(threading.Thread):
             sql("UPDATE eye_events SET ended=%s, peak=%s, frames=%s, snapshot=%s, people=%s WHERE id=%s",
                 (now(), ev["peak"], ev["frames"], snap, sorted(ev["people"]), ev["id"]))
         log(f"{self.id}: event {ev['id']} {int(time.time() - ev['t0'])} s, peak {ev['peak']:.3f}, {sorted(ev['people'])}")
+        publish({"type": "end", "camera": self.id, "place": self.cam.get("name") or self.id, "event_id": ev["id"],
+                 "seconds": int(time.time() - ev["t0"]), "people": sorted(ev["people"])})
 
 
 def _cell(box):
@@ -630,6 +664,31 @@ def journal(hours: float = 2, since: str = "", until: str = "", camera: str = ""
                     "motion_peak": round(peak or 0, 3), "people": {p: round(s, 2) for p, s in best.items()},
                     "faces": len(faces), "unrecognised_faces": sum(1 for f in faces if not f["person"])})
     return {"from": t0.isoformat(timespec="minutes"), "to": t1.isoformat(timespec="minutes"), "events": out}
+
+
+@app.get("/events")
+def events():
+    """The eyes' events as they happen (text/event-stream): motion (an event opens), face (photolib's
+    answer: person or null), end. A comment line every 15 s keeps the connection alive."""
+    from fastapi.responses import StreamingResponse
+    q = queue.Queue(maxsize=500)
+    with _subs_lock:
+        _subs.append(q)
+
+    def gen():
+        try:
+            yield ": hello\n\n"
+            while True:
+                try:
+                    ev = q.get(timeout=15)
+                    yield "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
+                except queue.Empty:
+                    yield ": ping\n\n"
+        finally:
+            with _subs_lock:
+                if q in _subs:
+                    _subs.remove(q)
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/probe")

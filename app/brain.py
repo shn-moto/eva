@@ -127,6 +127,8 @@ if __name__ == "__main__":
     calendar.start()
     from core import listeners         # rules over every logged phrase (the admin page edits them)
     listeners.start()
+    from core import watchers          # camera scenarios over the eyes' events (the admin page «Глаза»)
+    watchers.start()
     # the body on the Station (app/body.py): its events in. A restart of the brain
     # ends the music - its queue lived here - so the body's mpg123 stops too and
     # the TV does not keep showing the player
