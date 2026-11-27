@@ -26,7 +26,7 @@ must not keep a camera "busy" forever.
     GET /presence?minutes=10     who was seen where (from the database)
     GET /journal?hours=2         events of a period with who was recognised (camera=, person=, since=, until=)
     GET /probe?url=              one frame from a URL (the admin page's «Проверить»)
-    GET /events                  SSE: motion / face / end, for the brain's camera scenarios
+    GET /events                  SSE: motion (an event opens) / active (still moving, every 10 s) / face / end
 
 Database (assistant_memory, ASSISTANT_PG_DSN), tables made here:
     eye_events  one motion event: camera, started, ended, peak, snapshot, people
@@ -59,6 +59,7 @@ FACE_EVERY = 0.7          # s between face passes during an event
 IDLE_FACE_EVERY = 5.0     # s between face passes with no event (a person sitting still)
 FACE_LOG_EVERY = 3.0      # s between logged faces of one event: a person at the desk is not 400 rows
 QUERY_EVERY = 2.0         # s between photolib questions of one camera (~0.7 s each there)
+ACTIVE_EVERY = 10.0        # s between "still moving" events of an open event (the scenarios)
 RECHECK_S = 30            # a name found at a place in the frame holds there this long, then asked again
 MAX_EVENT_S = 300         # a long presence is split into 5-minute events
 RECENT_MOTION_S = 60      # a face keeps an event only this long after the last motion
@@ -402,6 +403,12 @@ class Eye(threading.Thread):
             if moving:
                 ev["last_active"] = t
                 ev["frames"] += 1
+                # "still moving" for the scenarios: an open event is not a new start, and a person
+                # at the desk keeps one open for hours (2026-11-27: a motion scenario never fired)
+                if t - ev.get("last_pub", 0) >= ACTIVE_EVERY:
+                    ev["last_pub"] = t
+                    publish({"type": "active", "camera": self.id, "place": self.cam.get("name") or self.id,
+                             "event_id": ev["id"], "motion": round(frac, 3)})
                 if frac > ev["peak"]:
                     ev["peak"], ev["peak_frame"] = frac, (kind, data)
         # faces: often during an event, rarely without one (a still person is not motion)
@@ -419,9 +426,9 @@ class Eye(threading.Thread):
         ev = self.event
         if ev and (t - ev["last_active"] > self.g.get("quiet_s", 8) or t - ev["t0"] > MAX_EVENT_S):
             split = t - ev["last_active"] <= self.g.get("quiet_s", 8)
-            self.close_event()
+            self.close_event(split)
             if split:
-                self.open_event(t)
+                self.open_event(t, split=True)      # the same presence going on: no motion / end out
 
     def face_pass(self, kind, data):
         img = decode(kind, data)
@@ -495,14 +502,16 @@ class Eye(threading.Thread):
                     sql("UPDATE eye_events SET people=%s WHERE id=%s", (sorted(ev["people"]), ev["id"]))
             self.faces = [(b, s, name if _cell(b) == _cell(box) else n) for b, s, n in self.faces]
 
-    def open_event(self, t):
+    def open_event(self, t, split=False):
         st = now()
         row = sql("INSERT INTO eye_events (camera, started) VALUES (%s,%s) RETURNING id", (self.id, st), one=True)
         self.event = {"id": row[0] if row else None, "started": st, "t0": t, "last_active": t, "frames": 0,
                       "peak": 0.0, "peak_frame": None, "people": set(), "last_query": 0, "last_face_log": 0, "names_at": {}}
-        publish({"type": "motion", "camera": self.id, "place": self.cam.get("name") or self.id, "event_id": self.event["id"]})
+        if not split:
+            publish({"type": "motion", "camera": self.id, "place": self.cam.get("name") or self.id,
+                     "event_id": self.event["id"]})
 
-    def close_event(self):
+    def close_event(self, split=False):
         ev, self.event = self.event, None
         if not ev:
             return
@@ -516,8 +525,9 @@ class Eye(threading.Thread):
             sql("UPDATE eye_events SET ended=%s, peak=%s, frames=%s, snapshot=%s, people=%s WHERE id=%s",
                 (now(), ev["peak"], ev["frames"], snap, sorted(ev["people"]), ev["id"]))
         log(f"{self.id}: event {ev['id']} {int(time.time() - ev['t0'])} s, peak {ev['peak']:.3f}, {sorted(ev['people'])}")
-        publish({"type": "end", "camera": self.id, "place": self.cam.get("name") or self.id, "event_id": ev["id"],
-                 "seconds": int(time.time() - ev["t0"]), "people": sorted(ev["people"])})
+        if not split:
+            publish({"type": "end", "camera": self.id, "place": self.cam.get("name") or self.id, "event_id": ev["id"],
+                     "seconds": int(time.time() - ev["t0"]), "people": sorted(ev["people"])})
 
 
 def _cell(box):

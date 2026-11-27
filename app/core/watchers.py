@@ -8,7 +8,9 @@ A scenario:
 
     {"id", "name", "enabled",
      "camera":   "any" | a camera id (eyes.json)
-     "on":       "motion"  - motion began (an event opens)
+     "on":       "motion"  - motion: when it begins and while it goes on (the eyes say "active" every
+                             10 s); the cooldown is how often (2026-11-27: on the start alone it never fired
+                             for a person at the desk - one event open for hours)
                  "person"  - a face recognised (photolib) - once an event
                  "unknown" - faces not recognised: `unknown_count` photolib answers with no name in
                              one event, and nobody recognised in it
@@ -103,7 +105,7 @@ def on_event(ev):
         for k in [k for k, v in _events.items() if time.time() - v["ts"] > 3600]:
             del _events[k]
     items = [x for x in load() if _mine(x, cam)]
-    if t == "motion":
+    if t in ("motion", "active"):
         c["open"], c["last"] = True, time.time()
         for x in items:
             if x.get("on") == "quiet":
