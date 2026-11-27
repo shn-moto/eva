@@ -314,6 +314,7 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
       <div class="dd" id="f-people"></div>
       <div class="dd" id="f-emo"></div>
       <label class="tog"><input type="checkbox" id="heard"> всё услышанное</label>
+      <label class="tog" title="звуки, которые ухо сочло не голосом (птицы, музыка, посуда…)"><input type="checkbox" id="onlynoise"> только шум</label>
       <label class="tog"><input type="checkbox" id="onlykeep"> только оставленные</label>
     </div>
     <div class="scroll" id="rows"></div>
@@ -385,7 +386,15 @@ const F = { people: store.get("f-people", null), emo: store.get("f-emo", null) }
 if (F.people) F.people = new Set(F.people); if (F.emo) F.emo = new Set(F.emo);
 // a stranger's group («Неизвестный N», «Гость 2»), an unsigned phrase, an unnamed heard clip - all «unknown»
 const isUnknown = s => !s || s === "?" || s === "unknown" || /^(неизвестн|гость)/i.test(s);
-const personKey = r => r.role === "assistant" ? "Ева" : isUnknown(r.speaker) ? UNK : r.speaker;
+// a sound the ear judged not a voice: the admin labels it «шум (<PANNs class>)» - hundreds of classes,
+// so it has a checkbox of its own («только шум»), never a place in the people list
+const isNoise = r => /^шум(\s|$)/.test(r.speaker || "") || (r.sound && r.sound.verdict === "noise");
+// the hub's service labels of a heard clip: «Ева (эхо)», «<место> (подавлено)», «во время музыки»
+const isService = s => /\((эхо|подавлено)\)$/.test(s || "") || /^во время /.test(s || "");
+// -> the family member, UNK, or null: not a person (her own replies, noise, service labels) -
+// shown with no people filter, hidden by any
+const personKey = r => r.role === "assistant" || isNoise(r) || isService(r.speaker) ? null
+  : isUnknown(r.speaker) ? UNK : r.speaker;
 const emoKey = r => (r.sound && r.sound.emo) || NOEMO;
 function fSave() { store.set("f-people", F.people && [...F.people]); store.set("f-emo", F.emo && [...F.emo]); }
 // one dropdown: items [{k, label, n, sw}]; quick links [{label, set}] - set is the new selection (null = all)
@@ -412,15 +421,17 @@ function filtersUi(rows) {
   const cnt = f => rows.reduce((m, r) => (m[f(r)] = (m[f(r)] || 0) + 1, m), {});
   const pc = cnt(personKey), ec = cnt(emoKey);
   // the people of these rows, plus those picked earlier (a pick is not lost on a day without them); the family's order
-  const keys = new Set([...Object.keys(pc), ...(F.people || [])]);
-  const order = k => k === UNK ? 1e6 : k === "Ева" ? 1e6 - 1 : SPEAKERS.includes(k) ? SPEAKERS.indexOf(k) : 1e5;
+  // only the family and «unknown» (old picks of Ева / noise from an earlier version are dropped)
+  const keys = new Set([...Object.keys(pc), ...(F.people || [])].filter(k => k !== "null" && k !== "Ева" && !/^шум(\s|$)/.test(k) && !isService(k)));
+  const order = k => k === UNK ? 1e6 : SPEAKERS.includes(k) ? SPEAKERS.indexOf(k) : 1e5;
   const people = [...keys].sort((a, b) => order(a) - order(b) || a.localeCompare(b))
-    .map(k => ({ k, label: k === UNK ? "неизвестные" : k, n: pc[k] || 0, sw: k === UNK ? "var(--mute)" : k === "Ева" ? "var(--her)" : color(k) }));
+    .map(k => ({ k, label: k === UNK ? "неизвестные" : k, n: pc[k] || 0, sw: k === UNK ? "var(--mute)" : color(k) }));
+  $("#f-people").style.opacity = $("#onlynoise").checked ? .4 : "";     // «только шум»: no people in it
   const setP = s => { F.people = s; fSave(); render(); };
   ddDraw($("#f-people"), "Люди", people, F.people, [
     { label: "все", set: () => null },
     { label: "только неизвестные", set: () => new Set([UNK]) },
-    { label: "только семья", set: () => new Set(people.map(x => x.k).filter(k => k !== UNK && k !== "Ева")) },
+    { label: "только семья", set: () => new Set(people.map(x => x.k).filter(k => k !== UNK)) },
   ], setP);
   const emos = ["angry", "sad", "positive", "neutral", NOEMO]
     .map(k => ({ k, label: EMO_RU[k], n: ec[k] || 0, sw: EMO_RGB[k] ? `rgb(${EMO_RGB[k]})` : "var(--line)" }));
@@ -455,7 +466,8 @@ async function openDay(d, keepSel) {
   const dt = new Date(d + "T12:00");
   $("#dtitle").textContent = dt.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" });
   // newest at the top (the user's wish, 2026-11-24)
-  S.rows = (await api(`/api/day?d=${d}&heard=${$("#heard").checked ? 1 : 0}`)).reverse();
+  // the noise clips are among the heard ones: «только шум» loads them without «всё услышанное»
+  S.rows = (await api(`/api/day?d=${d}&heard=${$("#heard").checked || $("#onlynoise").checked ? 1 : 0}`)).reverse();
   render(keepSel);
   loadUnits();
   radar();
@@ -472,7 +484,8 @@ function render(keepSel) {
   const only = $("#onlykeep").checked;
   const base = only ? S.rows.filter(r => r.keep) : S.rows;
   filtersUi(base);
-  const rows = base.filter(r => (!F.people || F.people.has(personKey(r))) && (!F.emo || F.emo.has(emoKey(r))));
+  const noise = $("#onlynoise").checked;
+  const rows = base.filter(r => (noise ? isNoise(r) : !F.people || F.people.has(personKey(r))) && (!F.emo || F.emo.has(emoKey(r))));
   S.view = rows;
   const users = rows.filter(r => r.role === "user").length, sound = rows.filter(r => r.has_audio).length;
   const of = rows.length < base.length ? ` (из ${base.length})` : "";
@@ -881,6 +894,12 @@ $("#rs-apply").onclick = async () => {
 $("#heard").checked = store.get("heard", false);
 $("#heard").addEventListener("change", () => { store.set("heard", $("#heard").checked); if (S.day && !S.search) openDay(S.day); });
 $("#onlykeep").addEventListener("change", () => render());
+$("#onlynoise").checked = store.get("onlynoise", false);
+$("#onlynoise").addEventListener("change", () => {
+  store.set("onlynoise", $("#onlynoise").checked);
+  // the heard clips not loaded yet: fetch the day again; otherwise only the view changes
+  if (S.day && !S.search && !$("#heard").checked) openDay(S.day); else render();
+});
 $("#days").addEventListener("click", e => { const a = e.target.closest("a"); if (!a) return; e.preventDefault(); location.hash = a.dataset.d; openDay(a.dataset.d); });
 window.addEventListener("hashchange", () => { const d = location.hash.slice(1); if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d !== S.day) openDay(d); });
 (async () => {
