@@ -132,6 +132,14 @@ class Player:
 
     # --- the queue ---
     def play(self, tracks):
+        # the media library's tiles give way to the player, whoever started the music: a listener's
+        # «включи сборку» played and the tiles stayed on the TV (2026-11-27 21:00)
+        try:
+            from core import screen
+            if (screen.state.get("p") or {}).get("kind") == "library":
+                screen.act("close")
+        except Exception as e:
+            log(f"music: tiles not closed: {e}")
         with self.lock:
             self._ensure()
             self.queue, self.index = list(tracks), 0
