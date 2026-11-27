@@ -330,6 +330,8 @@ def local(text, person, r):
                     # a listener wants that song or nothing, never a stand-in: «Живите дружно»
                     # played instead of the Leopold song (2026-11-27)
                     found[0].pop("alts", None)
+                    if r.get("title") and len(found) == 1:
+                        found[0]["title"] = r["title"]
                 p.play(found)
                 t = found[0]
                 # silent: the history still learns what plays (the call below)

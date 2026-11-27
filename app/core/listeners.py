@@ -232,7 +232,10 @@ def _act(x, ts, text, name, kids, extra=None, why=None):
         import dialog
         from core.identity import Person
         dialog.WORK.put((f"[слушатель «{x.get('name')}»] включи {msg}", Person("Ева", channel="voice"),
-                         {"intent": "music_play", "query": msg, "kind": "track", "listener": x["id"]}))
+                         {"intent": "music_play", "query": msg, "kind": "track", "listener": x["id"],
+                          # the name chosen on the admin page: a link's own name is "watch" until /info
+                          # answers (the log and the screen said 'watch', 2026-11-27 16:11)
+                          "title": x.get("track") if x.get("trackUrl") == msg.strip() else None}))
     elif action == "log" or not msg:
         status(True, "logged")
     elif action == "eva" and msg:
