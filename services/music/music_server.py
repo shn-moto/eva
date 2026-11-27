@@ -69,7 +69,7 @@ def info(url):
                        capture_output=True, text=True, timeout=60)
     if r.returncode:
         err(f"info {url}: yt-dlp {r.returncode}: {r.stderr.strip()[-400:]}")
-    j = json.loads(r.stdout or "{}")
+    j = json.loads(r.stdout or "{}") or {}        # a failed yt-dlp prints "null"
     return {"title": j.get("track") or j.get("title"), "artist": j.get("artist") or j.get("uploader"),
             "album": j.get("album"), "year": j.get("release_year"), "duration": j.get("duration"),
             "thumb": j.get("thumbnail"), "url": url}

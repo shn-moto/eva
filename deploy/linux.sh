@@ -44,7 +44,7 @@ voice-events)
     cmd=""; health=/health ;;
 music)
     src=services/music; image=newalisa-music; name=newalisa-music; port=8904
-    run="-p 8904:8904"; cmd=""; health=/health ;;
+    run="-p 8904:8904 -v /etc/localtime:/etc/localtime:ro"; cmd=""; health=/health ;;
 admin)
     # the admin page: phrases with their sound, logs, search, keep / delete (home network only).
     # ~/eva-data/admin.env (not in git): ASSISTANT_PG_DSN=...
