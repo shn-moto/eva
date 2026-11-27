@@ -53,7 +53,8 @@ that spends money (paid APIs beyond a normal test), and flashing / rebooting the
 The flow: Station `eva-ear` streams raw capture -> hub `ear_stream.py` (AEC3, Silero VAD, cut)
 -> `hear.py` (STT, direction, who, splits, sound verdict; emotion 1-2 s later) -> event stream
 `/hear/events` -> brain `core/hub_ear.py` -> `dialog.on_phrase` -> router -> local action or Claude.
-Every logged phrase also goes to `core/listeners.py`.
+Every logged phrase also goes to `core/listeners.py`. The eyes' events (`services/eyes` `/events`) go to
+`core/watchers.py` (camera scenarios, the same actions as the listeners).
 
 ## The ear now (2026-11-27) - read before touching it
 
