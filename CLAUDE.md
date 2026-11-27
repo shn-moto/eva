@@ -124,6 +124,11 @@ service log or `eva_log`. Say plainly what could not be checked live (e.g. no sp
 - **The LED ring and the TV's attention bar light only on her own decisions**: called / held by the
   brain, thinking, speaking, the volume ring. Never on what the ear reports (a voice began, any
   phrase with an open end - the TV's too); those carry `source: "ear"` and stay text on the screen.
+- **Every prefix token is paid on each cold cache write** (2026-11-27: 69k tokens = $0.28,
+  a $25 month limit hit). Rules, skill prompts and tool descriptions are in English (~25%
+  fewer tokens; `core/prompt.py` LANGUAGE keeps her Russian), the persona files stay Russian;
+  a skill prompt never restates its tools' descriptions; the cache warm runs only after
+  today's first voice turn (`llm.warm_due`). Measure a prompt change with `count_tokens`.
 - **Model tiers: router -> Sonnet -> Opus.** Every new tool gets a tier in the same change: a
   router intent (`core/router.py` INTENTS + examples) or `LIGHT_TOOLS`; heavy only if its result
   needs weighing. Printing never reaches Opus. A prompt change costs a cache write - batch them.
