@@ -2,12 +2,12 @@
 import memory
 from core.skills import Skill, Tool
 
-PROMPT = """## Память
+PROMPT = """## Memory
 
-Всё, что вы с семьёй говорили раньше, хранится в долговременной памяти. Если
-спрашивают, что обсуждали, просят напомнить, о чём говорили или что кто-то
-просил («что мы обсуждали вчера», «я говорил про…», «напомни, что…») - вызови
-memory_search и отвечай по найденному; не нашлось - так и скажи, не выдумывай."""
+Everything the family and you said before is in long-term memory. Asked what was
+discussed, to remind what was said or what someone asked («что мы обсуждали
+вчера», «я говорил про…», «напомни, что…») - call memory_search and answer from what
+it finds; nothing found - say so, never make it up."""
 
 
 def search(args, person):
@@ -20,10 +20,10 @@ SKILL = Skill(
     prompt=PROMPT,
     tools=[Tool(
         name="memory_search",
-        description="Семантический поиск по долговременной памяти: всё, что семья и Ева говорили "
-                    "раньше, с датами. Для вопросов «что мы обсуждали», «напомни», «я говорил про».",
+        description=("Semantic search in long-term memory: everything the family and Eva said before, with "
+                     "dates. For «что мы обсуждали», «напомни», «я говорил про»."),
         schema={"type": "object", "additionalProperties": False, "required": ["query"],
-                "properties": {"query": {"type": "string", "description": "тема поиска своими словами"}}},
+                "properties": {"query": {"type": "string", "description": "the topic in your own words"}}},
         handler=search,
         needs="known",
     )],

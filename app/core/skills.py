@@ -56,15 +56,15 @@ def _think_deeper(args, person):
 # Opus in (core/llm.py _escalate); the reason goes to the log for tuning.
 THINK_DEEPER = Tool(
     name="think_deeper",
-    description=("Передать следующий шаг ответа более сильной модели. Вызывай, ДО ответа, если верно хоть одно: "
-                 "нужно сопоставить данные из нескольких источников или много чисел (расчёт, итоги, сравнение "
-                 "периодов); данные противоречат друг другу или их мало для уверенного вывода (одна короткая "
-                 "фраза, неизвестный голос, пустой результат там, где данные должны быть); вывод о людях - кто "
-                 "где, кто что сказал, кто есть на фото; деньги, здоровье, безопасность; ты дважды пробовала и не "
-                 "вышло; собираешься сказать «наверное», «кажется», «скорее всего» о факте. Простые действия, "
-                 "показ и пересказ найденного - сама, без этого инструмента."),
+    description=("Hand the next step of the answer to a stronger model. Call it BEFORE answering if any holds: "
+                 "data from several sources or many numbers must be matched (a calculation, totals, comparing "
+                 "periods); the data contradict each other or are too thin for a sure conclusion (one short "
+                 "phrase, an unknown voice, an empty result where data should be); a conclusion about people - "
+                 "who is where, who said what, who is on a photo; money, health, safety; you tried twice and "
+                 "failed; you are about to say «наверное», «кажется», «скорее всего» about a fact. Simple "
+                 "actions, showing and retelling what was found - yourself, without this tool."),
     schema={"type": "object", "additionalProperties": False, "required": ["reason"],
-            "properties": {"reason": {"type": "string", "description": "коротко, почему нужна сильная модель"}}},
+            "properties": {"reason": {"type": "string", "description": "briefly, why a stronger model is needed"}}},
     handler=_think_deeper, needs="known",
 )
 
@@ -84,8 +84,8 @@ def _private(args, person):
 # cannot get it: the right is checked when it runs.
 PRIVATE_NOTES = Tool(
     name="private_notes",
-    description=("Личное семьи: здоровье, документы, деньги, всё, что не для детей и чужих. Открой, когда "
-                 "вопрос или ответ касается этого; только узнанному взрослому дома."),
+    description=("The family's private notes: health, documents, money, all that is not for children or "
+                 "strangers. Open when the question or answer touches it; only for a known adult at home."),
     schema={"type": "object", "additionalProperties": False, "properties": {}},
     handler=_private, needs="private",
 )

@@ -174,35 +174,33 @@ SKILL = Skill(
     name="power",
     summary="дом: электричество (устройства, кВт·ч, генерация) и датчики (температура, влажность, "
             "движение, двери) с историей - всё, что пишет домашнее приложение",
-    prompt="""## Дом: электричество и датчики (домашнее приложение)
+    prompt="""## Home: electricity and sensors (the home app)
 
-Домашнее приложение собирает всё: счётчики и розетки, зарядки машин, солнечную
-генерацию, датчики (температура, влажность, движение, двери, шлюз) с историей,
-показания счётчиков, автоматизации. Комнаты - у устройств в поле room.
-
-- power_devices / power_usage - готовое для электричества: список и кВт·ч за
-  период (цифры считает само приложение - не пересчитывай их).
-- Для всего остального - home_api_index (все разделы API с параметрами) и
-  home_api_get (запрос к любому из них, только чтение). Не знаешь, где лежит
-  ответ, - открой индекс и найди сам: «температура в детской» - сводка датчиков,
-  устройство с room «Детская»; история - его sensor-history за нужный период.
-- Смотри на свежесть: last_seen / last_seen_status. Старое значение называй
-  со временем («последнее, что пришло, 1 августа»), а не как текущее.
-Чтобы показать график, используй show_html.""",
+The home app collects everything: meters and sockets, car chargers, solar, sensors
+(temperature, humidity, motion, doors, gateway) with history, meter readings,
+automations. Rooms are in the devices' room field.
+- power_devices / power_usage are ready-made for electricity (the app computes the
+  numbers - do not recompute them).
+- For anything else - home_api_index, then home_api_get. Not sure where the answer
+  is - open the index and find it: «температура в детской» - the sensor summary, the
+  device with room «Детская»; history - its sensor-history for the period.
+- Mind freshness: last_seen / last_seen_status. Give an old value with its time
+  («последнее, что пришло, 1 августа»), not as current.
+To show a chart, use show_html.""",
     tools=[Tool(
         name="home_api_index",
-        description="Все разделы (GET /api/...) домашнего приложения с параметрами: электричество, "
-                    "датчики и их история, показания счётчиков, автоматизации. Начни с него, если не "
-                    "знаешь, где лежат данные.",
+        description=("All sections (GET /api/...) of the home app with parameters: electricity, sensors and "
+                     "their history, meter readings, automations. Start here if you do not know where the data "
+                     "is."),
         schema={"type": "object", "additionalProperties": False, "properties": {}},
         handler=api_index,
         needs="known",
     ), Tool(
         name="home_api_get",
-        description="GET-запрос к домашнему приложению (только чтение). path - путь из home_api_index с "
-                    "подставленными {параметрами пути}, например /api/sensors/summary или "
-                    "/api/devices/<device_id>/sensor-history; params - параметры запроса "
-                    "(period, start, end, view...). Длинный ответ обрезается - тогда сузь период.",
+        description=("GET request to the home app (read-only). path - from home_api_index with {path "
+                     "parameters} filled in, e.g. /api/sensors/summary or "
+                     "/api/devices/<device_id>/sensor-history; params - query parameters (period, start, end, "
+                     "view...). A long answer is cut - then narrow the period."),
         schema={"type": "object", "additionalProperties": False, "required": ["path"],
                 "properties": {"path": {"type": "string"},
                                "params": {"type": "object", "additionalProperties": {"type": "string"}}}},
@@ -210,16 +208,15 @@ SKILL = Skill(
         needs="known",
     ), Tool(
         name="power_devices",
-        description="Список устройств домашнего счётчика электроэнергии и сводка за текущий месяц "
-                    "(потреблено, сгенерировано, стоимость).",
+        description="Devices of the home electricity meter and this month's summary (used, generated, cost).",
         schema={"type": "object", "additionalProperties": False, "properties": {}},
         handler=devices,
         needs="adult",
     ), Tool(
         name="power_usage",
-        description="Потребление электроэнергии (кВт·ч) устройств за период дат, ряд по часам/дням/месяцам "
-                    "(шаг выбирается по длине периода). devices - названия как в power_devices "
-                    "(например «TESLA», «HONDA»). start/end - YYYY-MM-DD включительно.",
+        description=("Electricity use (kWh) of devices over a date range, hourly/daily/monthly (step chosen by "
+                     "the length). devices - names as in power_devices (e.g. «TESLA», «HONDA»). start/end - "
+                     "YYYY-MM-DD inclusive."),
         schema={"type": "object", "additionalProperties": False, "required": ["devices", "start", "end"],
                 "properties": {"devices": {"type": "array", "items": {"type": "string"}},
                                "start": {"type": "string"}, "end": {"type": "string"}}},

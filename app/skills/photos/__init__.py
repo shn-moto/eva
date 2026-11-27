@@ -221,31 +221,26 @@ def look(args, person):
                                  + json.dumps(m, ensure_ascii=False)}])
 
 
-PROMPT = """## Фотоархив
+PROMPT = """## Photo archive
 
-Семейный архив в photolib - около 150 тысяч фото. photo_search ищет по смыслу
-картинки («на море», «Соня с тортом»), по людям, датам и месту съёмки
-(«фото из Устки», «что снимали в Кракове»); similar_photos - похожие на фото
-с экрана; show_feed - лента
-за период («что было летом 2024»); photo_info - метаданные фото с экрана, photo_look -
-посмотреть на само фото (когда просят описать / разобрать картинку). К результатам
-поиска приходят метаданные первых фото: кто на них, когда, где, - отвечай по ним,
-не открывая картинку. Найденное появляется на телевизоре (в Телеграме - альбомом).
-Говори, что нашла, одной-двумя фразами; не перечисляй фото по одному.
-Кто на фото: people - люди, подписанные в архиве. faces_like - лица, которые
-в архиве ещё не подписаны, но похожи на подписанных (сходство и сколько фото
-совпало): от 0.7 и несколько совпадений - это почти наверняка он(а), так и
-говори («это Соня»); 0.6-0.7 - «похоже, это …». Своему впечатлению от
-картинки не верь больше, чем лицам архива: сёстры похожи, и по глазу ты их
-путала."""
+The family archive in photolib holds ~150 thousand photos. Search results come with
+the metadata of the first photos (who, when, where) - answer from it without
+opening the picture; photo_look only when asked to describe or read the picture
+itself. What is found appears on the TV (in Telegram - as an album): say what you
+found in one or two sentences, never list photos one by one.
+Who is on a photo: people - tagged in the archive. faces_like - faces not yet tagged
+but similar to tagged ones (similarity and how many photos matched): 0.7+ with
+several matches - almost surely them, say so («это Соня»); 0.6-0.7 - «похоже, это
+…». Trust the archive's faces over your own impression of the picture: sisters look
+alike, and by eye you mixed them up."""
 
 # the rules of photolib's own search assistant (its /ai/search-assistant prompt)
-CLIP = ("что на фото - промпт для CLIP ПО-АНГЛИЙСКИ, 5-15 слов, только то, что видит камера: предметы, "
-        "цвета, обстановка, свет («sandy sea beach with waves», «birthday cake with lit candles», "
-        "«child riding a bicycle in a park»). Без имён (люди - в people, вместо имени «a child», «a woman»), "
-        "без названий мест (место - в place), без дат. Конкретное место внутри города (каменоломня, озеро, "
-        "парк) - place города + короткое описание вида: «rocky stone quarry pit».")
-_PEOPLE = {"type": "array", "items": {"type": "string"}, "description": "имена людей, все должны быть на фото"}
+CLIP = ("what is on the photo - a CLIP prompt IN ENGLISH, 5-15 words, only what the camera sees: objects, "
+        "colours, setting, light («sandy sea beach with waves», «birthday cake with lit candles», "
+        "«child riding a bicycle in a park»). No names (people go to people; say «a child», «a woman»), "
+        "no place names (the place goes to place), no dates. A spot inside a city (quarry, lake, park) - "
+        "place = the city + a short view description: «rocky stone quarry pit».")
+_PEOPLE = {"type": "array", "items": {"type": "string"}, "description": "names of people, all must be on the photo"}
 _DATE = {"type": "string", "description": "YYYY-MM-DD"}
 
 SKILL = Skill(
@@ -254,76 +249,74 @@ SKILL = Skill(
     prompt=PROMPT,
     tools=[Tool(
         name="photo_search",
-        description="Найти фото в семейном архиве и показать их: по описанию того, что на картинке "
-                    "(query), по людям на фото, по датам, по месту съёмки (place + radius_km). Любое сочетание; без описания - просто "
-                    "фото этих людей / за эти даты, по порядку.",
+        description=("Find photos in the family archive and show them: by what is in the picture (query), by "
+                     "people, by dates, by where taken (place + radius_km). Any combination; without query - "
+                     "just photos of these people / these dates, in order."),
         schema={"type": "object", "additionalProperties": False,
                 "properties": {"query": {"type": "string", "description": CLIP},
                                "people": _PEOPLE, "date_from": _DATE, "date_to": _DATE,
-                               "place": {"type": "string", "description": "место съёмки: город, курорт, "
-                                         "страна - «Устка», «Краков», «Черногория»"},
-                               "radius_km": {"type": "number", "description": "радиус вокруг места, км: посёлок ~3-5, "
-                                             "город ~10-15, область/побережье ~50-150, страна - по её размеру"},
-                               "title": {"type": "string", "description": "подпись над фото на экране, "
-                                         "по-русски, 2-4 слова: «Соня на море»"}}},
+                               "place": {"type": "string", "description": "where taken: a city, resort, country - «Устка», «Краков», «Черногория»"},
+                               "radius_km": {"type": "number", "description": ("radius around the place, km: village ~3-5, city ~10-15, region/coast ~50-150, country - "
+                                                                               "by its size")},
+                               "title": {"type": "string", "description": "caption over the photos on screen, in Russian, 2-4 words: «Соня на море»"}}},
         handler=search,
         needs="search.text",
     ), Tool(
         name="show_feed",
-        description="Показать ленту фото за период по порядку (серии подряд прорежены), до 66 фото, "
-                    "равномерно по периоду. Для «что было в июле», «покажи прошлое лето».",
+        description=("Show a feed of photos for a period in order (bursts thinned), up to 66, spread evenly. "
+                     "For «что было в июле», «покажи прошлое лето»."),
         schema={"type": "object", "additionalProperties": False, "required": ["date_from", "date_to"],
                 "properties": {"date_from": _DATE, "date_to": _DATE}},
         handler=feed,
         needs="photos.view",
     ), Tool(
         name="similar_photos",
-        description="Показать фото, похожие на фото номер n на экране (или на открытое сейчас): та же "
-                    "сцена, место, событие.",
+        description=("Show photos similar to photo number n on screen (or the one open now): the same scene, "
+                     "place, event."),
         schema={"type": "object", "additionalProperties": False,
-                "properties": {"n": {"type": "integer", "description": "номер фото на экране / в альбоме"},
-                               "id": {"type": "integer", "description": "id фото из метаданных (вместо n)"}}},
+                "properties": {"n": {"type": "integer", "description": "photo number on screen / in the album"},
+                               "id": {"type": "integer", "description": "photo id from the metadata (instead of n)"}}},
         handler=like,
         needs="search.image",
     ), Tool(
         name="photo_indexing",
-        description="Индексация фотоархива в photolib (полная цепочка, как кнопка в админке: все CLIP-модели, "
-                    "лица, pHash, кэш): start - запустить («запусти индексацию»), status - как идёт, stop - "
-                    "остановить. Индексация долгая (часы) и грузит сервер.",
+        description=("Photo archive indexing in photolib (the full chain, like the admin button: all CLIP "
+                     "models, faces, pHash, cache): start («запусти индексацию»), status, stop. It takes hours "
+                     "and loads the server."),
         schema={"type": "object", "additionalProperties": False, "required": ["action"],
                 "properties": {"action": {"type": "string", "enum": ["start", "status", "stop"]}}},
         handler=index,
         needs="admin",
     ), Tool(
         name="document_search",
-        description="Найти сфотографированные документы (паспорт, удостоверение, свидетельство, полис, "
-                    "справки) в скрытом разделе архива. query - как документ выглядит, по-английски («Polish ID "
-                    "card», «passport page», «birth certificate»), people - чей. Номера и текст прочитай, "
-                    "посмотрев фото (photo_look по id, detail=true).",
+        description=("Find photographed documents (passport, ID card, certificate, policy, statements) in the "
+                     "hidden part of the archive. query - how the document looks, in English («Polish ID "
+                     "card», «passport page», «birth certificate»), people - whose. Read numbers and text by "
+                     "looking at the photo (photo_look by id, detail=true)."),
         schema={"type": "object", "additionalProperties": False,
                 "properties": {"query": {"type": "string"}, "people": _PEOPLE,
-                               "title": {"type": "string", "description": "подпись на экране по-русски"}}},
+                               "title": {"type": "string", "description": "caption on screen, in Russian"}}},
         handler=docs,
         needs="private",
     ), Tool(
         name="photo_look",
-        description="Посмотреть на само фото глазами (картинка + метаданные): что на нём, что происходит, "
-                    "детали, текст на фото. n - номер на экране; без n - открытое сейчас. detail=true - в "
-                    "полном размере (мелкие детали, надписи). Только когда просят разобрать / описать "
-                    "картинку: кто на фото, когда и где - это уже есть в метаданных результата поиска.",
+        description=("Look at the photo itself (picture + metadata): what is on it, what happens, details, "
+                     "text. n - number on screen; without n - the one open now. detail=true - full size (small "
+                     "details, text). Only when asked to read or describe the picture: who, when and where are "
+                     "already in the search result's metadata."),
         schema={"type": "object", "additionalProperties": False,
-                "properties": {"n": {"type": "integer", "description": "номер фото на экране / в альбоме"},
-                               "id": {"type": "integer", "description": "id фото из метаданных (вместо n)"},
+                "properties": {"n": {"type": "integer", "description": "photo number on screen / in the album"},
+                               "id": {"type": "integer", "description": "photo id from the metadata (instead of n)"},
                                "detail": {"type": "boolean"}}},
         handler=look,
         needs="photos.view",
     ), Tool(
         name="photo_info",
-        description="Что за фото: когда снято, кто на нём, где (координаты), папка в архиве. n - номер "
-                    "на экране; без n - открытое сейчас фото.",
+        description=("About a photo: when taken, who is on it, where (coordinates), archive folder. n - number "
+                     "on screen; without n - the one open now."),
         schema={"type": "object", "additionalProperties": False,
-                "properties": {"n": {"type": "integer", "description": "номер фото на экране / в альбоме"},
-                               "id": {"type": "integer", "description": "id фото из метаданных (вместо n)"}}},
+                "properties": {"n": {"type": "integer", "description": "photo number on screen / in the album"},
+                               "id": {"type": "integer", "description": "photo id from the metadata (instead of n)"}}},
         handler=info,
         needs="photos.view",
     )],

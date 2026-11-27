@@ -26,13 +26,11 @@ WMO = {0: "ясно", 1: "в основном ясно", 2: "переменна�
        96: "гроза с градом", 99: "сильная гроза с градом"}
 DAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 
-PROMPT = """## Погода
+PROMPT = """## Weather
 
-Погода, прогноз, температура, осадки, снег, ветер, «тепло ли будет», «брать ли
-зонт» - только инструмент weather: это свежий прогноз (Open-Meteo) на 1-16
-дней, для дома или любого места по названию. Искать погоду в интернете не надо:
-страницы поиска бывают старыми. Говоришь своими словами, коротко, без перечня
-всех цифр: главное - температура днём и ночью, осадки, ветер, если сильный."""
+Any weather question («тепло ли будет», «брать ли зонт») - only the weather tool,
+never a web search: search pages are often stale. Say it in your own words, briefly,
+not every number: day and night temperature, precipitation, wind if strong."""
 
 
 def _get(url):
@@ -102,12 +100,13 @@ SKILL = Skill(
     prompt=PROMPT,
     tools=[Tool(
         name="weather",
-        description="Свежий прогноз погоды (Open-Meteo): сейчас, по дням на 1-16 дней, по желанию по часам на сутки. "
-                    "Без места - дома; место - любой город по названию. Для любых вопросов о погоде - вместо поиска.",
+        description=("Fresh weather forecast (Open-Meteo): now, daily for 1-16 days, optionally 3-hourly for "
+                     "the next day. No place - home; place - any city by name. For any weather question - "
+                     "instead of a search."),
         schema={"type": "object", "additionalProperties": False,
-                "properties": {"place": {"type": "string", "description": "город, если не дома"},
-                               "days": {"type": "integer", "description": "сколько дней прогноза, 1-16 (обычно 7)"},
-                               "hourly": {"type": "boolean", "description": "добавить ближайшие сутки по 3 часа"}}},
+                "properties": {"place": {"type": "string", "description": "a city, if not home"},
+                               "days": {"type": "integer", "description": "forecast days, 1-16 (usually 7)"},
+                               "hourly": {"type": "boolean", "description": "add the next 24 hours in 3-hour steps"}}},
         handler=weather,
         needs=None,
     )],

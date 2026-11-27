@@ -20,14 +20,13 @@ def show(args, person):
                   {"kind": "html", "title": args["title"], "html": html, "full": full})
 
 
-SHOW_HTML = """Показать на телевизоре свою страницу: график, таблицу, сравнение - всё, что
-сама придумаешь для данных. html - документ целиком (<html>…), он рисуется в рамке:
-в окне (справа колонка с твоим лицом) это примерно 880x560 px, на весь экран (fullscreen) - 1280x720.
-Вёрстка под эту рамку: 100vw/100vh, без прокрутки, крупный шрифт (от 20 px, это
-телевизор с дивана), тёмный фон (#05070d), светлый текст, акцент #8fe9ff.
-Графики: <script src="/lib/chart.umd.min.js"></script> (Chart.js 4, без интернета),
-animation: false (слабая видеокарта). Данные вставь прямо в страницу. Без внешних
-ссылок и картинок из интернета."""
+SHOW_HTML = """Show your own page on the TV: a chart, a table, a comparison - whatever you design
+for the data. html - a whole document (<html>…) drawn in a frame: in the window
+(your face column on the right) about 880x560 px, fullscreen 1280x720. Layout for
+that frame: 100vw/100vh, no scrolling, large font (20 px+, a TV seen from the sofa),
+dark background (#05070d), light text, accent #8fe9ff. Charts: <script
+src="/lib/chart.umd.min.js"></script> (Chart.js 4, offline), animation: false (weak
+GPU). Put the data in the page. No external links or images from the internet."""
 
 
 def spend(args, person):
@@ -62,23 +61,16 @@ def act(args, person):
     return screen.act(args["action"], int(n) if isinstance(n, (int, float)) else None)
 
 
-PROMPT = """## Экран (телевизор)
+PROMPT = """## Screen (TV)
 
-Когда инструмент что-то показывает, это появляется на телевизоре: фото
-пронумерованы. «Дальше», «назад», «открой третью», «закрой», «вернись к лицу»
-- это инструмент screen. Показывая, говори коротко («вот, смотри»), не
-перечисляй то, что и так видно на экране.
-Данные (энергия, финансы, что угодно) можно показать своей страницей - show_html:
-сама реши, как их лучше показать (столбцы, линии, таблица, крупные цифры).
-По просьбе «на весь экран» - fullscreen.
-Всё, что показано, можно напечатать: «напечатай это» - print_screen; для
-бумаги лучше отдельная светлая страница - print_page.
-Как ты выглядишь на экране, можно менять (avatar): ascii - лицо из символов,
-image - лицо картинкой, eq - без лица, эквалайзер голоса, live2d - живая модель
-(пока пробная, Hiyori). Если кому-то неуютно
-от твоего лица - предложи эквалайзер.
-Окно чата справа и отладочную панель расходов сверху показываешь и прячешь
-инструментом panel."""
+What a tool shows appears on the TV, photos numbered. «Дальше», «назад», «открой
+третью», «закрой», «вернись к лицу» - the screen tool. When showing, speak briefly
+(«вот, смотри»), do not list what is visible anyway. Data (energy, finances,
+anything) can be shown as your own page (show_html) - choose the form yourself
+(bars, lines, table, big numbers); fullscreen when asked. Anything shown can be
+printed: «напечатай это» - print_screen; for paper a separate light page is better -
+print_page. live2d is still a trial (Hiyori). If your face makes someone
+uncomfortable, offer the equalizer."""
 
 SKILL = Skill(
     name="screen",
@@ -86,34 +78,35 @@ SKILL = Skill(
     prompt=PROMPT,
     tools=[Tool(
         name="screen",
-        description="Управление тем, что показано на телевизоре: next - дальше (следующая страница или "
-                    "следующее фото), prev - назад, open - открыть фото номер n на весь экран, back - "
-                    "вернуться из фото к сетке, close - убрать всё и вернуться к лицу.",
+        description=("Control what the TV shows: next - next page or photo, prev - back, open - photo number n "
+                     "full screen, back - from a photo back to the grid, close - clear everything, back to the "
+                     "face."),
         schema={"type": "object", "additionalProperties": False, "required": ["action"],
                 "properties": {"action": {"type": "string", "enum": ["next", "prev", "open", "back", "close"]},
-                               "n": {"type": "integer", "description": "номер фото для open"}}},
+                               "n": {"type": "integer", "description": "photo number for open"}}},
         handler=act,
         needs="screen",
     ), Tool(
         name="show_html",
         description=SHOW_HTML,
         schema={"type": "object", "additionalProperties": False, "required": ["title", "html"],
-                "properties": {"title": {"type": "string", "description": "короткий заголовок по-русски"},
+                "properties": {"title": {"type": "string", "description": "a short title in Russian"},
                                "html": {"type": "string"},
-                               "fullscreen": {"type": "boolean", "description": "на весь экран (по просьбе)"}}},
+                               "fullscreen": {"type": "boolean", "description": "fullscreen (when asked)"}}},
         handler=show,
         needs="screen",
     ), Tool(
         name="eva_spend",
-        description="Сколько стоили твои ответы (Claude API): сегодня, по моделям и каналам, по дням; дневной лимит.",
+        description=("What your answers cost (Claude API): today, by model and channel, by day; the daily "
+                     "limit."),
         schema={"type": "object", "additionalProperties": False, "properties": {}},
         handler=spend,
         needs="admin",
     ), Tool(
         name="panel",
-        description="Показать или скрыть панель на телевизоре: chat - окно чата справа (реплики разговора), "
-                    "stats - тонкая отладочная панель сверху (сколько стоят твои ответы сегодня и за месяц, "
-                    "токены и кэш по моделям). «Убери чат», «покажи расходы», «скрой панель».",
+        description=("Show or hide a panel on the TV: chat - the chat window on the right (the conversation's "
+                     "lines), stats - a thin debug bar on top (what your answers cost today and this month, "
+                     "tokens and cache by model). «Убери чат», «покажи расходы», «скрой панель»."),
         schema={"type": "object", "additionalProperties": False, "required": ["panel", "show"],
                 "properties": {"panel": {"type": "string", "enum": ["chat", "stats"]},
                                "show": {"type": "boolean"}}},
@@ -121,9 +114,9 @@ SKILL = Skill(
         needs="known",
     ), Tool(
         name="avatar",
-        description="Сменить, как ты выглядишь на телевизоре: ascii - лицо из символов, image - лицо "
-                    "картинкой (аниме), eq - без лица, эквалайзер голоса, live2d - живая модель Live2D («стань "
-                    "эквалайзером», «верни лицо», «включи живую модель»).",
+        description=("Change how you look on the TV: ascii - a face of characters, image - a picture face "
+                     "(anime), eq - no face, a voice equalizer, live2d - a live Live2D model («стань "
+                     "эквалайзером», «верни лицо», «включи живую модель»)."),
         schema={"type": "object", "additionalProperties": False, "required": ["mode"],
                 "properties": {"mode": {"type": "string", "enum": ["ascii", "image", "eq", "live2d"]}}},
         handler=set_avatar,

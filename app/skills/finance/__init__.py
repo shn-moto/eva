@@ -60,12 +60,10 @@ def transactions(args, person):
     return json.dumps(items, ensure_ascii=False)[:6000]
 
 
-PROMPT = """## Финансы (банковские выписки семьи)
+PROMPT = """## Finances (the family's bank statements)
 
-finance_breakdown - доходы/расходы за месяц (YYYY-MM) или год (YYYY) по
-категориям; finance_series - категории по месяцам за период (для графиков и
-сравнений); finance_transactions - операции. Суммы в валюте счёта""" + (f" ({profile.CURRENCY})" if profile.CURRENCY else "") + """, считает
-портал home-finances. user - чей счёт: """ + ", ".join(f"{k} ({v})" for k, v in profile.FINANCE_USERS.items()) + """; без него - все."""
+Sums are in the account currency""" + (f" ({profile.CURRENCY})" if profile.CURRENCY else "") + """, computed by the
+home-finances portal. user - whose account: """ + ", ".join(f"{k} ({v})" for k, v in profile.FINANCE_USERS.items()) + """; without it - all."""
 
 _USER = {"type": "string", "enum": list(profile.FINANCE_USERS) or ["me"]}
 
@@ -75,7 +73,7 @@ SKILL = Skill(
     prompt=PROMPT,
     tools=[Tool(
         name="finance_breakdown",
-        description="Доходы, расходы и итог за период с разбивкой по категориям. period: YYYY-MM или YYYY.",
+        description="Income, spending and the total for a period, by category. period: YYYY-MM or YYYY.",
         schema={"type": "object", "additionalProperties": False, "required": ["period"],
                 "properties": {"period": {"type": "string"},
                                "kind": {"type": "string", "enum": ["expense", "income", "all"]},
@@ -84,8 +82,8 @@ SKILL = Skill(
         needs="private",
     ), Tool(
         name="finance_series",
-        description="Суммы по месяцам за период: итог и выбранные категории (например [\"Продукты\"]); "
-                    "без categories - все категории. from_month/to_month - YYYY-MM.",
+        description=("Monthly sums for a period (for charts and comparisons): the total and chosen categories "
+                     '(e.g. ["Продукты"]); without categories - all. from_month/to_month - YYYY-MM.'),
         schema={"type": "object", "additionalProperties": False, "required": ["from_month", "to_month"],
                 "properties": {"from_month": {"type": "string"}, "to_month": {"type": "string"},
                                "categories": {"type": "array", "items": {"type": "string"}},
@@ -95,7 +93,8 @@ SKILL = Skill(
         needs="private",
     ), Tool(
         name="finance_transactions",
-        description="Операции за месяц (YYYY-MM), можно по категории: дата, сумма, описание, категория.",
+        description=("Transactions for a month (YYYY-MM), optionally by category: date, sum, description, "
+                     "category."),
         schema={"type": "object", "additionalProperties": False, "required": ["period"],
                 "properties": {"period": {"type": "string"}, "category": {"type": "string"},
                                "user": _USER, "limit": {"type": "integer"}}},

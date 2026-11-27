@@ -7,7 +7,7 @@ from skills.photos import remember, with_meta
 
 
 def context():
-    return "## Семья\n\n" + photolib.family_block()
+    return "## Family\n\n" + photolib.family_block()
 
 
 def lookup(args, person):
@@ -57,18 +57,18 @@ SKILL = Skill(
     context=context,
     tools=[Tool(
         name="family_lookup",
-        description="Поиск человека в родовом дереве семьи (photolib, ~170 персон): даты рождения и "
-                    "смерти, родители, супруги, дети, братья и сёстры, описание. По имени или его части.",
+        description=("Find a person in the family tree (photolib, ~170 people): birth and death dates, "
+                     "parents, spouses, children, siblings, description. By name or part of it."),
         schema={"type": "object", "additionalProperties": False, "required": ["name"],
-                "properties": {"name": {"type": "string", "description": "имя или часть имени"}}},
+                "properties": {"name": {"type": "string", "description": "name or part of it"}}},
         handler=lookup,
         needs="persons.view",              # photolib section, as in its web UI
     ), Tool(
         name="person_card",
-        description="Показать человека на экране телевизора: портрет, даты, родня и его последние фото "
-                    "из семейного архива (пронумерованы). Для «покажи Соню», «покажи фото бабушки».",
+        description=("Show a person on the TV: portrait, dates, relatives and their latest archive photos "
+                     "(numbered). For «покажи Соню», «покажи фото бабушки»."),
         schema={"type": "object", "additionalProperties": False, "required": ["name"],
-                "properties": {"name": {"type": "string", "description": "имя или часть имени"}}},
+                "properties": {"name": {"type": "string", "description": "name or part of it"}}},
         handler=card,
         needs="persons.view",
     )],

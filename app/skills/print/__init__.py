@@ -169,102 +169,94 @@ def cancel(args, person):
 
 
 _COPIES = {"type": "integer", "minimum": 1, "maximum": 5}
-_AGAIN = {"type": "boolean", "description": "печатать то же самое ещё раз (только если человек прямо просит повторить)"}
-_PAGES = {"type": "string", "description": "страницы, например 1-3,5; пусто - все"}
+_AGAIN = {"type": "boolean", "description": "print the same again (only if the person plainly asks to repeat)"}
+_PAGES = {"type": "string", "description": "pages, e.g. 1-3,5; empty - all"}
 
 SKILL = Skill(
     name="print",
     summary="присланные в Телеграм файлы и фото (посмотреть, разобрать) и печать на домашнем принтере",
-    prompt="""## Присланные файлы и печать
+    prompt="""## Files sent to you and printing
 
-Что присылают тебе в Телеграме (фото, картинки, PDF, офисные документы - odt, ods,
-docx, xlsx и др., другие файлы), лежит у тебя
-под file_id - в переписке это пометка «[прислан файл: …, file_id=…]».
-- file_view - посмотреть: картинку видишь, PDF читаешь. Спрашивают про присланное
-  («что это за растение», «что тут написано», «посчитай по чеку») - сначала
-  посмотри, потом отвечай. Без подписи к файлу - посмотри и коротко скажи, что это,
-  спроси, что с ним сделать.
-- Печать (принтер дома один - лазерный, чёрно-белый, A4): file_print - присланный
-  файл (PDF, картинка); print_photos - фото из архива по номерам; print_text -
-  то, что ты составила сама (список покупок, рецепт, заметка: заголовки «# »,
-  пункты «- »); print_url - PDF или картинка по ссылке (веб-страницу целиком не
-  печатаешь - перескажи и напечатай текстом); print_page - своя страница
-  (график, отчёт, таблица по финансам, электроэнергии, чему угодно - то же,
-  что для show_html, но для бумаги: белый фон, чёрный текст и линии, A4;
-  layout=document); print_screen - то, что сейчас на телевизоре («напечатай
-  это»: открытое фото, фото заставки, твой рисунок, твоя страница).
-  Печать - для любого вывода: что показала или посчитала, можно напечатать. printer_status - принтер и очередь,
-  print_cancel - отменить задание.
-- «Распечатай это», «распечатай» без уточнения - то, что на телевизоре:
-  print_screen. Свой рисунок - file_print с его file_id. Номера фото из старых
-  ответов для печати не бери, если не ясно, что о них речь: непонятно, что
-  печатать, - переспроси (вместо раскраски однажды ушло старое фото Сони).
-- Просят напечатать - печатай, не переспрашивая; скажи, сколько страниц ушло.
-  Больше 10 страниц или копий - сначала уточни. Фото выйдут чёрно-белыми.""",
+What is sent to you in Telegram (photos, pictures, PDF, office documents - odt, ods,
+docx, xlsx..., other files) is kept under a file_id - in the chat a mark «[прислан
+файл: …, file_id=…]».
+- Asked about a sent file («что это за растение», «что тут написано», «посчитай по
+  чеку») - file_view first, then answer. No caption - look, say briefly what it is,
+  ask what to do with it.
+- The printer at home is one: laser, black and white, A4. Anything you showed or
+  computed can be printed. A web page is not printed whole - retell it and
+  print_text. print_page - the same as show_html but for paper (white background,
+  black text and lines, A4, layout=document).
+- «Распечатай это», «распечатай» with nothing more - what is on the TV:
+  print_screen. Your own drawing - file_print with its file_id. Do not take photo
+  numbers from old answers unless it is clear they are meant: unclear what to print -
+  ask (an old photo of Соня once went instead of a coloring page).
+- Asked to print - print without asking; say how many pages went. Over 10 pages or
+  copies - check first. Photos come out black and white.""",
     tools=[Tool(
         name="file_view",
-        description="Посмотреть присланный файл по file_id: картинка видна как картинка, PDF - как документ, "
-                    "текстовый файл - текстом. detail=true - картинка в полном размере (мелкий текст).",
+        description=("Look at a sent file by file_id: a picture as a picture, PDF as a document, text as text. "
+                     "detail=true - a picture at full size (small text)."),
         schema={"type": "object", "additionalProperties": False, "required": ["file_id"],
                 "properties": {"file_id": {"type": "string"}, "detail": {"type": "boolean"}}},
         handler=view, needs="known",
     ), Tool(
         name="file_print",
-        description="Напечатать присланный файл (PDF, картинку, офисный документ) на домашнем принтере.",
+        description="Print a sent file (PDF, picture, office document) on the home printer.",
         schema={"type": "object", "additionalProperties": False, "required": ["file_id"],
                 "properties": {"again": _AGAIN, "file_id": {"type": "string"}, "copies": _COPIES, "pages": _PAGES,
                                "fit": {"type": "string", "enum": ["fit", "fill"],
-                                       "description": "картинка: fit - целиком с полями, fill - на весь лист с обрезкой"}}},
+                                       "description": "picture: fit - whole with margins, fill - the whole sheet, cropped"}}},
         handler=print_file, needs="known",
     ), Tool(
         name="print_photos",
-        description="Напечатать фото из домашнего архива (номера из поиска фото), каждое на своём листе A4.",
+        description="Print archive photos (numbers from a photo search), each on its own A4 sheet.",
         schema={"type": "object", "additionalProperties": False, "required": ["photo_ids"],
                 "properties": {"again": _AGAIN, "photo_ids": {"type": "array", "items": {"type": "integer"}, "maxItems": 20},
                                "copies": _COPIES, "fit": {"type": "string", "enum": ["fit", "fill"]}}},
         handler=print_photos, needs="known",
     ), Tool(
         name="print_text",
-        description="Напечатать текст, который ты составила (список, рецепт, заметка). Строки «# » - заголовки, "
-                    "«- » и «1. » - пункты.",
+        description=("Print a text you wrote (a list, recipe, note). Lines «# » - headings, «- » and «1. » - "
+                     "items."),
         schema={"type": "object", "additionalProperties": False, "required": ["text"],
                 "properties": {"again": _AGAIN, "title": {"type": "string"}, "text": {"type": "string"}, "copies": _COPIES}},
         handler=print_text, needs="known",
     ), Tool(
         name="print_url",
-        description="Напечатать PDF или картинку по ссылке (из поиска в интернете). Веб-страницы не печатаются.",
+        description="Print a PDF or picture by link (from a web search). Web pages are not printed.",
         schema={"type": "object", "additionalProperties": False, "required": ["url"],
                 "properties": {"again": _AGAIN, "url": {"type": "string"}, "copies": _COPIES, "pages": _PAGES}},
         handler=print_url, needs="known",
     ), Tool(
         name="print_page",
-        description="Напечатать свою страницу: график, отчёт, таблицу (финансы, электроэнергия, что угодно). "
-                    "html - документ целиком, для бумаги: белый фон, чёрный текст, линии графиков тёмные и "
-                    "различимые без цвета (принтер чёрно-белый), шрифт 12-14 pt. Графики: "
-                    "<script src=\"/lib/chart.umd.min.js\"></script> (Chart.js 4), animation: false. "
-                    "layout: document - A4 страницы, как печатает браузер (по умолчанию); screen - одна "
-                    "картинка 1280x720 на лист, как на телевизоре.",
+        description=("Print your own page: a chart, report, table (finances, electricity, anything). html - a "
+                     "whole document for paper: white background, black text, chart lines dark and "
+                     "distinguishable without colour (the printer is black and white), font 12-14 pt. Charts: "
+                     '<script src="/lib/chart.umd.min.js"></script> (Chart.js 4), animation: false. layout: '
+                     "document - A4 pages as a browser prints (default); screen - one 1280x720 picture per "
+                     "sheet, as on the TV."),
         schema={"type": "object", "additionalProperties": False, "required": ["html"],
                 "properties": {"again": _AGAIN, "title": {"type": "string"}, "html": {"type": "string"},
                                "layout": {"type": "string", "enum": ["document", "screen"]}, "copies": _COPIES}},
         handler=print_page, needs="known",
     ), Tool(
         name="print_screen",
-        description="Напечатать то, что сейчас на телевизоре: открытое фото, фото заставки, твой рисунок, "
-                    "твою страницу (как на экране; тёмный фон печатается светлым). Сетка из нескольких фото - "
-                    "только с all=true (каждое на своём листе).",
+        description=("Print what is on the TV now: the open photo, the slideshow photo, your drawing, your "
+                     "page (as on screen; a dark background prints light). A grid of several photos - only "
+                     "with all=true (each on its own sheet)."),
         schema={"type": "object", "additionalProperties": False,
                 "properties": {"again": _AGAIN, "copies": _COPIES, "all": {"type": "boolean"},
                                "fit": {"type": "string", "enum": ["fit", "fill"]}}},
         handler=print_screen, needs="screen",
     ), Tool(
         name="printer_status",
-        description="Домашний принтер: готов ли, что в очереди печати.",
+        description="The home printer: is it ready, what is in the queue.",
         schema={"type": "object", "additionalProperties": False, "properties": {}},
         handler=status, needs="known",
     ), Tool(
         name="print_cancel",
-        description="Отменить задание печати (номер из printer_status или из ответа печати).",
+        description="Cancel a print job (number from printer_status or from a print answer).",
         schema={"type": "object", "additionalProperties": False, "required": ["job"],
                 "properties": {"job": {"type": "string"}}},
         handler=cancel, needs="known",

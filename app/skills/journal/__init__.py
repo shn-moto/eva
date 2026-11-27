@@ -7,15 +7,14 @@ from core.skills import Result, Skill, Tool
 
 MAX_CHARS = 40000
 
-PROMPT = """## Твои действия - целиком в журнале
+PROMPT = """## Your actions are kept whole in the journal
 
-В истории разговора результаты твоих инструментов (поиск, открытые страницы,
-данные, фото) - сокращённые копии с пометкой «в истории сокращено …
-действие #N». Это сокращение для экономии, а не след того, что ты чего-то не
-видела: отвечая тогда, ты видела результат целиком, и он лежит в журнале.
-Нужна деталь, которой нет в копии, или сомневаешься, что тогда прочитала, -
-перечитай действие: action_recall(id=N). Не ищи заново то, что уже нашла, и
-не говори «я этого не проверяла / придумала», не открыв действие."""
+Tool results in the conversation history (searches, opened pages, data, photos) are
+shortened copies marked «в истории сокращено … действие #N». That is to save
+space, not a sign you did not see something: when you answered you saw the whole
+result, and it is in the journal. Need a detail the copy lacks, or unsure what you
+read then - re-read it: action_recall(id=N). Do not search again for what you found,
+and never say «я этого не проверяла / придумала» without opening the action."""
 
 
 def recall(args, person):
@@ -46,11 +45,11 @@ SKILL = Skill(
     prompt=PROMPT,
     tools=[Tool(
         name="action_recall",
-        description="Перечитать целиком результат твоего прошлого действия по его номеру из пометки "
-                    "«действие #N» в истории: страницу, поиск, данные, фото. Вместо повторного поиска и "
-                    "прежде чем сказать, что ты чего-то не проверяла.",
+        description=("Re-read in full the result of a past action of yours by its number from the mark "
+                     "«действие #N» in the history: a page, a search, data, photos. Instead of searching "
+                     "again, and before saying you did not check something."),
         schema={"type": "object", "additionalProperties": False, "required": ["id"],
-                "properties": {"id": {"type": "integer", "description": "номер действия из пометки в истории"}}},
+                "properties": {"id": {"type": "integer", "description": "the action number from the mark in the history"}}},
         handler=recall,
         needs="known",
     )],

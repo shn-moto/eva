@@ -178,14 +178,13 @@ def send(args, person):
     return f"Написала {u.get('person_name')} в Телеграм."
 
 
-PROMPT = """## Дом и семья - что ты можешь сделать
+PROMPT = """## Home and family
 
-who_heard - когда и что последним говорил дома член семьи (слышишь только у
-колонки и только узнанные голоса; короткое слово могла приписать не тому).
-Слышала полчаса назад - не значит «сейчас дома»: верь его «Выводу». Если не
-уверена, что человек дома, - сделай оба шага: позови вслух и напиши в Телеграм. say_at_home - сказать вслух дома через колонку
-(позвать, передать). send_message - написать члену семьи в Телеграм. Камер у тебя
-пока нет: увидеть, кто где, ты не можешь - только услышать."""
+who_heard hears only near the Station and only recognised voices (a short word may
+be put on the wrong person). Heard half an hour ago is not «home now»: trust its
+«Вывод». Not sure someone is home - do both: call them aloud (say_at_home) and write
+to Telegram (send_message). You have no cameras: you cannot see who is where, only
+hear."""
 
 SKILL = Skill(
     name="home",
@@ -193,17 +192,17 @@ SKILL = Skill(
     prompt=PROMPT,
     tools=[Tool(
         name="who_heard",
-        description="Когда и что последним говорил дома член семьи (по записям того, что слышала колонка; "
-                    "только узнанные голоса). Для «где Маша?», «Маша дома?», «давно Лиза пришла?».",
+        description=("When a family member last spoke at home and what (from what the Station heard; "
+                     "recognised voices only). For «где Маша?», «Маша дома?», «давно Лиза пришла?»."),
         schema={"type": "object", "additionalProperties": False, "required": ["name"],
                 "properties": {"name": {"type": "string"},
-                               "hours": {"type": "number", "description": "за сколько часов, по умолчанию 24"}}},
+                               "hours": {"type": "number", "description": "how many hours back, default 24"}}},
         handler=heard,
         needs="adult",
     ), Tool(
         name="say_at_home",
-        description="Сказать вслух дома через колонку - позвать кого-то, передать сообщение («Маша, тебе "
-                    "звонит Иван, перезвони ему»). Текст скажи от себя, по ситуации, коротко.",
+        description=("Say something aloud at home through the Station - call someone, pass a message («Маша, "
+                     "тебе звонит Иван, перезвони ему»). Say it yourself, fitting the moment, briefly."),
         schema={"type": "object", "additionalProperties": False, "required": ["text"],
                 "properties": {"text": {"type": "string"}}},
         handler=say_home,
@@ -211,8 +210,8 @@ SKILL = Skill(
         needs="known",
     ), Tool(
         name="send_message",
-        description="Написать члену семьи в Телеграм от себя (у кого Телеграм есть в photolib): передать "
-                    "ответ, напомнить, позвать.",
+        description=("Write to a family member in Telegram yourself (those with Telegram in photolib): pass an "
+                     "answer, remind, call."),
         schema={"type": "object", "additionalProperties": False, "required": ["name", "text"],
                 "properties": {"name": {"type": "string"}, "text": {"type": "string"}}},
         handler=send,

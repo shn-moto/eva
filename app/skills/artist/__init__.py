@@ -285,54 +285,43 @@ def save(args, person):
 
 
 _SHAPE = {"type": "string", "enum": ["square", "portrait", "landscape"],
-          "description": "square - квадрат (по умолчанию), portrait - вертикальная (для печати на A4), "
-                         "landscape - горизонтальная (для телевизора)"}
-_TITLE = {"type": "string", "description": "короткое название по-русски («лиса с книжкой»)"}
+          "description": "square (default), portrait (for printing on A4), landscape (for the TV)"}
+_TITLE = {"type": "string", "description": "a short title in Russian («лиса с книжкой»)"}
 
-PROMPT = """## Художник (рисунки)
+PROMPT = """## Artist
 
-Ты умеешь рисовать: picture_draw - картинка по описанию, picture_redraw -
-обработать готовую картинку по указанию (image prompt): фото из архива по
-photo_id, присланную картинку или свой рисунок по file_id. Просят про то, что
-открыто на телевизоре («сделай HDR», «изобрази его лысым», «посади их на
-яхту», «нарисуй такую же раскраску, но с собачкой») - picture_redraw без
-photo_id и file_id: возьмётся то, что на экране.
-- Prompt правки - по-английски, описывай РЕЗУЛЬТАТ, а не операции: что должно
-  быть на картинке («Show the girl from this photo sitting on a big friendly
-  grey wolf in a forest. Keep her face, hair and clothes. Only the girl and the
-  wolf, nobody else.»), а не «remove the man, keep the pose» - так модель
-  рисовала голову папы в руках у дочки и двухголовых волков.
-  С людьми всегда: "keep the person's face, identity, pose and clothes
-  unchanged". Примеры: HDR - "apply a strong HDR photo effect: bright
-  shadows, detailed highlights, vivid colors, keep the composition and
-  people unchanged"; лысый - "make the man bald, keep his face and identity
-  unchanged, photorealistic"; яхта - "place the person on the deck of a
-  sailing yacht at sea, sunny day, keep the face and identity unchanged,
-  photorealistic"; в том же стиле, другой сюжет - "replace the panda with
-  a puppy, keep exactly the same coloring-page style: black outlines on
-  white, same line thickness, same layout".
-  Людей на фото несколько - назови, кого меняешь ("the man on the left"), и
-  добавь "keep everyone else in the picture unchanged" (иначе модель может
-  убрать остальных: на яхте оставила одного папу без дочки).
-- Людей не раздеваешь и не делаешь унизительного или пугающего; шутки
-  (лысый, усы, костюм супергероя, другая эпоха) - пожалуйста.
-- Описание (prompt) пиши по-английски, подробно: что изображено, стиль
-  (детская книжка, акварель, аниме, мультфильм, раскраска - чёрные контуры
-  на белом), цвета, фон. Надписей на картинке не проси: модели пишут буквы
-  с ошибками, особенно по-русски.
-- Рисунок идёт ~15-20 с (быстрый, quality=fast, ~10 с и проще - когда просят быстро
-  или черновик). Перед рисованием скажи коротко «сейчас нарисую».
-- Посмотри на результат честно, прежде чем говорить. Лишние головы, руки,
-  чужие люди, не та сцена или (после переделки) исходное фото не то, о котором
-  просили, - скажи прямо, что вышло криво или взялось не то фото, и предложи
-  переделать. Не шути над браком и не выдавай его за задумку.
-- Готовый рисунок сам показывается (телевизор или фото в Телеграме), ты его
-  видишь. Скажи одной фразой, что получилось, без описания каждой детали.
-- По просьбе: напечатать - file_print с его file_id (принтер чёрно-белый:
-  для печати детям раскраска выходит лучше цветной картинки); сохранить -
-  picture_save (в архив, альбом «Картинки от Евы» или названный); не
-  нравится - picture_redraw с поправкой или нарисуй заново.
-- Детям рисуешь охотно; ничего страшного, жестокого и взрослого."""
+A request about what is open on the TV («сделай HDR», «изобрази его лысым», «посади
+их на яхту», «такую же раскраску, но с собачкой») - picture_redraw without photo_id
+and file_id: it takes what is on the screen.
+- Edit prompts in English, describing the RESULT, not operations: what must be in the
+  picture ("Show the girl from this photo sitting on a big friendly grey wolf in a
+  forest. Keep her face, hair and clothes. Only the girl and the wolf, nobody else."),
+  not "remove the man, keep the pose" - that drew the dad's head in the girl's hands
+  and two-headed wolves. With people always: "keep the person's face, identity, pose
+  and clothes unchanged". Examples: HDR - "apply a strong HDR photo effect: bright
+  shadows, detailed highlights, vivid colors, keep the composition and people
+  unchanged"; bald - "make the man bald, keep his face and identity unchanged,
+  photorealistic"; same style, new subject - "replace the panda with a puppy, keep
+  exactly the same coloring-page style: black outlines on white, same line
+  thickness, same layout". Several people - name whom you change ("the man on the
+  left") and add "keep everyone else in the picture unchanged" (else the model drops
+  them: the yacht kept the dad without his daughter).
+- Draw prompts in English, detailed: subject, style (children's book, watercolor,
+  anime, cartoon, coloring page - black outlines on white), colors, background. No
+  text in the picture: models misspell letters, Russian ones most.
+- Never undress people or make anything humiliating or scary; jokes (bald,
+  moustache, superhero suit, another era) are fine. For children - gladly; nothing
+  scary, cruel or adult.
+- Drawing takes ~15-20 s (quality=fast ~10 s, simpler - when asked for quick or a
+  draft). Say briefly «сейчас нарисую» first.
+- Look at the result honestly before speaking. Extra heads or hands, strangers, the
+  wrong scene or (after a redraw) the wrong source photo - say plainly it came out
+  wrong and offer to redo. Never joke about a defect or pass it off as intended.
+- The picture shows itself (TV or a photo in Telegram) and you see it: one sentence
+  about what came out, not every detail.
+- Print it - file_print with its file_id (the printer is black and white: a coloring
+  page prints better for children than a colour picture); save - picture_save;
+  disliked - picture_redraw with a correction, or draw anew."""
 
 SKILL = Skill(
     name="artist",
@@ -340,36 +329,34 @@ SKILL = Skill(
     prompt=PROMPT,
     tools=[Tool(
         name="picture_draw",
-        description="Нарисовать картинку по описанию (генерация изображения). Картинка показывается сама; "
-                    "возвращает её file_id.",
+        description=("Draw a picture from a description (image generation). It shows itself; returns its "
+                     "file_id."),
         schema={"type": "object", "additionalProperties": False, "required": ["prompt", "title"],
-                "properties": {"prompt": {"type": "string", "description": "подробное описание по-английски"},
+                "properties": {"prompt": {"type": "string", "description": "a detailed description in English"},
                                "title": _TITLE, "shape": _SHAPE,
                                "quality": {"type": "string", "enum": ["best", "fast"],
-                                           "description": "best (~15-20 с, по умолчанию) | fast (~10 с, проще)"}}},
+                                           "description": "best (~15-20 s, default) | fast (~10 s, simpler)"}}},
         handler=draw, needs="known",
     ), Tool(
         name="picture_redraw",
-        description="Обработать картинку по указанию (image prompt: эффект, другой фон, другая внешность, "
-                    "тот же стиль с другим сюжетом): фото из архива (photo_id), присланную картинку или свой "
-                    "рисунок (file_id), а без них - то, что открыто на телевизоре. Результат показывается сам.",
+        description=("Edit a picture by an instruction (image prompt: an effect, another background, another "
+                     "look, the same style with another subject): an archive photo (photo_id), a sent picture "
+                     "or your drawing (file_id), and without them what is open on the TV. The result shows "
+                     "itself."),
         schema={"type": "object", "additionalProperties": False, "required": ["prompt", "title"],
-                "properties": {"prompt": {"type": "string", "description": "что сделать, по-английски "
-                                          "(\"turn into a watercolor illustration, keep the faces\")"},
-                               "photo_id": {"type": "integer", "description": "фото из архива; "
-                                            "без photo_id и file_id - то, что сейчас на телевизоре"},
+                "properties": {"prompt": {"type": "string", "description": 'what to do, in English ("turn into a watercolor illustration, keep the faces")'},
+                               "photo_id": {"type": "integer", "description": "an archive photo; without photo_id and file_id - what is on the TV now"},
                                "file_id": {"type": "string"},
                                "title": _TITLE,
                                "quality": {"type": "string", "enum": ["best", "fast"],
-                                           "description": "best (~20 с, по умолчанию) | fast (~20 с, слабее на "
-                                                          "больших переменах сцены)"},
+                                           "description": "best (~20 s, default) | fast (~20 s, weaker on big scene changes)"},
                                "shape": {"type": "string", "enum": ["auto", "square", "portrait", "landscape"],
-                                         "description": "auto - как у исходной (по умолчанию)"}}},
+                                         "description": "auto - as the source (default)"}}},
         handler=redraw, needs="known",
     ), Tool(
         name="picture_save",
-        description="Сохранить рисунок (file_id) в семейный фотоархив, в альбом «Картинки от Евы» "
-                    "(или в названный album; нет такого - будет создан).",
+        description=("Save a drawing (file_id) to the family photo archive, album «Картинки от Евы» (or the "
+                     "named album; created if missing)."),
         schema={"type": "object", "additionalProperties": False, "required": ["file_id"],
                 "properties": {"file_id": {"type": "string"}, "title": _TITLE,
                                "album": {"type": "string"}}},

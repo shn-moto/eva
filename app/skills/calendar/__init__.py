@@ -194,35 +194,32 @@ def remove(args, person):
     return f"Удалила: «{e.get('title')}» ({_repeat_text(e.get('repeat'))})." if e else f"Нет события {args['id']}."
 
 
-PROMPT = """## Календарь и планировщик
+PROMPT = """## Calendar and scheduler
 
-calendar_add - поставить в календарь: action remind - напомнить (notify: home -
-вслух дома, telegram - в Телеграм, both), music - включить музыку (query, kind
-selection для подборки), alarm - умный будильник (тихая мелодия плавно
-нарастает; query - своя мелодия, иначе спокойная утренняя), task - поручение
-тебе самой на то время («в 8 утра расскажи погоду», «в пятницу проверь счёт
-за свет») - тогда ты его выполнишь и скажешь результат вслух.
-when - дата и время «YYYY-MM-DD HH:MM» (сегодняшняя дата и время - в начале
-каждой реплики); «через 10 минут» посчитай сама.
-- Разово или регулярно? Если просьба звучит как повторяющаяся («буди меня»,
-  «включай», «по утрам», «напоминай пить таблетки»), а это не сказано прямо -
-  СНАЧАЛА спроси одной фразой: «Это только завтра или каждый день / по
-  будням?» - и только потом добавляй. Сказано прямо («каждый понедельник»,
-  «только завтра») - не переспрашивай. repeat: {"every": day | weekdays |
-  weekend | week (+ days: 0=пн..6=вс) | month | year}.
-- Напоминание другому человеку (who) - в Телеграм ему (и дома вслух, если он дома).
-- Добавив, подтверди коротко: что, когда, разово или регулярно.
-- calendar_list - что запланировано (и ближайшие дни рождения); calendar_remove
-  - убрать по id (сначала calendar_list, если id не знаешь).
-- Будильник выключают «Ева, выключи» (это остановка музыки). «Ещё 10 минут» -
-  новый разовый alarm через 10 минут.
-- Дни рождения из семейного дерева ты объявляешь дома сама: утром в день
-  рождения и накануне вечером - их в календарь добавлять не надо."""
+calendar_add actions: remind (notify: home - aloud at home, telegram, both); music
+(query; kind selection for a mix); alarm - a smart alarm (a quiet tune slowly
+rising; query - their own tune, else a calm morning one); task - an errand for you
+at that time («в 8 утра расскажи погоду», «в пятницу проверь счёт за свет») - you
+do it then and say the result aloud.
+when - "YYYY-MM-DD HH:MM" (today's date and time are at the start of every phrase);
+work out «через 10 минут» yourself.
+- Once or recurring? If the request sounds recurring («буди меня», «включай», «по
+  утрам», «напоминай пить таблетки») and it is not said - FIRST ask in one sentence
+  «Это только завтра или каждый день / по будням?», only then add. Said plainly
+  («каждый понедельник», «только завтра») - do not ask. repeat: {"every": day |
+  weekdays | weekend | week (+ days: 0=Mon..6=Sun) | month | year}.
+- A reminder for another person (who) goes to their Telegram (and aloud if home).
+- After adding, confirm briefly: what, when, once or recurring.
+- calendar_remove needs the id: calendar_list first if you do not know it.
+- The alarm is stopped by «Ева, выключи» (stops the music). «Ещё 10 минут» - a new
+  one-off alarm in 10 minutes.
+- Birthdays from the family tree you announce at home yourself (that morning and the
+  evening before): do not add them to the calendar."""
 
 _REPEAT = {"type": "object", "additionalProperties": False, "required": ["every"],
            "properties": {"every": {"type": "string", "enum": list(cal.EVERY)},
                           "days": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 6},
-                                   "description": "для week: дни недели, 0=пн .. 6=вс"}}}
+                                   "description": "for week: weekdays, 0=Mon .. 6=Sun"}}}
 
 SKILL = Skill(
     name="calendar",
@@ -230,29 +227,29 @@ SKILL = Skill(
     prompt=PROMPT,
     tools=[Tool(
         name="calendar_add",
-        description="Поставить в календарь: напоминание, музыку, будильник или поручение себе на время, "
-                    "разово или с повтором.",
+        description=("Put in the calendar: a reminder, music, an alarm or an errand for yourself at a time, "
+                     "once or recurring."),
         schema={"type": "object", "additionalProperties": False, "required": ["title", "when", "action"],
                 "properties": {
-                    "title": {"type": "string", "description": "коротко по-русски («Наутилус - Крылья», «таблетки»)"},
-                    "when": {"type": "string", "description": "YYYY-MM-DD HH:MM, местное время"},
+                    "title": {"type": "string", "description": "short, in Russian («Наутилус - Крылья», «таблетки»)"},
+                    "when": {"type": "string", "description": "YYYY-MM-DD HH:MM, local time"},
                     "action": {"type": "string", "enum": ["remind", "music", "alarm", "task"]},
                     "repeat": _REPEAT,
-                    "text": {"type": "string", "description": "remind: что сказать; task: поручение тебе"},
-                    "query": {"type": "string", "description": "music / alarm: что искать на YouTube Music"},
+                    "text": {"type": "string", "description": "remind: what to say; task: the errand for you"},
+                    "query": {"type": "string", "description": "music / alarm: what to search on YouTube Music"},
                     "kind": {"type": "string", "enum": ["track", "selection"]},
                     "notify": {"type": "string", "enum": ["home", "telegram", "both"]},
-                    "who": {"type": "string", "description": "для кого напоминание, если не для того, кто просит"}}},
+                    "who": {"type": "string", "description": "whom the reminder is for, if not the one asking"}}},
         handler=add, needs="known",
     ), Tool(
         name="calendar_list",
-        description="Что запланировано на ближайшие дни (повторы развёрнуты) и ближайшие дни рождения.",
+        description="What is planned for the coming days (repeats expanded) and the nearest birthdays.",
         schema={"type": "object", "additionalProperties": False,
                 "properties": {"days": {"type": "integer", "minimum": 1, "maximum": 60}}},
         handler=listing, needs="known",
     ), Tool(
         name="calendar_remove",
-        description="Убрать событие из календаря по id (повторяющееся - целиком).",
+        description="Remove an event from the calendar by id (a recurring one - entirely).",
         schema={"type": "object", "additionalProperties": False, "required": ["id"],
                 "properties": {"id": {"type": "string"}}},
         handler=remove, needs="known",

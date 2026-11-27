@@ -163,14 +163,13 @@ def _prompt():
     if not DBS:
         return ""
     lines = [f"- {n}: {d.get('about', '').strip()}" for n, d in DBS.items()]
-    return ("## Данные: базы дома (только чтение)\n\n"
-            "Базы:\n" + "\n".join(lines) + "\n\n"
-            "Ответ на вопрос о том, что записано (датчики, история, счётчики, что угодно), ищи в базе сама,\n"
-            "как человек с psql: db_schema - таблицы и колонки, потом db_query - SQL (PostgreSQL), сколько\n"
-            "нужно шагов. Не знаешь, как хранится, - посмотри несколько строк (limit 5) и разберись: коды,\n"
-            "json-поля, справочники соседних таблиц. Агрегируй в SQL (avg/min/max, date_trunc, time_bucket),\n"
-            "не тащи тысячи точек. Время в базе - с часовым поясом, отвечай по местному. Смотри на свежесть:\n"
-            "последняя запись давно - так и скажи. Менять ничего нельзя: база только на чтение.")
+    return ("## Data: the home's databases (read-only)\n\n"
+            "Databases:\n" + "\n".join(lines) + "\n\n"
+            "A question about what is recorded (sensors, history, meters, anything) - find it in the database\n"
+            "yourself, like a person with psql: db_schema, then db_query, as many steps as needed. Unsure how it\n"
+            "is stored - look at a few rows (limit 5) and work it out: codes, json fields, lookup tables nearby.\n"
+            "Aggregate in SQL (avg/min/max, date_trunc, time_bucket), never pull thousands of points. Times carry\n"
+            "a time zone: answer in local time. Mind freshness: the last row is old - say so.")
 
 
 SKILL = Skill(
@@ -179,16 +178,16 @@ SKILL = Skill(
     prompt=_prompt(),
     tools=[Tool(
         name="db_schema",
-        description="Таблицы и колонки базы (с примерным числом строк и комментариями). Начни с него, "
-                    "если ещё не знаешь, как устроена база.",
+        description=("Tables and columns of a database (approximate row counts, comments). Start here if you "
+                     "do not yet know how the database is built."),
         schema={"type": "object", "additionalProperties": False, "required": ["db"],
                 "properties": {"db": {"type": "string", "enum": list(DBS) or ["-"]}}},
         handler=schema,
         needs="known",
     ), Tool(
         name="db_query",
-        description="SQL-запрос к базе (PostgreSQL, только чтение - select/with). Возвращает колонки и "
-                    f"до {MAX_ROWS} строк; время - местное. Большие выборки агрегируй в самом запросе.",
+        description=f"SQL query (PostgreSQL, read-only - select/with). Returns columns and up to {MAX_ROWS} rows; "
+                    "local time. Aggregate big selections in the query itself.",
         schema={"type": "object", "additionalProperties": False, "required": ["db", "sql"],
                 "properties": {"db": {"type": "string", "enum": list(DBS) or ["-"]},
                                "sql": {"type": "string"}}},

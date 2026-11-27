@@ -43,14 +43,12 @@ def control(args, person):
     return p.describe()
 
 
-PROMPT = """## Музыка
+PROMPT = """## Music
 
-music_play включает музыку дома (YouTube Music через колонку): kind track - одна
-песня, selection - подборка («включи что-нибудь из Queen», «песни для детей»),
-album - альбом целиком. music_control - пауза, дальше, назад, громче, тише, стоп,
-и что сейчас играет. Пока музыка играет, тебя слышно поверх неё. Включив или выключив
-музыку, ничего не говори про это: плеер на телевизоре и так видно, а озвучка стоит денег.
-Если кроме музыки ответить нечего - ответь <молчу>."""
+kind: track - one song, selection - a mix («включи что-нибудь из Queen», «песни для
+детей»), album - a whole album. While music plays you are heard over it. Turning
+music on or off, say nothing about it: the player on the TV shows it, and speech
+costs money. If there is nothing else to answer - answer <молчу>."""
 
 SKILL = Skill(
     name="music",
@@ -58,8 +56,8 @@ SKILL = Skill(
     prompt=PROMPT,
     tools=[Tool(
         name="music_play",
-        description="Включить музыку дома: песню, подборку или альбом. query - исполнитель и/или название "
-                    "как ищут на YouTube Music (лучше латиницей, если исполнитель зарубежный).",
+        description=("Play music at home: a song, a mix or an album. query - artist and/or title as searched "
+                     "on YouTube Music (Latin letters for a foreign artist)."),
         schema={"type": "object", "additionalProperties": False, "required": ["query"],
                 "properties": {"query": {"type": "string"},
                                "kind": {"type": "string", "enum": ["track", "selection", "album"]}}},
@@ -67,8 +65,8 @@ SKILL = Skill(
         needs=None,
     ), Tool(
         name="music_control",
-        description="Управление музыкой: pause, resume, next, previous, louder, quieter, stop; status - что "
-                    "играет и что дальше.",
+        description=("Music control: pause, resume, next, previous, louder, quieter, stop; status - what plays "
+                     "and what is next."),
         schema={"type": "object", "additionalProperties": False, "required": ["action"],
                 "properties": {"action": {"type": "string", "enum": ["pause", "resume", "next", "previous",
                                                                     "louder", "quieter", "stop", "status"]}}},

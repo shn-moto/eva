@@ -116,7 +116,7 @@ def _escalate(message, params, results=(), turn=None):
 # chars of a tool result kept in the conversation history. 1500 cut what she needed
 # later and she lost the thread (2026-11-24): with the 1-hour cache a bigger history
 # costs little - it is read at a tenth of the price, written again only when trimmed
-KEEP_RESULT = profile.tune("llm.keep_result", 8000)
+KEEP_RESULT = profile.tune("llm.keep_result", 4000)       # whole results stay in the journal (action_recall)
 
 
 # The internet: Anthropic's server tools (run on their side, within the same
@@ -336,8 +336,10 @@ def prepare(history, person):
 
 # How much of a conversation she keeps: by volume, not by time (Иван,
 # 2026-11-20) - a quiet day is remembered for days, a busy one for hours.
-# ~40k characters is ~15k tokens a request, read mostly from the cache.
-HISTORY_CHARS = profile.tune("llm.history_chars", 120000)  # ~40k tokens; 24000 lost the thread within minutes
+# 24000 lost the thread within minutes; 120000 was 40k tokens - 58% of a 69k prefix
+# that every cold cache write paid again ($0.28 each, 2026-11-27). 60000 is ~20k
+# tokens; older turns are still in long-term memory (memory_search).
+HISTORY_CHARS = profile.tune("llm.history_chars", 60000)
 TRIM_TO = profile.tune("llm.trim_to", 0.6)
 
 
