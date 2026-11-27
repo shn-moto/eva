@@ -283,7 +283,8 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
 .dd .menu .sw { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 /* eyes */
 #ey-cams { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; padding: 12px 14px;
-  max-height: 55vh; overflow: auto; flex-shrink: 0; }
+  overflow: auto; flex: 1; min-height: 0; align-content: start; }
+#ey-cams[hidden], #ey-log[hidden] { display: none; }
 .ey-cam { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
 .ey-cam .live { position: relative; aspect-ratio: 4 / 3; background: #000; }
 .ey-cam .live img { width: 100%; height: 100%; object-fit: contain; display: block; }
@@ -312,7 +313,7 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
 #ew-list .li { cursor: pointer; padding: 5px 8px; border-radius: 6px; }
 #ew-list .li:hover, #ew-list .li.on { background: var(--line); }
 #ew-list .li.off { color: var(--mute); }
-#ey-tj.on, #ey-tw.on { background: var(--accent-soft); color: var(--accent); }
+#ey-tc.on, #ey-tj.on, #ey-tw.on { background: var(--accent-soft); color: var(--accent); }
 #ey-big { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: flex; align-items: center; justify-content: center; z-index: 60; }
 #ey-big[hidden] { display: none; }
 #ey-big img { max-width: 94vw; max-height: 94vh; }
@@ -389,15 +390,15 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
       <label class="tog" title="Искать лица и узнавать по базе photolib"><input type="checkbox" id="ey-faces-on"> лица</label>
       <span style="flex:1"></span><button class="btn" id="ey-add">Добавить камеру</button><button class="btn primary" id="ey-save">Сохранить</button>
       <button class="btn" id="ey-close">Закрыть</button></div>
-    <div id="ey-cams"></div>
-    <div class="bar" style="border-top:1px solid var(--line)"><button class="btn on" id="ey-tj">Журнал</button><button class="btn" id="ey-tw">Сценарии</button>
-      <span id="ey-jbar" style="display:contents"><button class="btn" id="ey-prev">‹</button><input type="date" id="ey-day"><button class="btn" id="ey-next">›</button>
+    <div class="bar"><button class="btn on" id="ey-tc">Камеры</button><button class="btn" id="ey-tj">Журнал</button><button class="btn" id="ey-tw">Сценарии</button>
+      <span id="ey-jbar" style="display:none"><button class="btn" id="ey-prev">‹</button><input type="date" id="ey-day"><button class="btn" id="ey-next">›</button>
       <select id="ey-cam"><option value="">все камеры</option></select>
       <label class="tog"><input type="checkbox" id="ey-people"> только с лицами</label>
       <span class="help" id="ey-count"></span></span>
       <span id="ey-wbar" style="display:none"><button class="btn" id="ew-new">Новый</button>
         <span class="help">что делать, когда камера что-то видит — те же действия, что у слушателей; «Сохранить» вверху сохраняет и камеры, и сценарии</span></span></div>
-    <div id="ey-log"></div>
+    <div id="ey-cams"></div>
+    <div id="ey-log" hidden></div>
     <div id="ey-w" hidden><div id="ew-list"></div><div id="ew-edit"></div></div>
   </div>
 </div>
@@ -1707,10 +1708,15 @@ function eyFrames() {
   // each live picture asks for the next one after it arrives: ~2 frames a second, no pile-up
   document.querySelectorAll("#ey-cams .live img").forEach(img => {
     const id = img.dataset.id, live = EY.state[id];
-    if (!live || !live.online) { img.removeAttribute("src"); img.onload = null; return; }
-    if (img.getAttribute("src")) return;
+    if (!live || !live.online) { img.removeAttribute("src"); img.onload = null; img.dataset.run = ""; return; }
+    // only while the cameras' tab is seen; the loop stops by itself and starts again here
+    if (img.dataset.run || $("#ey-cams").hidden) return;
+    img.dataset.run = "1";
     const load = () => { img.src = `/api/eyes/live/frame/${id}.jpg?boxes=1&t=${Date.now()}`; };
-    const next = d => { if (!$("#ey").hidden && img.isConnected && img.onload) setTimeout(load, d); };
+    const next = d => {
+      if (!$("#ey").hidden && !$("#ey-cams").hidden && img.isConnected && img.onload) setTimeout(load, d);
+      else img.dataset.run = "";
+    };
     img.onload = () => next(400); img.onerror = () => next(2000);
     load();
   });
@@ -1742,7 +1748,7 @@ async function eyLog() {
       ${!e.faces.length && !e.people.length ? '<span class="help">лиц не было</span>' : ""}</div></div>`).join("")
     || '<div class="help" style="padding:10px 0">За этот день событий нет.</div>';
   document.querySelectorAll("#ey-log [data-big]").forEach(im => im.onclick = () => eyBig(im.dataset.big));
-  if (d === eyToday() && !$("#ey").hidden) EY.logTimer = setTimeout(eyLog, 15000);
+  if (d === eyToday() && !$("#ey").hidden && EY.tab === "j") EY.logTimer = setTimeout(eyLog, 15000);
 }
 function eyShift(n) {
   const d = new Date(($("#ey-day").value || eyToday()) + "T12:00:00"); d.setDate(d.getDate() + n);
@@ -1757,7 +1763,8 @@ $("#ey-open").onclick = async () => {
   $("#ey-motion-on").checked = conf.motion_on !== false; $("#ey-faces-on").checked = conf.faces_on !== false;
   $("#ey-cam").innerHTML = '<option value="">все камеры</option>' + EY.cams.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
   if (!$("#ey-day").value) $("#ey-day").value = eyToday();
-  eyRender(); eyPoll(); eyLog();
+  EW.loaded = false;
+  eyRender(); eyPoll(); eyTab(EY.tab || "c");
 };
 $("#ey-add").onclick = () => {
   let n = EY.cams.length + 1; while (EY.cams.some(c => c.id === "cam" + n)) n++;
@@ -1792,15 +1799,20 @@ $("#ey-close").onclick = () => { $("#ey").hidden = true; clearTimeout(EY.timer);
 // ---- camera scenarios (admin.py /api/watchers -> app/core/watchers.py) ----
 const EW = { items: [], log: {}, cur: 0 };
 const WON = { motion: "движение (началось и пока идёт — не чаще паузы)", person: "узнан человек", unknown: "незнакомое лицо", quiet: "тихо N минут после движения" };
-function eyTab(w) {
-  $("#ey-tj").classList.toggle("on", !w); $("#ey-tw").classList.toggle("on", w);
-  $("#ey-jbar").style.display = w ? "none" : "contents"; $("#ey-wbar").style.display = w ? "" : "none";
-  $("#ey-log").hidden = w; $("#ey-w").hidden = !w;
-  $("#ey-cams").style.maxHeight = w ? "26vh" : "";          // the editor needs the room
-  if (w) ewLoad();
+// three tabs, each the whole height: the cameras' cards were squeezed under the scenario editor (2026-11-27)
+function eyTab(t) {
+  EY.tab = t;
+  ["c", "j", "w"].forEach(k => $("#ey-t" + k).classList.toggle("on", k === t));
+  $("#ey-jbar").style.display = t === "j" ? "contents" : "none"; $("#ey-wbar").style.display = t === "w" ? "" : "none";
+  $("#ey-add").style.display = t === "c" ? "" : "none";
+  $("#ey-cams").hidden = t !== "c"; $("#ey-log").hidden = t !== "j"; $("#ey-w").hidden = t !== "w";
+  if (t === "c") eyFrames();
+  if (t === "j") eyLog();
+  if (t === "w" && !EW.loaded) ewLoad();
 }
-$("#ey-tj").onclick = () => eyTab(false);
-$("#ey-tw").onclick = () => eyTab(true);
+$("#ey-tc").onclick = () => eyTab("c");
+$("#ey-tj").onclick = () => eyTab("j");
+$("#ey-tw").onclick = () => eyTab("w");
 async function ewLoad() {
   const [r] = await Promise.all([api("/api/watchers").catch(e => ({ watchers: [], log: {}, error: e.message })), loadFamily()]);
   EW.items = r.watchers; EW.log = r.log || {}; EW.loaded = !r.error; EW.cur = Math.min(EW.cur, Math.max(0, EW.items.length - 1)); ewRender();
