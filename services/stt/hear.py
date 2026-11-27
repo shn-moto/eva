@@ -631,6 +631,8 @@ class Hearing:
                     log(f"sound: {s_['verdict']} voice {s_['voice']} {s_['kinds']} top {s_['top'][:2]}: {text!r}")
         if out.get("audio"):
             meta["audio"] = out["audio"]
+            if meta.get("raw_text") is not None:
+                note_field(out["audio"], "raw_text", meta["raw_text"])      # for the cut's redo: both readings kept
             if meta.get("sound"):
                 mark_sound(out["audio"], meta["sound"])
         if (meta.get("sound") or {}).get("emotion_wanted") and not self.dry:
@@ -715,6 +717,19 @@ def memory_key(audio, span):
     if span and span[0]:
         return audio + f"#t={span[0]:g}"
     return audio
+
+
+def note_field(audio, key, value):
+    """One more fact into the clip's json in the STT log."""
+    import os
+    p = os.path.join(S().LOG_DIR, audio.split("#")[0] + ".json")
+    try:
+        info = json.load(open(p, encoding="utf-8"))
+        info[key] = value
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False)
+    except (OSError, ValueError) as e:
+        log("note_field:", e)
 
 
 def note_who(audio, span, label, sim):

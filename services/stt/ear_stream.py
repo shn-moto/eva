@@ -80,6 +80,13 @@ OVERLAP = 19                     # chunks (~0.6 s) shared by consecutive windows
 VAD_STUCK = 3.0                  # s loud with no voice at all: the VAD's state starts over
 BOX_S = 60
 BOX_AUTO_EVERY = 600.0
+BOX_KEEP = int(_f("box_keep", 80))   # ~5.7 MB each
+# Data for redoing the cut (2026-11-27): with AEC3 removing her own sound, the windows over her
+# voice may be needless and the raw mics may read better than the canceller's output. While this
+# file exists (touch / rm it on the hub, no restart), a phrase said over her music or voice
+# leaves a black box (mic, reference, output, VAD, flags) - at most one per COLLECT_EVERY.
+COLLECT_FLAG = os.path.join(BOX_DIR, "COLLECT")
+COLLECT_EVERY = _f("collect_every", 300.0)
 
 STATE = {"connected": False, "peer": None, "since": None, "minute": None}
 
@@ -196,6 +203,7 @@ class Ear:
         self.d_ref = np.zeros(ear_null.HOP, np.int16)
         self.box = collections.deque(maxlen=int(BOX_S * SR / CHUNK))
         self.box_auto = 0.0
+        self.collect_at = 0.0
         self.seq = 0
         # samples waiting for a whole VAD chunk: processed mic, its input, raw mics, ref, flags
         self.q_e, self.q_y = np.zeros(0, np.float32), np.zeros(0, np.float32)
@@ -222,6 +230,12 @@ class Ear:
     def send(self, seg, raw7, meta):
         self.seq += 1
         meta = dict(meta, seq=self.seq, record=bool(self.flags & 4) or None, now=time.time())
+        if seg is not None and (meta.get("playback") or meta.get("music")) \
+                and meta["now"] - self.collect_at > COLLECT_EVERY and os.path.exists(COLLECT_FLAG):
+            # a few seconds later: the box then holds the phrase's end and what followed it
+            self.collect_at = meta["now"]
+            why = "over-music" if meta.get("music") else "over-her"
+            threading.Timer(4.0, self.dump, args=(why,)).start()
         if not meta.get("window"):
             hear.EVENTS.publish({"type": "hearing", "on": False, "source": "station"})
         if seg is None:
@@ -377,7 +391,14 @@ class Ear:
         self.stats_t, self.stats, self.sent = now, collections.Counter(), 0
 
     def dump(self, reason):
-        items = list(self.box)
+        for _ in range(3):
+            try:
+                items = list(self.box)        # the stream appends meanwhile (a dump from a timer)
+                break
+            except RuntimeError:
+                time.sleep(0.01)
+        else:
+            return None
         if not items:
             return None
         os.makedirs(BOX_DIR, exist_ok=True)
@@ -385,7 +406,7 @@ class Ear:
         np.savez(path, y=np.concatenate([i[0] for i in items]), x=np.concatenate([i[1] for i in items]),
                  e=np.concatenate([i[2] for i in items]), p=np.array([i[3] for i in items], dtype=np.float32),
                  flags=np.array([i[4] for i in items], dtype=np.uint8), sr=SR, chunk=CHUNK, end=time.time())
-        for f in sorted(f for f in os.listdir(BOX_DIR) if f.endswith(".npz"))[:-12]:
+        for f in sorted(f for f in os.listdir(BOX_DIR) if f.endswith(".npz"))[:-BOX_KEEP]:
             os.remove(os.path.join(BOX_DIR, f))
         log(f"black box: {path} ({len(items) * CHUNK / SR:.0f} s)")
         return path
