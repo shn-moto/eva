@@ -119,10 +119,12 @@
   .slides img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
     opacity: 0; transition: opacity 1.2s ease; }
   .slides img.on { opacity: 1; }
-  .slidecap { position: absolute; left: 36px; right: 360px; bottom: 26px; font-size: 26px; color: #fff;
-    text-shadow: 0 0 10px #000, 0 0 3px #000; line-height: 1.3; transition: opacity 0.4s ease; }
-  /* the same corner as what she heard (#status): the caption steps aside while that shows (2026-11-27) */
-  #wrap.hearing .slidecap { opacity: 0; }
+  .slidecap { position: absolute; left: 36px; right: 360px; bottom: 58px; font-size: 26px; color: #fff;
+    text-shadow: 0 0 10px #000, 0 0 3px #000; line-height: 1.3; }
+  /* what she heard runs along the very bottom, one line, under the caption: they shared the corner and
+     overlapped; hiding the caption meanwhile would blink it all day - people talk constantly (2026-11-27) */
+  #wrap.slidemode #status { bottom: 14px; max-height: 1.25em; text-shadow: 0 0 10px #000, 0 0 3px #000; }
+  #wrap.slidemode #attn { bottom: 6px; height: 4px; }
   .slidecap .t { font-size: 17px; color: #8fe9ff; text-transform: uppercase; letter-spacing: 2px; }
   /* music under the slideshow: what plays, top right (it no longer stops the slideshow) */
   .slidemusic { position: absolute; top: 22px; right: 28px; max-width: 55%; font-size: 22px; color: #fff;
@@ -711,7 +713,6 @@ function drawStatus(now, t) {
     shownStatus = key;
     if (txt) fitStatus(txt);
     statusEl.classList.toggle("on", !!txt);
-    wrap.classList.toggle("hearing", !!txt);
     statusEl.classList.toggle("dim", hear.state === "ignored");
   }
   const left = attn.speaking ? 1 : Math.max(0, (attn.until - now) / (attn.total || 1));
