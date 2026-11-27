@@ -215,6 +215,20 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
          padding: 8px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none;
          z-index: 100; }        /* above the dialogs (z 20): a warning inside the calendar was drawn under it */
 #toast.show { opacity: .92; }
+/* the phrase filters: a dropdown of checkboxes */
+.dd { position: relative; }
+.dd > button { padding: 3px 10px; font-size: 12.5px; }
+.dd > button.act { border-color: var(--accent); background: var(--accent-soft); }
+.dd .menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 15; min-width: 200px; max-height: 60vh; overflow: auto;
+            background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.15);
+            padding: 4px 0; font-size: 13px; }
+.dd .menu[hidden] { display: none; }
+.dd .menu label { display: flex; align-items: center; gap: 7px; padding: 3px 12px; cursor: pointer; white-space: nowrap; }
+.dd .menu label:hover { background: var(--sel); }
+.dd .menu label i { font-style: normal; color: var(--faint); margin-left: auto; padding-left: 12px; font-size: 11.5px; }
+.dd .menu .q { display: flex; gap: 10px; padding: 4px 12px 6px; border-bottom: 1px solid var(--line); margin-bottom: 3px; }
+.dd .menu .q a { color: var(--accent); cursor: pointer; font-size: 12px; }
+.dd .menu .sw { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 </style>
 </head>
 <body>
@@ -297,6 +311,8 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
     <div class="bar">
       <span class="title" id="dtitle">—</span><span class="sub" id="dsub"></span>
       <span style="flex:1"></span>
+      <div class="dd" id="f-people"></div>
+      <div class="dd" id="f-emo"></div>
       <label class="tog"><input type="checkbox" id="heard"> всё услышанное</label>
       <label class="tog"><input type="checkbox" id="onlykeep"> только оставленные</label>
     </div>
@@ -361,6 +377,61 @@ function color(name) {
   return colors[name];
 }
 
+/* phrase filters: by person and by emotion; null = everything (remembered between visits) */
+const UNK = "\u0000unk", NOEMO = "none";
+const EMO_RU = { angry: "злость", sad: "грусть", positive: "радость", neutral: "спокойно", [NOEMO]: "без оценки" };
+const EMO_RGB = { angry: "208, 69, 58", sad: "58, 120, 208", positive: "47, 158, 85" };
+const F = { people: store.get("f-people", null), emo: store.get("f-emo", null) };
+if (F.people) F.people = new Set(F.people); if (F.emo) F.emo = new Set(F.emo);
+// a stranger's group («Неизвестный N», «Гость 2»), an unsigned phrase, an unnamed heard clip - all «unknown»
+const isUnknown = s => !s || s === "?" || s === "unknown" || /^(неизвестн|гость)/i.test(s);
+const personKey = r => r.role === "assistant" ? "Ева" : isUnknown(r.speaker) ? UNK : r.speaker;
+const emoKey = r => (r.sound && r.sound.emo) || NOEMO;
+function fSave() { store.set("f-people", F.people && [...F.people]); store.set("f-emo", F.emo && [...F.emo]); }
+// one dropdown: items [{k, label, n, sw}]; quick links [{label, set}] - set is the new selection (null = all)
+function ddDraw(el, title, items, sel, quick, onSet) {
+  const open = !el.querySelector(".menu")?.hidden && !!el.querySelector(".menu");
+  const active = sel && items.some(x => !sel.has(x.k));
+  const shown = !sel ? "все" : items.filter(x => sel.has(x.k)).map(x => x.label);
+  const txt = !sel ? "все" : !shown.length ? "никто" : shown.length <= 2 ? shown.join(", ") : `${shown.length} из ${items.length}`;
+  el.innerHTML = `<button class="btn${active ? " act" : ""}">${title}: ${esc(txt)} ▾</button><div class="menu"${open ? "" : " hidden"}>
+    <div class="q">${quick.map((q, i) => `<a data-q="${i}">${q.label}</a>`).join("")}</div>
+    ${items.map(x => `<label><input type="checkbox" data-k="${esc(x.k)}"${!sel || sel.has(x.k) ? " checked" : ""}>
+      ${x.sw ? `<span class="sw" style="background:${x.sw}"></span>` : ""}${esc(x.label)}<i>${x.n}</i></label>`).join("")}</div>`;
+  el.querySelector("button").onclick = e => { e.stopPropagation(); document.querySelectorAll(".dd .menu").forEach(m => { if (!el.contains(m)) m.hidden = true; });
+                                              const m = el.querySelector(".menu"); m.hidden = !m.hidden; };
+  el.querySelector(".menu").onclick = e => e.stopPropagation();
+  el.querySelectorAll("[data-q]").forEach(a => a.onclick = () => onSet(quick[+a.dataset.q].set()));
+  el.querySelectorAll("input[data-k]").forEach(c => c.onchange = () => {
+    const s = new Set(sel || items.map(x => x.k));
+    if (c.checked) s.add(c.dataset.k); else s.delete(c.dataset.k);
+    onSet(items.every(x => s.has(x.k)) ? null : s);       // all ticked = no filter (new people pass too)
+  });
+}
+function filtersUi(rows) {
+  const cnt = f => rows.reduce((m, r) => (m[f(r)] = (m[f(r)] || 0) + 1, m), {});
+  const pc = cnt(personKey), ec = cnt(emoKey);
+  // the people of these rows, plus those picked earlier (a pick is not lost on a day without them); the family's order
+  const keys = new Set([...Object.keys(pc), ...(F.people || [])]);
+  const order = k => k === UNK ? 1e6 : k === "Ева" ? 1e6 - 1 : SPEAKERS.includes(k) ? SPEAKERS.indexOf(k) : 1e5;
+  const people = [...keys].sort((a, b) => order(a) - order(b) || a.localeCompare(b))
+    .map(k => ({ k, label: k === UNK ? "неизвестные" : k, n: pc[k] || 0, sw: k === UNK ? "var(--mute)" : k === "Ева" ? "var(--her)" : color(k) }));
+  const setP = s => { F.people = s; fSave(); render(); };
+  ddDraw($("#f-people"), "Люди", people, F.people, [
+    { label: "все", set: () => null },
+    { label: "только неизвестные", set: () => new Set([UNK]) },
+    { label: "только семья", set: () => new Set(people.map(x => x.k).filter(k => k !== UNK && k !== "Ева")) },
+  ], setP);
+  const emos = ["angry", "sad", "positive", "neutral", NOEMO]
+    .map(k => ({ k, label: EMO_RU[k], n: ec[k] || 0, sw: EMO_RGB[k] ? `rgb(${EMO_RGB[k]})` : "var(--line)" }));
+  const setE = s => { F.emo = s; fSave(); render(); };
+  ddDraw($("#f-emo"), "Эмоции", emos, F.emo, [
+    { label: "все", set: () => null },
+    { label: "только яркие", set: () => new Set(["angry", "sad", "positive"]) },
+  ], setE);
+}
+document.addEventListener("click", () => document.querySelectorAll(".dd .menu").forEach(m => m.hidden = true));
+
 /* days */
 async function loadDays() {
   const days = await api("/api/days");
@@ -399,11 +470,14 @@ async function doSearch(q) {
 }
 function render(keepSel) {
   const only = $("#onlykeep").checked;
-  const rows = only ? S.rows.filter(r => r.keep) : S.rows;
+  const base = only ? S.rows.filter(r => r.keep) : S.rows;
+  filtersUi(base);
+  const rows = base.filter(r => (!F.people || F.people.has(personKey(r))) && (!F.emo || F.emo.has(emoKey(r))));
   S.view = rows;
   const users = rows.filter(r => r.role === "user").length, sound = rows.filter(r => r.has_audio).length;
-  $("#dsub").textContent = S.search ? `${rows.length} найдено` : `${users} фраз · ${sound} со звуком`;
-  if (!rows.length) { $("#rows").innerHTML = `<div class="empty">${S.search ? "Ничего не нашлось" : "За этот день записей нет"}</div>`; S.sel = -1; return; }
+  const of = rows.length < base.length ? ` (из ${base.length})` : "";
+  $("#dsub").textContent = (S.search ? `${rows.length} найдено` : `${users} фраз · ${sound} со звуком`) + of;
+  if (!rows.length) { $("#rows").innerHTML = `<div class="empty">${base.length ? "Под фильтр ничего не попало" : S.search ? "Ничего не нашлось" : "За этот день записей нет"}</div>`; S.sel = -1; return; }
   let html = "", lastDay = "";
   rows.forEach((r, i) => {
     if (S.search && r.day !== lastDay) { html += `<div class="dayhead">${new Date(r.day + "T12:00").toLocaleDateString("ru-RU", { weekday: "short", day: "numeric", month: "long", year: "numeric" })}</div>`; lastDay = r.day; }
