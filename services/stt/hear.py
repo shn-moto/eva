@@ -633,6 +633,10 @@ class Hearing:
             meta["audio"] = out["audio"]
             if meta.get("raw_text") is not None:
                 note_field(out["audio"], "raw_text", meta["raw_text"])      # for the cut's redo: both readings kept
+            if meta.get("start"):
+                # when the clip begins (hub clock): the file's name is when its STT finished, 0.5-2 s
+                # later - the black box page drew the phrases that late against the voice (2026-11-27)
+                note_field(out["audio"], "t0", round(float(meta["start"]), 3))
             if meta.get("sound"):
                 mark_sound(out["audio"], meta["sound"])
         if (meta.get("sound") or {}).get("emotion_wanted") and not self.dry:
