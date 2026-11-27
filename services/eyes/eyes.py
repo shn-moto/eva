@@ -54,7 +54,8 @@ KEEP_DAYS = int(os.environ.get("KEEP_DAYS", "30"))
 FACE_EVERY = 0.7          # s between face passes during an event
 IDLE_FACE_EVERY = 5.0     # s between face passes with no event (a person sitting still)
 FACE_LOG_EVERY = 3.0      # s between logged faces of one event: a person at the desk is not 400 rows
-MAX_IDS = 20              # photolib queries per event
+QUERY_EVERY = 2.0         # s between photolib questions of one camera (~0.7 s each there)
+RECHECK_S = 30            # a name found at a place in the frame holds there this long, then asked again
 MAX_EVENT_S = 300         # a long presence is split into 5-minute events
 RECENT_MOTION_S = 60      # a face keeps an event only this long after the last motion
 LIGHT = 0.5               # more of the frame changed at once = the light, not a person
@@ -419,9 +420,10 @@ class Eye(threading.Thread):
 
     def log_faces(self, found, kind, data, t):
         ev = self.event
+        named = lambda b: (ev["names_at"].get(_cell(b)) or (None, None, None, 0))
         if t - ev["last_face_log"] < FACE_LOG_EVERY:
             # not logged this time, but a name seen already is drawn on the live frame
-            self.faces = [(b, sc, ev["names_at"].get(_cell(b))) for b, sc, _ in found]
+            self.faces = [(b, sc, named(b)[1]) for b, sc, _ in found]
             return
         ev["last_face_log"] = t
         img = found[0][2]
@@ -430,11 +432,17 @@ class Eye(threading.Thread):
             m = int(max(w, h) * 0.5)
             crop = img[max(0, y - m):min(H, y + h + m), max(0, x - m):min(W, x + w + m)]
             rel = _save_jpg("faces", crop, 90)
-            row = sql("INSERT INTO eye_faces (event_id, camera, ts, crop, score, box) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
-                      (ev["id"], self.id, now(), rel, score, [x, y, w, h]), one=True)
+            # a face where a name was confirmed lately takes it without asking photolib: a fixed cap
+            # of 20 questions an event left 71 of 91 faces of a 5-minute event as «?» (2026-11-27)
+            pid, name, _, named_at = named((x, y, w, h))
+            inherit = name and t - named_at < RECHECK_S
+            row = sql("INSERT INTO eye_faces (event_id, camera, ts, crop, score, box, person_id, person) "
+                      "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                      (ev["id"], self.id, now(), rel, score, [x, y, w, h], pid if inherit else None,
+                       name if inherit else None), one=True)
             fid = row[0] if row else None
-            if ev["ids"] < MAX_IDS and min(w, h) >= 40:
-                ev["ids"] += 1
+            if not inherit and min(w, h) >= 40 and t - ev["last_query"] >= QUERY_EVERY:
+                ev["last_query"] = t
                 ok, jpg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
                 if ok:
                     threading.Thread(target=self._identify, args=(ev, fid, jpg.tobytes(), (x, y, w, h)), daemon=True).start()
@@ -448,7 +456,7 @@ class Eye(threading.Thread):
         if fid:
             sql("UPDATE eye_faces SET person_id=%s, person=%s, similarity=%s WHERE id=%s", (pid, name, sim, fid))
         if name:
-            ev["names_at"][_cell(box)] = name
+            ev["names_at"][_cell(box)] = (pid, name, sim, time.time())
             if name not in ev["people"]:
                 ev["people"].add(name)
                 log(f"{self.id}: {name} ({sim})")
@@ -460,7 +468,7 @@ class Eye(threading.Thread):
         st = now()
         row = sql("INSERT INTO eye_events (camera, started) VALUES (%s,%s) RETURNING id", (self.id, st), one=True)
         self.event = {"id": row[0] if row else None, "started": st, "t0": t, "last_active": t, "frames": 0,
-                      "peak": 0.0, "peak_frame": None, "people": set(), "ids": 0, "last_face_log": 0, "names_at": {}}
+                      "peak": 0.0, "peak_frame": None, "people": set(), "last_query": 0, "last_face_log": 0, "names_at": {}}
 
     def close_event(self):
         ev, self.event = self.event, None

@@ -1720,7 +1720,7 @@ async function eyLog() {
     <div class="t"><b>${esc(e.start)}</b>${e.end ? "–" + esc(e.end) : ""}<span class="help">${esc(e.place)} · ${dur(e.seconds)}${e.peak ? ` · ${(e.peak * 100).toFixed(1)}%` : ""}</span></div>
     <div>${e.snapshot ? `<img class="snap" loading="lazy" src="/api/eyes/img/${esc(e.snapshot)}" data-big="/api/eyes/img/${esc(e.snapshot)}" alt="кадр удалён">` : '<span class="help">без кадра</span>'}</div>
     <div>${e.people.map(p => `<span class="ey-chip">${esc(p)}</span>`).join("")}
-      <div class="ey-faces">${e.faces.map(f => `<div class="ey-face${f.person ? " known" : ""}" title="${esc(f.ts)} · лицо ${(f.score || 0).toFixed(2)}${f.sim != null ? ` · сходство ${f.sim.toFixed(2)}` : " · не опознавалось"}">
+      <div class="ey-faces">${e.faces.map(f => `<div class="ey-face${f.person ? " known" : ""}" title="${esc(f.ts)} · лицо ${(f.score || 0).toFixed(2)}${f.sim != null ? ` · сходство ${f.sim.toFixed(2)}` : f.person ? " · имя с того же места кадра (photolib спрошен недавно)" : " · не опознавалось"}">
         <img loading="lazy" src="/api/eyes/img/${esc(f.crop)}" data-big="/api/eyes/img/${esc(f.crop)}" alt="">${esc(f.person || "?")}</div>`).join("")}</div>
       ${!e.faces.length && !e.people.length ? '<span class="help">лиц не было</span>' : ""}</div></div>`).join("")
     || '<div class="help" style="padding:10px 0">За этот день событий нет.</div>';
