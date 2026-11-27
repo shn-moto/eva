@@ -64,3 +64,6 @@ scripts/state/
 
 # --- local deploy settings (hosts, keys) ---
 deploy/local.env
+
+# --- the private half of the Claude bootstrap (hosts, paths, live state) ---
+CLAUDE.local.md

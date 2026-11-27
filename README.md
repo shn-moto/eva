@@ -6,7 +6,7 @@
 
 | папка | что |
 |---|---|
-| `app/` | мозг и ухо на Станции: диалог, роутер, навыки, речь, микрофоны |
+| `app/` | мозг (контейнер `eva-brain` на сервере: диалог, роутер, навыки, речь) и тело на Станции (`ear.py` — сырой звук микрофонов, `body.py`) |
 | `ui/spike/` | экран на ТВ (cog/WPE): лицо, Live2D, плеер, графики; ui_server |
 | `os/` | своя система для Станции: загрузка, rootfs, аудио-инициализация |
 | `services/` | сервисы на сервере: STT (`stt`), музыка (`music`), индексатор памяти, старый CPU-llama |
@@ -32,8 +32,10 @@ git не попадает**: персона (`BOOTSTRAP.md`, `LEGEND.md`, `PRIVA
 deploy/station.sh --diff     # что изменится на Станции
 deploy/station.sh            # origin/main -> /opt/eva/{app,ui/spike}, перезапуск затронутых служб
 deploy/linux.sh stt          # сервис из коммита: сборка образа <имя>:<коммит> и пересоздание контейнера
-deploy/linux.sh music | router | gpu-arbiter | admin
+deploy/linux.sh brain | voice-events | admin | music | print | router | gpu-arbiter
 ```
+
+Для работы с репо (в том числе для Claude Code) — `CLAUDE.md`: где что крутится, правила, выкатка, проверка.
 
 На Станции коммит записан в `/opt/eva/DEPLOYED`, на сервере — в `~/eva-src/<сервис>/DEPLOYED`.
 
