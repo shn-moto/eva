@@ -605,6 +605,7 @@ def on_phrase(item):
         # The dialog also sent «рошом включи сборку» to Claude: $0.18 for a silence (2026-11-27 17:51)
         log(f"taken by a music listener, not to the dialog: {text!r}")
         ui({"type": "hear", "state": "called", "text": text})
+        _remember_command(text, item)
         return
     if item.get("end") and not item.get("window"):
         LATENCY["end"] = item["end"]
@@ -635,6 +636,7 @@ def on_phrase(item):
                 _listen_finish("his phrase ended")
             return
     if music_command(words, item):
+        _remember_command(text, item)
         return
     named = bool(NAME.search(text))
     maybe_named = named or bool(MAYBE_NAME.search(text))
@@ -774,9 +776,10 @@ def on_phrase(item):
         # and outside a conversation it is mostly a remark in between - silence
         if r["intent"] == "unclear" and not (maybe_named or called):
             addressed = False
-    if person.known:
+    if person.known or (addressed and r is not None and r["intent"] not in ("claude", "ignore", "unclear")):
         # long-term memory keeps the voices it knows (as the old assistant did):
-        # not children's chatter of unknown guests, not the TV
+        # not children's chatter of unknown guests, not the TV - but a command she carried out
+        # is hers whoever said it («включи семь» in an unknown voice stood as mere talk, 2026-11-27)
         memory.write("user", text, speaker=person.profile, dialog=in_dialog, addressed=addressed,
                      voice_sim=sim, dur=item.get("dur"), audio=item.get("audio"), audio_span=item.get("audio_span"))
     if addressed and r is not None and r["intent"] != "claude":
@@ -956,6 +959,22 @@ def music_down():
     listened to in a talking room (Иван, 2026-11-21)."""
     return (VOICE.speaking() or LISTEN["active"] or state.get("answering")
             or time.time() < state["called_until"])
+
+
+def _remember_command(text, item):
+    """A phrase done as a command before the dialog's own bookkeeping (a music command over the music,
+    a listener's words): into the memory as said to her - the journal showed «ева стоп» and «включи
+    сборку» as mere heard talk, the router's commands as said to Eva (2026-11-27)."""
+    try:
+        label, sim, known = who_said(item)
+        near = (item.get("speaker") or {}).get("nearest") if not known else None
+        if near and near.get("sim", 0) >= GUESS_SIM and near["label"] in VOICES.names():
+            label, known = near["label"], True
+        person = identity.from_voice(label, known)
+        memory.write("user", text, speaker=person.profile if person.known else None, dialog=False, addressed=True,
+                     voice_sim=sim, dur=item.get("dur"), audio=item.get("audio"), audio_span=item.get("audio_span"))
+    except Exception as e:
+        log(f"command not remembered: {e}")
 
 
 def music_command(words, item, addressed=False):
