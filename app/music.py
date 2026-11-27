@@ -10,6 +10,8 @@ The TV shows the player (kind "music"); other views (photos) go over it and
 the player comes back when they close (core/screen.py).
 """
 import json
+import os
+import random
 import re
 import threading
 import time
@@ -43,6 +45,9 @@ def _flag(on):
     threading.Thread(target=body.post, args=("/flag", {"name": "music", "on": bool(on)}), daemon=True).start()
 
 
+AUDIO_EXT = (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac")
+
+
 def _get(path, timeout=150):
     with urllib.request.urlopen(SERVICE + path, timeout=timeout) as r:
         return json.loads(r.read())
@@ -51,7 +56,14 @@ def _get(path, timeout=150):
 def search(query, kind="track", limit=1):
     """One track comes with the next search hits as `alts`: YouTube Music's first hit can be a
     video that is "not available" here, and a listener's song never played (2026-11-27 12:23)."""
-    if re.match(r"https?://\S+$", query.strip()) or query.strip().startswith("/media/"):
+    u = query.strip()
+    if u.startswith("/media/") and not u.lower().endswith(AUDIO_EXT):
+        # a folder on the hub: all its tracks, shuffled (a listener «сборка», 2026-11-27)
+        files = _get(f"/media?dir={urllib.parse.quote(u)}", timeout=20)
+        tracks = [{"title": os.path.splitext(f["path"].rsplit("/", 1)[-1])[0], "url": f["path"]} for f in files]
+        random.shuffle(tracks)
+        return tracks
+    if re.match(r"https?://\S+$", u) or u.startswith("/media/"):
         # a link, not words: a listener's exact track chosen on the admin page (the search's
         # order drifts - the same words gave the Leopold song, then «Живите дружно», 2026-11-27)
         # or a direct mp3, or a local file "/media/<name>" on the hub (music_server.source)

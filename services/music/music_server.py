@@ -9,7 +9,7 @@ part lives here and the Station only plays the stream with mpg123.
     GET /stream?url=<watch url>                 -> audio/mpeg, 48 kHz, as it is decoded
     GET /beats?url=<watch url>                  -> {"bpm","first"}: tempo and first beat (Eva dances)
     GET /prefetch?url=<watch url>               -> {"cached"}: download into the cache now (a listener's track)
-    GET /media                                  -> [{"path","bytes"}]: the local files
+    GET /media[?dir=/media/<folder>]            -> [{"path","bytes"}]: the local files (under a folder)
     GET /health
 A "url" may also be a direct link to an audio file (played by ffmpeg, no yt-dlp) or a local
 file "/media/<name>" (~/eva-data/media on the hub). A YouTube track played once is cached as
@@ -286,7 +286,13 @@ class H(BaseHTTPRequestHandler):
             return self._json(200, {"cached": source(url)[0] in ("cached", "file", "direct")})
         if u.path == "/media":
             out = []
-            for root, _, files in os.walk(MEDIA):
+            top = MEDIA
+            if q.get("dir"):
+                # one folder of them: a listener's "/media/<folder>/" plays all its tracks (2026-11-27)
+                top = os.path.realpath(os.path.join(MEDIA, q["dir"][len("/media/"):] if q["dir"].startswith("/media/") else ""))
+                if not (top + os.sep).startswith(os.path.realpath(MEDIA) + os.sep) or not os.path.isdir(top):
+                    return self._json(404, {"error": "нет такой папки"})
+            for root, _, files in os.walk(top):
                 for fn in files:
                     if fn.lower().endswith(AUDIO_EXT):
                         p = os.path.join(root, fn)

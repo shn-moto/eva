@@ -1187,7 +1187,13 @@ function lsRender() {
   // the hub's local files (/media): instant, no YouTube; listened to and chosen like a search hit
   $("#ls-media").onclick = async () => {
     const r = await fetch("/api/media").then(r => r.json());
-    lsHits((r.files || []).map(f => ({ title: f.path.replace(/^\/media\//, ""), url: f.path, local: true, bytes: f.bytes })));
+    // folders first: a folder chosen plays all its tracks, shuffled (music.search)
+    const dirs = {};
+    (r.files || []).forEach(f => { const p = f.path.split("/"); for (let i = 3; i < p.length; i++) {
+      const d = p.slice(0, i).join("/") + "/"; (dirs[d] = dirs[d] || { n: 0, bytes: 0 }).n++; dirs[d].bytes += f.bytes; } });
+    lsHits([...Object.entries(dirs).map(([d, v]) => ({ title: `📁 ${d.replace(/^\/media\//, "")} — ${v.n} треков, все вперемешку`,
+      url: d, folder: true, local: true, bytes: v.bytes })),
+      ...(r.files || []).map(f => ({ title: f.path.replace(/^\/media\//, ""), url: f.path, local: true, bytes: f.bytes }))]);
   };
   $("#ls-up").onchange = async e => {
     const file = e.target.files[0]; if (!file) return;
@@ -1204,7 +1210,7 @@ function lsRender() {
         esc(h.title || "?")}${h.artist ? " — " + esc(h.artist) : ""}${dur(h.duration)}${
         h.local ? ` <span class="help">${bxMB(h.bytes)}</span>` : ""}${
         h.error ? ` <span class="err">не играет: ${esc(h.error)}</span>`
-          : ` <button class="btn sm" data-act="play">▶ слушать</button> <button class="btn sm primary" data-act="pick">выбрать</button>`}</div>`).join("") || '<div class="help">ничего не нашлось</div>';
+          : `${h.folder ? "" : ' <button class="btn sm" data-act="play">▶ слушать</button>'} <button class="btn sm primary" data-act="pick">выбрать</button>`}</div>`).join("") || '<div class="help">ничего не нашлось</div>';
       $("#ls-hits").insertAdjacentHTML("beforeend", '<audio id="ls-audio" preload="none"></audio>');
       const au = $("#ls-audio");
       document.querySelectorAll("#ls-hits .hit:not(.bad) button").forEach(b => b.onclick = () => {
@@ -1218,7 +1224,8 @@ function lsRender() {
           return;
         }
         au.pause();
-        ta.value = h.url; x.track = (h.title || "") + (h.artist ? " — " + h.artist : ""); x.trackUrl = h.url;
+        ta.value = h.url; x.track = h.folder ? "папка " + h.url.replace(/^\/media\//, "") + " (все треки)"
+          : (h.title || "") + (h.artist ? " — " + h.artist : ""); x.trackUrl = h.url;
         label(); $("#ls-track").textContent += " (сохрани)";
         $("#ls-hits").innerHTML = "";
         // a YouTube track goes into the music service's cache now: the tag then starts without YouTube's wait

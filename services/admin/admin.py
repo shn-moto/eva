@@ -866,6 +866,12 @@ def music_search(q: str):
     of the Leopold song was "not available" (2026-11-27)."""
     import urllib.parse
     import urllib.request
+    p = q.strip()
+    if p.startswith("/media/") and not p.lower().endswith(AUDIO_EXTS):
+        # a folder: the listener plays all its tracks (shuffled) - list them instead of checking one
+        files = [f for f in media_list()["files"] if f["path"].startswith(p.rstrip("/") + "/")]
+        return {"hits": [{"title": f"папка {p}: {len(files)} треков, играют все вперемешку", "url": p.rstrip("/") + "/",
+                          "folder": True, "error": None if files else "в папке нет аудио"}]}
     if re.match(r"https?://\S+$", q.strip()) or q.strip().startswith("/media/"):   # a link or a local file: check it
         return {"hits": [_music_check({"title": q.strip(), "url": q.strip()})]}
     with urllib.request.urlopen(f"{MUSIC}/search?q={urllib.parse.quote(q)}&kind=track&limit=6", timeout=150) as r:
@@ -888,6 +894,7 @@ def _music_check(t):
 
 
 MEDIA_DIR = os.environ.get("MEDIA_DIR", "/media")
+AUDIO_EXTS = (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac")
 
 
 @app.get("/api/music/prefetch")
@@ -907,7 +914,7 @@ def media_list():
     if os.path.isdir(MEDIA_DIR):
         for root, _, files in os.walk(MEDIA_DIR):
             for fn in sorted(files):
-                if fn.lower().endswith((".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac")):
+                if fn.lower().endswith(AUDIO_EXTS):
                     p = os.path.join(root, fn)
                     out.append({"path": "/media/" + os.path.relpath(p, MEDIA_DIR).replace(os.sep, "/"),
                                 "bytes": os.path.getsize(p)})
