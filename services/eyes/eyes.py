@@ -22,6 +22,7 @@ must not keep a camera "busy" forever.
     GET /cameras                 state: online, fps, motion now, the open event, who is seen
     GET /frame/<id>.jpg?boxes=1  the newest frame, motion and faces drawn
     GET /presence?minutes=10     who was seen where (from the database)
+    GET /journal?hours=2         events of a period with who was recognised (camera=, person=, since=, until=)
     GET /probe?url=              one frame from a URL (the admin page's «Проверить»)
 
 Database (assistant_memory, ASSISTANT_PG_DSN), tables made here:
@@ -591,6 +592,36 @@ def presence(minutes: int = 10):
                          "last_motion": e.state()["last_motion"]} for e in EYES.values()],
             "faces": [{"camera": c, "place": names.get(c, c), "person": p, "last": ts.isoformat(timespec="seconds"),
                        "similarity": s, "count": n} for c, p, ts, s, n in rows]}
+
+
+@app.get("/journal")
+def journal(hours: float = 2, since: str = "", until: str = "", camera: str = "", person: str = "", limit: int = 60):
+    """Events of a period with their faces, newest first, for the brain's eyes tool.
+    camera: an id or a name; person: part of a name (only events where that person was recognised)."""
+    names = {e.id: e.cam.get("name") or e.id for e in EYES.values()}
+    for x in (conf() or {}).get("cameras", []):
+        names.setdefault(x["id"], x.get("name") or x["id"])
+    cam = next((i for i, n in names.items() if camera and camera.lower() in (i.lower(), n.lower())), camera)
+    t1 = datetime.datetime.fromisoformat(until).astimezone() if until else now()
+    t0 = datetime.datetime.fromisoformat(since).astimezone() if since else t1 - datetime.timedelta(hours=hours)
+    rows = sql("SELECT e.id, e.camera, e.started, e.ended, e.peak, e.people, "
+               "coalesce(json_agg(json_build_object('person', f.person, 'sim', f.similarity)) "
+               "FILTER (WHERE f.id IS NOT NULL), '[]') FROM eye_events e LEFT JOIN eye_faces f ON f.event_id = e.id "
+               "WHERE e.started < %s AND coalesce(e.ended, now()) > %s AND (%s = '' OR e.camera = %s) "
+               "AND (%s = '' OR EXISTS (SELECT 1 FROM unnest(e.people) p WHERE p ILIKE %s)) "
+               "GROUP BY e.id ORDER BY e.started DESC LIMIT %s",
+               (t1, t0, cam, cam, person, f"%{person}%", min(limit, 300))) or []
+    out = []
+    for eid, c, st, en, peak, people, faces in rows:
+        best = {}
+        for f in faces:
+            if f["person"] and (f["sim"] or 0) > best.get(f["person"], 0):
+                best[f["person"]] = f["sim"]
+        out.append({"camera": names.get(c, c), "start": st.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                    "end": en.astimezone().strftime("%H:%M:%S") if en else "now",
+                    "motion_peak": round(peak or 0, 3), "people": {p: round(s, 2) for p, s in best.items()},
+                    "faces": len(faces), "unrecognised_faces": sum(1 for f in faces if not f["person"])})
+    return {"from": t0.isoformat(timespec="minutes"), "to": t1.isoformat(timespec="minutes"), "events": out}
 
 
 @app.get("/probe")
