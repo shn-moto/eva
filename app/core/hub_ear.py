@@ -65,6 +65,10 @@ def listen(on_phrase):
                     kind = ev.get("type")
                     if kind == "utterance":
                         _phrases.put(ev["item"])
+                    elif kind == "emotion":
+                        # a phrase's speech emotion, 1-2 s after it: the emotion listeners
+                        from core import listeners
+                        listeners.emotion(ev)
                     elif kind == "hearing":
                         STATE.update(on=bool(ev.get("on")), at=time.time())
                     elif kind == "ui":

@@ -143,8 +143,9 @@ def sound_of(seg):
         return None
 
 
-def emotion_later(seg, audio, text, label):
-    """The speech emotion (1-2 s) after the phrase went on: into its clip and the log."""
+def emotion_later(seg, audio, text, label, emit=None):
+    """The speech emotion (1-2 s) after the phrase went on: into its clip, the log and, by
+    `emit`, to the brain (its emotion listeners: a run of anger in a window)."""
     import urllib.request
 
     def run():
@@ -168,6 +169,10 @@ def emotion_later(seg, audio, text, label):
                     json.dump(info, f, ensure_ascii=False)
             except (OSError, ValueError):
                 pass
+        if emit and audio:
+            # the brain ties it to the phrase by the clip (it may come before the phrase did)
+            emit({"type": "emotion", "audio": audio.split("#")[0], "label": emo.get("label"),
+                  "score": emo.get("score", 0), "probs": emo.get("probs") or {}})
         if emo.get("label") != "neutral" and emo.get("score", 0) >= 0.7:
             log(f"emotion: {emo['label']} {emo['score']} ({label or 'unknown'}): {text!r}")
     threading.Thread(target=run, daemon=True).start()
@@ -618,7 +623,7 @@ class Hearing:
             if meta.get("sound"):
                 mark_sound(out["audio"], meta["sound"])
         if (meta.get("sound") or {}).get("emotion_wanted") and not self.dry:
-            emotion_later(seg, meta.get("audio"), out.get("text") or "", None)
+            emotion_later(seg, meta.get("audio"), out.get("text") or "", None, emit=self.emit)
             if meta.get("_joined_from"):
                 joined_into(meta["_joined_from"], out["audio"])
         parts = accepted_parts(out.get("parts"))

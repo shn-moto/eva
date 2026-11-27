@@ -1042,9 +1042,21 @@ function lsRender() {
   const x = LS.items[LS.cur];
   if (!x) { $("#ls-edit").innerHTML = ""; return; }
   const lg = (LS.log[x.id] || []).map(l => `${l.t}  ${l.msg}`).join("\n");
+  const em = { label: "angry", window: 300, min_count: 3, share: 0.6, min_score: 0.5, neutral: true, ...(x.emotion || {}) };
   $("#ls-edit").innerHTML = `<div class="form">
     <span>Название</span><input data-k="name" value="${esc(x.name || "")}">
     <span>Включён</span><label class="tog"><input type="checkbox" data-k="enabled"${x.enabled ? " checked" : ""}> да</label>
+    <span>Срабатывает</span><select id="ls-mode">${opts({ phrase: "на фразу", emotion: "на серию эмоций за время" }, x.emotion ? "emotion" : "phrase")}</select>
+    <span class="emo">Эмоция</span><select class="emo" id="le-label">${opts({ angry: "злость", sad: "грусть", positive: "радость", neutral: "спокойствие" }, em.label)}</select>
+    <span class="emo">Окно, мин</span><input class="emo" id="le-window" type="number" min="0.5" step="0.5" value="${+(em.window / 60).toFixed(2)}">
+    <span class="emo">Фраз не меньше</span><input class="emo" id="le-min" type="number" min="1" value="${em.min_count}">
+    <span class="emo">Доля, %</span><input class="emo" id="le-share" type="number" min="0" max="100" step="5" value="${Math.round(em.share * 100)}">
+    <span class="emo">Уверенность от</span><input class="emo" id="le-score" type="number" min="0" max="1" step="0.05" value="${em.min_score}">
+    <label class="tog full emo" style="padding-left:130px"><input type="checkbox" id="le-neutral"${em.neutral === false ? "" : " checked"}> спокойные фразы считаются в доле (иначе — доля среди эмоциональных)</label>
+    <span class="full help emo">Срабатывает, когда за последние N минут фраз с этой эмоцией (уверенность модели не ниже порога) не меньше заданного числа
+      и они составляют не меньше доли всех фраз с оценкой. Оценка эмоции есть только у фраз от 2 с, приходит через 1–2 с после фразы.
+      «Событие», «Кто говорит» и «Слова» отбирают, чьи фразы считаются. После срабатывания окно начинается заново.
+      В тексте: {emotion} {count} {total} {minutes} {who}, {phrase} — фразы серии.</span>
     <span>Событие</span><select data-k="on">${opts(ON, x.on || "any")}</select>
     <span>Кто говорит</span><span style="display:flex;gap:6px"><select id="ls-who">${opts({ ...WHO, person: "конкретный человек…" }, WHO[x.who || "any"] ? (x.who || "any") : "person")}</select>
       <input id="ls-who-name" list="ls-voices" placeholder="имя, как в голосовой базе" value="${WHO[x.who || "any"] ? "" : esc(x.who)}" style="flex:1"></span>
@@ -1071,6 +1083,8 @@ function lsRender() {
   const tg = () => document.querySelectorAll("#ls-edit .tg").forEach(e => e.style.display =
     document.querySelector('#ls-edit [data-k="action"]').value === "telegram" ? "" : "none");
   document.querySelector('#ls-edit [data-k="action"]').onchange = tg; tg();
+  const mode = () => document.querySelectorAll("#ls-edit .emo").forEach(e => e.style.display = $("#ls-mode").value === "emotion" ? "" : "none");
+  $("#ls-mode").onchange = mode; mode();
   $("#ls-test").onclick = async () => {
     lsGrab();
     const r = await api("/api/listeners/test", { listener: LS.items[LS.cur], text: $("#ls-sample").value });
@@ -1087,6 +1101,11 @@ function lsGrab() {                     // the form into the current listener
   });
   // who speaks: a group, or one person by name (the brain matches the voice's label or name)
   x.who = $("#ls-who").value === "person" ? ($("#ls-who-name").value.trim() || "any") : $("#ls-who").value;
+  // a run of an emotion in a window (app/core/listeners.py _run_of), or null: a phrase listener
+  x.emotion = $("#ls-mode").value !== "emotion" ? null : {
+    label: $("#le-label").value, window: Math.round(60 * Math.max(0.5, +$("#le-window").value || 5)),
+    min_count: Math.max(1, Math.round(+$("#le-min").value || 1)), share: Math.min(1, Math.max(0, (+$("#le-share").value || 0) / 100)),
+    min_score: Math.min(1, Math.max(0, +$("#le-score").value || 0)), neutral: $("#le-neutral").checked };
 }
 $("#ls-open").onclick = async () => {
   $("#ls").hidden = false;

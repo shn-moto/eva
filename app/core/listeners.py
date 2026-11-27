@@ -23,9 +23,20 @@ costs nothing:
                                catalog is done locally (free); otherwise a turn of the voice
                                conversation (Claude), with the phrase and its context
                  "log"       - only the log line
-     "text", "to", "cooldown": s between two firings}
+     "text", "to", "cooldown": s between two firings,
+     "emotion":  a run of an emotion instead of one phrase (absent/null - a phrase listener):
+                 {"label": "angry"|"sad"|"positive"|"neutral",
+                  "window":    s looked back (300),
+                  "min_count": phrases of that emotion at least (3),
+                  "share":     their share of the phrases with an emotion in the window (0.6),
+                  "min_score": the model's score a phrase needs to count (0.5),
+                  "neutral":   neutral phrases count in the share (true) or are left out}
+                 The emotion comes from the hub 1-2 s after its phrase (GigaAM-Emo, voices >= 2 s).
+                 "on", "who", "words" pick which phrases count; "children_within", "prompt",
+                 "cooldown" apply at the firing; a firing starts a new window.}
 
-{phrase}, {who}, {children} in "text" are filled in.
+{phrase}, {who}, {children} in "text" are filled in; an emotion listener also has
+{emotion}, {count}, {total}, {minutes} ({phrase} - the phrases of the run).
 """
 import collections
 import json
@@ -54,6 +65,11 @@ DEFAULTS = [{
 }]
 
 RECENT = collections.deque()                  # (ts, name|None, known, child, text, label)
+EMO_KEEP = 3600                               # s of phrase emotions kept (the longest window)
+EMO_RU = {"angry": "злость", "sad": "грусть", "positive": "радость", "neutral": "спокойствие"}
+EMOS = collections.deque()                    # dicts: a phrase (ts, text, name, ...) + emo, score
+_by_audio = {}                                # clip -> the phrase, waiting for its emotion
+_early = {}                                   # clip -> (ts, emotion) come before its phrase
 _q = queue.Queue(maxsize=200)
 _state = {"mtime": -1, "items": [], "fired": {}}       # -1: not read yet
 STATS = {}                                    # id -> {"checked", "fired", "last"} (since the start)
@@ -100,7 +116,16 @@ def feed(item, name, known, child, label=None, near=None):
     """Every logged phrase comes here (dialog.on_phrase); checked in a thread of
     its own so that the dialog never waits for a listener."""
     try:
-        _q.put_nowait((time.time(), item.get("text", "").strip(), name, known, child, label, near))
+        _q.put_nowait(("p", time.time(), item.get("text", "").strip(), name, known, child, label, near,
+                       (item.get("audio") or "").split("#")[0] or None))
+    except queue.Full:
+        pass
+
+
+def emotion(ev):
+    """A phrase's speech emotion from the hub (hub_ear): {"audio", "label", "score", "probs"}."""
+    try:
+        _q.put_nowait(("e", time.time(), ev))
     except queue.Full:
         pass
 
@@ -137,24 +162,31 @@ def _guess(near):
     return near if near and near.get("sim", 0) >= GUESS_SIM else None
 
 
-def _match(x, ts, text, name, known, child, label=None, near=None):
-    """-> (fire?, children near) ; the cheap steps first."""
+def _whose(x, text, name, known, child, label=None, near=None):
+    """The voice and the words: does this phrase concern the listener at all."""
     on = x.get("on", "any")
     if (on == "known" and not known) or (on == "unknown" and known):
-        return False, []
+        return False
     who = x.get("who", "any")
     if (who == "child" and not child) or (who == "adult" and child):
-        return False, []
+        return False
     if who not in ("any", "adult", "child"):
         me = who.lower()
         if known:
             if me not in {(name or "").lower(), (label or "").lower()}:
-                return False, []              # one person: only their voice
+                return False                  # one person: only their voice
         else:
             g = _guess(near) if x.get("guess", True) else None
             if not (g and me in {g["name"].lower(), g["label"].lower()}):
-                return False, []                      # "adult": anyone but a child of the family (a guest too)
+                return False                  # "adult": anyone but a child of the family (a guest too)
     if x.get("_re") is not None and not x["_re"].search(text):
+        return False
+    return True
+
+
+def _match(x, ts, text, name, known, child, label=None, near=None):
+    """-> (fire?, children near) ; the cheap steps first."""
+    if not _whose(x, text, name, known, child, label, near):
         return False, []
     kids = []
     if x.get("children_within"):
@@ -164,17 +196,22 @@ def _match(x, ts, text, name, known, child, label=None, near=None):
     return True, kids
 
 
-def _act(x, ts, text, name, kids):
+def _act(x, ts, text, name, kids, extra=None, why=None):
+    """`extra`: more {placeholders}; `why`: what fired it, when not one phrase (a run of emotion)."""
     who = name or "неизвестный голос"
     msg = (x.get("text") or "").replace("{phrase}", text).replace("{who}", who) \
         .replace("{children}", ", ".join(kids))
+    for k, v in (extra or {}).items():
+        msg = msg.replace("{" + k + "}", str(v))
     action = x.get("action", "log")
-    log(f"listener {x['id']}: fired on {who}: {text!r}" + (f" (children: {', '.join(kids)})" if kids else ""))
+    log(f"listener {x['id']}: fired on {who}: " + (f"{why}: " if why else "") + f"{text!r}"
+        + (f" (children: {', '.join(kids)})" if kids else ""))
+    heard = f"{why}: {text}" if why else f"«{text}»"
     if action == "say" and msg:
         import dialog
         dialog.VOICE.say(msg)
         dialog.history.append({"role": "assistant", "content": f"[слушатель «{x.get('name')}»: услышала "
-                                                               f"«{text}» ({who})] {msg}"})
+                                                               f"{heard} ({who})] {msg}"})
         dialog.state["last_spoke"] = time.time()
         dialog.save_history()
     elif action == "telegram" and msg and x.get("to"):
@@ -201,7 +238,7 @@ def _act(x, ts, text, name, kids):
             dialog.WORK.put((f"[слушатель «{x.get('name')}»] {msg}", Person("Ева", channel="voice"), r))
             return
         dialog.WORK.put((msg, Person("Ева", channel="voice"), None,
-                         f"[система: это сработал слушатель «{x.get('name')}». Услышано: «{text}» "
+                         f"[система: это сработал слушатель «{x.get('name')}». Услышано: {heard} "
                          f"({who}). Недавно дома говорили:\n{_context(ts)}\nСделай, что сказано; "
                          f"если делать нечего - ответь <молчу>]"))
 
@@ -234,26 +271,116 @@ def _try(x, ts, text, name, known, child, label=None, near=None, waited=False):
 
 def _check(ts, text, name, known, child, label, near):
     for x in load():
-        if x.get("enabled"):
+        if x.get("enabled") and not x.get("emotion"):
             _try(x, ts, text, name, known, child, label, near)
+
+
+def _emo_cfg(x):
+    e = x.get("emotion") or {}
+    return (e.get("label") or "angry", float(e.get("window") or 300), max(1, int(e.get("min_count") or 3)),
+            float(e.get("share") if e.get("share") is not None else 0.6),
+            float(e.get("min_score") if e.get("min_score") is not None else 0.5), e.get("neutral", True) is not False)
+
+
+def _run_of(x, now):
+    """-> (the phrases of the run, all the phrases weighed) when the emotion prevails, else None.
+    Counted since the window's start or the last firing, whichever is later."""
+    lab, win, mn, share, ms, neutral = _emo_cfg(x)
+    since = max(now - win, _state["fired"].get(x["id"], 0))
+    pool = [p for p in EMOS if p["ts"] >= since and (neutral or p["emo"] != "neutral" or lab == "neutral")
+            and _whose(x, p["text"], p["name"], p["known"], p["child"], p["label"], p["near"])]
+    hits = [p for p in pool if p["emo"] == lab and p["score"] >= ms]
+    if len(hits) < mn or len(hits) < share * len(pool):
+        return None
+    return hits, pool
+
+
+def _try_emo(x, now):
+    found = _run_of(x, now)
+    if not found or now - _state["fired"].get(x["id"], 0) < float(x.get("cooldown") or 0):
+        return
+    hits, pool = found
+    lab, win = _emo_cfg(x)[:2]
+    kids = []
+    if x.get("children_within"):
+        kids = _children_near(now, float(x["children_within"]))
+        if not kids:
+            return
+    st = STATS.setdefault(x["id"], {"checked": 0, "fired": 0, "last": None})
+    st["checked"] += 1
+    text = " / ".join(p["text"] for p in hits[-6:])
+    who = ", ".join(dict.fromkeys(p["name"] or "неизвестный голос" for p in hits))
+    why = f"{EMO_RU.get(lab, lab)} в {len(hits)} из {len(pool)} фраз за {win / 60:g} мин"
+    if x.get("prompt") and not _ask(x["prompt"], text, who, _context(now, around=win)):
+        log(f"listener {x['id']}: the local model said no to {why}")
+        return
+    _state["fired"][x["id"]] = now
+    st["fired"] += 1
+    st["last"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        _act(x, now, text, who, kids, why=why,
+             extra={"emotion": EMO_RU.get(lab, lab), "count": len(hits), "total": len(pool), "minutes": f"{win / 60:g}"})
+    except Exception as e:
+        log(f"listener {x['id']}: {e}")
+
+
+def _emo_add(p, ev, now):
+    p = dict(p, emo=ev.get("label"), score=float(ev.get("score") or 0))
+    EMOS.append(p)
+    while EMOS and now - EMOS[0]["ts"] > EMO_KEEP:
+        EMOS.popleft()
+    for x in load():
+        if x.get("enabled") and x.get("emotion"):
+            _try_emo(x, now)
+
+
+def _on_emotion(now, ev):
+    a = ev.get("audio")
+    if not a:
+        return
+    p = _by_audio.pop(a, None)
+    if p:
+        _emo_add(p, ev, now)
+    else:
+        _early[a] = (now, ev)                 # the phrase is still on its way (or dropped: TV, noise)
 
 
 _later = []                                   # phrases waiting for a child's voice after them
 
 
+def _on_phrase(ts, text, name, known, child, label, near, audio):
+    g = _guess(near)
+    # a child's short word left unsigned still counts as "a child near" when its voice is nearest
+    RECENT.append((ts, name or (g["name"] if g else None), known, child or bool(g and g.get("child")), text, label))
+    while RECENT and ts - RECENT[0][0] > KEEP:
+        RECENT.popleft()
+    if audio and audio not in _by_audio:
+        # waits for its emotion (a split phrase: the first part takes the clip's emotion)
+        p = {"ts": ts, "text": text, "name": name, "known": known, "child": child, "label": label, "near": near}
+        if audio in _early:
+            _emo_add(p, _early.pop(audio)[1], ts)
+        else:
+            _by_audio[audio] = p
+    _check(ts, text, name, known, child, label, near)
+
+
 def run():
     while True:
         try:
-            ts, text, name, known, child, label, near = _q.get(timeout=1)
-            g = _guess(near)
-            # a child's short word left unsigned still counts as "a child near" when its voice is nearest
-            RECENT.append((ts, name or (g["name"] if g else None), known, child or bool(g and g.get("child")), text, label))
-            while RECENT and ts - RECENT[0][0] > KEEP:
-                RECENT.popleft()
-            _check(ts, text, name, known, child, label, near)
+            m = _q.get(timeout=1)
+            if m[0] == "e":
+                _on_emotion(*m[1:])
+            else:
+                _on_phrase(*m[1:])
         except queue.Empty:
             pass
+        except Exception as e:
+            log(f"listeners: {e!r}")          # one bad event must not stop the thread
         now = time.time()
+        for a in [a for a, p in _by_audio.items() if now - p["ts"] > 60]:
+            del _by_audio[a]                  # a phrase too short for an emotion: none comes
+        for a in [a for a, (t, _) in _early.items() if now - t > 60]:
+            del _early[a]
         for w in [w for w in _later if w[0] <= now]:
             _later.remove(w)
             _, ts, text, name, known, child, label, near, xid = w
