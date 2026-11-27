@@ -18,11 +18,11 @@ ID_MARGIN = profile.tune("voices.margin", 0.1)     # a claim's lead (the hub's r
 # a known voice saying it is a family member with no voice yet is enrolled under
 # that name unless it is this sure to be the voice it was taken for
 ENROLL_KNOWN_MAX = profile.tune("voices.enroll_known_max", 0.75)
-# profile names as stored -> how Eva calls them (the old profile is "Alex")
+# profile names as stored -> how Eva calls them (the old profile is "Ivan")
 CALL = profile.VOICE_CALL
 # voice profile -> person in the photolib family tree (one Иван for voice and Telegram)
 PERSON = profile.VOICE_PERSON
-# every name a profile answers to: "я Иван" from Alex is not an impostor
+# every name a profile answers to: "я Ваня" from Ivan is not an impostor
 ALIASES = profile.VOICE_ALIASES
 
 

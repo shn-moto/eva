@@ -266,7 +266,7 @@ def mark_muted(audio, muted):
 # A single stray block is a reflection, not a person: 45 % of one-voice phrases have one
 # (2026-11-23..26); MIX_RUN blocks in a row MIX_OFF degrees off the head's direction is a
 # second place - 13 % of one-voice-labelled phrases (families talking in turn, someone
-# walking), and «Неизвестный 215» (Аэлита cutting in at 5.5 s).
+# walking), and «Неизвестный 215» (a child cutting in at 5.5 s).
 MIX_OFF = float(os.environ.get("EVA_HEAR_MIX_OFF", "30"))
 MIX_RUN = int(os.environ.get("EVA_HEAR_MIX_RUN", "2"))
 HEAD_MIN = 1.5

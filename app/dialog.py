@@ -938,7 +938,7 @@ def _to_listeners(item):
     near = (item.get("speaker") or {}).get("nearest") if not known else None
     if near and near.get("sim", 0) >= GUESS_SIM and near["label"] in VOICES.names():
         # the same guess the dialog makes (on_phrase): a short phrase left unsigned but plainly
-        # a family voice is that person for the listeners too - «немечка хуя» from Аэлита
+        # a family voice is that person for the listeners too - «немечка хуя» from Лиза
         # (0.67) passed as "an unknown adult" and got «не ругайтесь при детях» (2026-11-26)
         label, known = near["label"], True
     name = voices.CALL.get(label, label) if known else None
@@ -985,8 +985,8 @@ def introduction(text, item, label, sim, known, person):
         other = next((p for p in VOICES.names() if p != label and voices.same_person(p, name)), None) \
             or next((n for s, n in FAMILY if name.lower().startswith(s) and not voices.same_person(label, n)), None)
         # close voices (sisters: 0.62-0.67 to each other) pass for each other, so
-        # «я Аврора» from a voice taken for Аэлита is refused only when it is
-        # clearly Аэлита's (2026-11-24)
+        # «я Соня» from a voice taken for Лиза is refused only when it is
+        # clearly Лиза's (2026-11-24)
         mine = None
         if other and not voices.same_person(label, name) and item.get("voice"):
             if other in VOICES.names():

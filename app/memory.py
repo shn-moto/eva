@@ -35,7 +35,7 @@ def write(role, text, speaker=None, dialog=False, addressed=False, stt="gigaam",
         _activity[(speaker, "telegram" if stt == "telegram" else "voice")] = time.time()
     if role == "assistant":
         # whom she answered and where: the other channel finds her words by them
-        # (recent()) - without it "what she told Саша by voice" was not in the base
+        # (recent()) - without it "what she told Иван by voice" was not in the base
         if speaker:
             rec.update(speaker=speaker, stt=stt)
     elif role == "user":

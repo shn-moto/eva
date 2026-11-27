@@ -63,7 +63,7 @@ SELF = "Ева"                    # her own voice (source "self"): echo, not a 
 
 # A voice named on the admin page as somebody outside the family: «Неизвестный1»,
 # «Гость 2». It gets a profile of its own (so it is not taken for a family voice
-# again - a stranger on a speakerphone was "Alex", 2026-11-25), but it is never
+# again - a stranger on a speakerphone was "Ivan", 2026-11-25), but it is never
 # family: not "known", not in the memory, no personal data.
 STRANGER = re.compile(r"^\s*(неизвестн\w*|незнаком\w*|гость|чужой)[\s_-]*\d*\s*$", re.I)
 

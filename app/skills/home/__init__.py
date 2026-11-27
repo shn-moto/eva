@@ -138,8 +138,8 @@ def notify(person, text):
 
 def _family_chat(name):
     """A family member's Telegram by any name she knows them by: photolib's name, or a
-    voice profile's label / call name / alias («Alex» = «Саша» = «папа»): a reminder for
-    «Alex» found no Telegram and was lost (2026-11-26)."""
+    voice profile's label / call name / alias («Ivan» = «Ваня» = «папа»): a reminder for
+    «Ivan» found no Telegram and was lost (2026-11-26)."""
     from core import profile
     pid = profile.VOICE_PERSON.get(name) or next(
         (p for lab, p in profile.VOICE_PERSON.items() if voices.same_person(lab, name)), None)

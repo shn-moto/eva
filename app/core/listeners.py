@@ -10,7 +10,7 @@ costs nothing:
     {"id", "name", "enabled",
      "on":       "known" | "unknown" | "any"     whose voice: a family voice or not
      "who":      "any" | "adult" (not a child of the family: a guest too) | "child" (a family child)
-                 | a voice profile of the family ("Аэлита"; its label or how she calls them)
+                 | a voice profile of the family ("Лиза"; its label or how she calls them)
      "guess":    true - also a voice the base left unsigned (one short word) whose nearest
                  family voice is that person, sim >= GUESS_SIM (default true)
      "words":    a regular expression over the phrase ("" - every phrase)

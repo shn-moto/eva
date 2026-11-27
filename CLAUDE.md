@@ -54,6 +54,24 @@ The flow: Station `eva-ear` streams raw capture -> hub `ear_stream.py` (AEC3, Si
 `/hear/events` -> brain `core/hub_ear.py` -> `dialog.on_phrase` -> router -> local action or Claude.
 Every logged phrase also goes to `core/listeners.py`.
 
+## The ear now (2026-11-27) - read before touching it
+
+Reasons and measurements: `docs/EAR-AUDIT-2026-11-26.md` (the end). In short:
+- Gain: the mics' PGA **30 dB on the chips** (`os/rootfs/.../station-mics-init.sh`) and
+  `MIC_GAIN` **10** on the hub. Measured, not guessed: her echo peaks ~-6 dBFS at the usual volume,
+  the ADC's noise meets the mics' at ~31 dB, speech lands near -26 dBFS. 20 dB x32 hissed (WebRTC
+  APM gets the ADC-level samples). Judge a change by ear, not by a raw-mic SNR.
+- `ear_stream.py`: high-pass -> WebRTC APM (livekit: AEC3 + NS, AGC off) -> Silero -> the cut.
+  The reference to AEC3 is **zeroed while the speaker is silent** (`ear.ref_gate`): the tap's own
+  noise made AEC3 eat the room's speech (deaf ear, 2026-11-26 21:00).
+- Places (admin «Места», `stt-keep/admin-settings.json`): a logical mode per place (mute / only
+  from there) - drops phrases, teaches nothing, her name by a family voice always passes; and the
+  **sound null** (`ear_null.py`, per-place checkbox + master switch, off by default) - useful only
+  for a direct sound in the room (the TV) under simultaneous speech; rooms behind doors are not
+  directional and it colours the voice.
+- Voice prints: re-make the correction prints after any change of the chain
+  (`tools/reprint_voices.py`); enroll / auto / cluster prints have no clip link.
+
 ## Deploy - only from git
 
 ```
@@ -83,6 +101,15 @@ service log or `eva_log`. Say plainly what could not be checked live (e.g. no sp
   from `app/` with stubbed side effects (`core.listeners` with `_act` replaced worked well).
 - Admin page: open `services/admin/index.html` in the browser pane and drive it with JS on
   stubbed data (no backend there; `api()` calls fail, set `S.rows` / `LS.items` and render).
+- The ear did not hear something: `POST :8901/hear/box` on the hub right after it writes the last
+  minute as the ear processed it (mic, reference, AEC3 output, VAD, flags) to `stt-log/ear-box/`;
+  per-second energies of input vs output show which stage ate the voice (2026-11-26: AEC3).
+  The ear's minute line (`ear: level: ...` in the stt container log) has speech chunks, VAD max,
+  mic peak, AEC out/in and ADC clipping while the speaker plays.
+- Audio quality is judged by ear: render A/B wavs and let the user listen - a metric on the raw
+  mics missed the APM-level hiss that the 30 dB PGA removed (2026-11-26).
+- Voice prints after a change of the ear chain: `tools/reprint_voices.py` (inside the stt
+  container) re-makes the correction prints from their raw mics, with a leave-one-out check.
 - Logs of everything (Station units and hub containers): table `eva_log` in Postgres
   `assistant_memory` (`unit`, `ts`, `msg`). Listener firings are lines `listener <id>: ...`.
 
@@ -92,6 +119,11 @@ service log or `eva_log`. Say plainly what could not be checked live (e.g. no sp
   hub. Never stop a move halfway; after one, audit the Station for anything non-physical.
 - **Reaction time is top priority** (phrase end -> first sound, logged as `latency:`).
 - **Over music only her name interrupts**: no unnamed commands, no router exception, no ducking.
+- **Music on / off without a word**: no spoken «Включаю …» / «Выключила» (router, Claude, listeners) -
+  the player on the TV shows it and every confirmation is a paid TTS call (2026-11-26).
+- **The LED ring and the TV's attention bar light only on her own decisions**: called / held by the
+  brain, thinking, speaking, the volume ring. Never on what the ear reports (a voice began, any
+  phrase with an open end - the TV's too); those carry `source: "ear"` and stay text on the screen.
 - **Model tiers: router -> Sonnet -> Opus.** Every new tool gets a tier in the same change: a
   router intent (`core/router.py` INTENTS + examples) or `LIGHT_TOOLS`; heavy only if its result
   needs weighing. Printing never reaches Opus. A prompt change costs a cache write - batch them.

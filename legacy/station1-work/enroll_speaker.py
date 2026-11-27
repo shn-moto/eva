@@ -2,7 +2,7 @@
 """Запись голосового профиля для распознавания говорящего.
 
 Запуск на колонке:
-    /opt/assistant/venv/bin/python /opt/assistant/enroll_speaker.py Alex 3
+    /opt/assistant/venv/bin/python /opt/assistant/enroll_speaker.py Ivan 3
 
 Скрипт попросит произнести N фраз (по 2-6 секунд каждая, обычной речью),
 вычислит CAM++ эмбеддинг каждой и допишет векторы в
@@ -78,7 +78,7 @@ def listen(proc, noise, max_sec=8.0, timeout=20.0):
 
 
 def main():
-    name = sys.argv[1] if len(sys.argv) > 1 else "Alex"
+    name = sys.argv[1] if len(sys.argv) > 1 else "Ivan"
     n_phrases = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 
     import sherpa_onnx

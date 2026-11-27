@@ -48,7 +48,7 @@ CFG = {
     "fast_model": "saipixel-krea2-turbo",
     # drawing and editing apart (2026-11-26): on SAM Grid flux2-klein made two-headed wolves of «put her on
     # a wolf» and qwen-image-2.1 a girl grown into a small wolf; xAI's grok-imagine-image-2.0 turned the
-    # statue under Аэлита into a living wolf she really sits on, her face and clothes kept (~20 s, $0.07)
+    # statue under the girl into a living wolf she really sits on, her face and clothes kept (~20 s, $0.07)
     "edit_api": "xai",
     "edit_model": "grok-imagine-image-2.0",
     "fast_edit_model": "saipixel-flux2-klein-9b-edit",
@@ -173,7 +173,7 @@ def _file(fid):
 def _result(raw, fid, title, note, source=None):
     """The picture for her eyes (small) and the presentation for the channel. source: the
     picture it was made from (a redraw) - she sees both and can tell she took the wrong photo
-    (the slideshow had moved on: «Аэлита on a wolf» came out with two men's heads, 2026-11-26)."""
+    (the slideshow had moved on: «the girl on a wolf» came out with two men's heads, 2026-11-26)."""
     small = base64.b64encode(_jpeg(raw, 512)).decode("ascii")
     skills.HISTORY_IMAGES[small] = small
     before = []
