@@ -1063,7 +1063,7 @@ def _box_items():
                             sec = w.getnframes() / w.getframerate()
                     except Exception:            # the minute being written now
                         sec = 0
-                    parts.append({"file": f"ear-rec/{s}/{f}", "t": f[:2] + ":" + f[2:4] + ":" + f[4:],
+                    parts.append({"file": f"ear-rec/{s}/{f}", "t": f[:2] + ":" + f[2:4] + ":" + f[4:6],
                                   "seconds": round(sec, 1), "bytes": os.path.getsize(p)})
             items.append({"kind": "rec", "id": s, "start": start,
                           "seconds": meta.get("seconds") or sum(p["seconds"] for p in parts),
