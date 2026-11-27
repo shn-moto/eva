@@ -129,6 +129,10 @@ service log or `eva_log`. Say plainly what could not be checked live (e.g. no sp
   fewer tokens; `core/prompt.py` LANGUAGE keeps her Russian), the persona files stay Russian;
   a skill prompt never restates its tools' descriptions; the cache warm runs only after
   today's first voice turn (`llm.warm_due`). Measure a prompt change with `count_tokens`.
+- **Local resources never touch the paid API** (user, 2026-11-27): the media library (browse, open,
+  play, the film's pause/stop) runs only through the local router (`dialog.local`, `app/library.py`);
+  Claude has no tool for it. A phrase a music listener takes by its words does not go to the dialog
+  (`listeners.claims`).
 - **Model tiers: router -> Sonnet -> Opus.** Every new tool gets a tier in the same change: a
   router intent (`core/router.py` INTENTS + examples) or `LIGHT_TOOLS`; heavy only if its result
   needs weighing. Printing never reaches Opus. A prompt change costs a cache write - batch them.

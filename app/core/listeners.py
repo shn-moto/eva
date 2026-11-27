@@ -122,6 +122,22 @@ def feed(item, name, known, child, label=None, near=None):
         pass
 
 
+def claims(text, name, known, child, label=None, near=None):
+    """Will a music listener act on this phrase by its words alone (no model question, no emotion,
+    no children check)? Then the dialog leaves it: the listener plays the track, Claude is not paid
+    for the same words (2026-11-27 17:51: «включи сборку» played and also went to Sonnet)."""
+    for x in load():
+        if (x.get("enabled") and x.get("action") == "music" and x.get("_re") is not None and not x.get("emotion")
+                and not (x.get("prompt") or "").strip() and not x.get("children_within")
+                and _whose(x, text.strip(), name, known, child, label, near)):
+            # in its pause it will not play - then the phrase is the dialog's; "fired a moment ago"
+            # is this very phrase (the listener's thread may be first)
+            ago = time.time() - _state["fired"].get(x["id"], 0)
+            if ago >= float(x.get("cooldown") or 0) or ago < 5:
+                return True
+    return False
+
+
 def emotion(ev):
     """A phrase's speech emotion from the hub (hub_ear): {"audio", "label", "score", "probs"}."""
     try:

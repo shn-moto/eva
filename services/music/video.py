@@ -104,15 +104,19 @@ def _item(path, folder, kind):
 
 def listing(d=None, kind="video"):
     if not d:
-        items = [_item(r, True, kind) for r in roots(kind)]
-        return {"kind": kind, "dir": "", "parent": None, "items": items}
+        # the roots that hold something; just one - straight into it (two tiles, one of them an empty
+        # torrents folder, made «открой первую» a needless step, 2026-11-27)
+        full = [r for r in roots(kind) if _count(r, kind)]
+        if len(full) == 1:
+            return listing(full[0], kind)
+        return {"kind": kind, "dir": "", "parent": None, "items": [_item(r, True, kind) for r in full]}
     p = inside(d, kind)
     if not p or not os.path.isdir(p):
         return {"error": "нет такой папки"}
     dirs = sorted((x.path for x in os.scandir(p) if x.is_dir() and not x.name.startswith(".")
                    and _count(x.path, kind)), key=lambda s: _natural(os.path.basename(s)))
     items = [_item(x, True, kind) for x in dirs] + [_item(os.path.join(p, f), False, kind) for f in _films(p, kind)]
-    parent = None if p in roots(kind) else os.path.dirname(p)
+    parent = "" if p in roots(kind) else os.path.dirname(p)
     # warm the tiles' posters in the background (a film's frame takes ~1 s to cut)
     threading.Thread(target=lambda: [poster(i["path"], kind) for i in items[:40]], daemon=True).start()
     return {"kind": kind, "dir": p, "parent": parent, "items": items}

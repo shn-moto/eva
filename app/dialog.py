@@ -32,7 +32,7 @@ HISTORY_FILE = "/var/lib/eva/history.json"
 # how much she keeps: llm.HISTORY_CHARS (by volume, not by time - 2026-11-20)
 CONTINUE = "<продолжи>"
 # said when a tool call begins and she has not said anything yet (sounds cached at start)
-QUIET_TOOLS = {"music_play", "music_control", "library_play", "video_control"}   # done without a filler: the player shows it
+QUIET_TOOLS = {"music_play", "music_control"}   # done without a filler: the player shows it
 FILLERS = profile.tune("dialog.fillers", ["Секунду, сейчас посмотрю.", "Сейчас гляну.", "Погоди, посмотрю.", "Так, сейчас посмотрю."])
 
 # a call is the vocative: «почему ты назвал её Евой» is about her, not to her
@@ -358,6 +358,35 @@ def local(text, person, r):
             from core.speech import volume_set
             volume_set(max(5, min(100, int(r.get("level") or 50))))
             reply = None
+        elif intent in ("library_open", "library_find") or (intent in ("screen_open", "screen_back")
+                                          and (screen.state.get("p") or {}).get("kind") == "library"):
+            # the media library without Claude: open it, a folder by its number, up; a file plays
+            # (Sonnet opened it and «открой первую» did nothing, 2026-11-27)
+            import library
+            if intent == "library_open":
+                call = ("library_browse", {"kind": r.get("lib") or "video"})
+            elif intent == "library_find":
+                call = ("library_browse", {"kind": r.get("lib") or "video", "query": r.get("query") or ""})
+            elif intent == "screen_back":
+                call = ("library_browse", {"up": True})
+            else:
+                n = int(r.get("n") or 0)
+                items = screen.state["p"].get("items") or []
+                if not 1 <= n <= len(items):
+                    raise ValueError(f"no tile {n}")
+                call = ("library_browse" if items[n - 1]["folder"] else "library_play", {"n": n})
+            out = (library.browse if call[0] == "library_browse" else library.play)(call[1], person)
+            if getattr(out, "show", None):
+                screen.present(out.show)
+            result = getattr(out, "text", out)
+            r["_call"] = call
+            # the tiles say it; a film / a track starts silently; a failure is told
+            reply = None if (getattr(out, "show", None) or result.startswith("Включила")) else result
+        elif intent == "video_control":
+            import library
+            r["_call"] = ("video_control", {"action": r.get("action") or "pause"})
+            result = library.control(r["_call"][1], person)
+            reply = "Видео не играет." if "не играет" in result else None
         elif intent.startswith("screen_"):
             screen.act(intent[7:], r.get("n"))          # next | prev | open | back | close
             reply = None
@@ -419,6 +448,8 @@ def _local_call(intent, r, result, reply):
     done = "[выполнено сразу по команде, без тебя] "
     if intent == "print_screen":
         return "print_screen", {}, done + (result or reply or "")
+    if r.get("_call"):
+        return r["_call"][0], r["_call"][1], done + (result or reply or "Сделано.")
     if intent == "music_play" and r.get("query"):
         return "music_play", {"query": r["query"], "kind": r.get("kind") or "track"}, done + (reply or result or "Включила.")
     if intent in MUSIC_ACTION:
@@ -546,7 +577,12 @@ def on_phrase(item):
         log(f"muted ({m.get('place') or 'outside the listened places'}, {m.get('why')}): {text!r}")
         ui({"type": "hear", "state": "ignored", "text": text})
         return
-    _to_listeners(item)
+    if _to_listeners(item):
+        # a music listener took the phrase (its words, no model question): it plays the track itself.
+        # The dialog also sent «рошом включи сборку» to Claude: $0.18 for a silence (2026-11-27 17:51)
+        log(f"taken by a music listener, not to the dialog: {text!r}")
+        ui({"type": "hear", "state": "called", "text": text})
+        return
     if item.get("end") and not item.get("window"):
         LATENCY["end"] = item["end"]
     VOICE.on_first = _first_sound
@@ -993,6 +1029,7 @@ def _to_listeners(item):
     top = (item.get("sound") or {}).get("top") or []
     child = child or any(l.startswith("Child") and p >= 0.3 for l, p in top)
     listeners.feed(item, name, known, child, label if known else None, near)
+    return listeners.claims(item.get("text", ""), name, known, child, label if known else None, near)
 
 
 def who_said(item):

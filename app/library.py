@@ -1,14 +1,16 @@
-"""Skill "медиатека": the hub's own folders of video and music (services/music/video.py), chosen on the
+"""The media library ("медиатека"): the hub's own folders of video and music (services/music/video.py), chosen on the
 admin page «Ресурсы». Folders and files as tiles on the TV (posters cut from the films, covers of the
 music); a film goes to the DLNA renderer chosen there (a TV's own player - the Station does not decode
 it), music plays through the Station like any track. A whole folder plays as a series / an album.
-(2026-11-27)"""
+Driven only by the local router (dialog.local: library_open / library_find / screen_open / screen_back /
+video_control) - never through the paid API: Sonnet opened it for $0.19 and the user ruled that local
+resources must not cost a cent (2026-11-27). Claude has no tool for it."""
 import json
 import urllib.parse
 
 import music
 from core import screen
-from core.skills import Result, Skill, Tool
+from core.skills import Result
 
 KINDS = ("video", "music")
 
@@ -115,44 +117,3 @@ def control(args, person):
     return (f"{r.get('title')}: {'пауза' if r.get('state') == 'paused' else r.get('state')}, {m // 60}:{m % 60:02d}:{s:02d}"
             + (f" из {r['dur'] // 3600}:{r['dur'] % 3600 // 60:02d}:{r['dur'] % 60:02d}" if r.get("dur") else "")
             + (f", серия {r['index']} из {r['count']}" if r["count"] > 1 else ""))
-
-
-PROMPT = """## Media library
-
-The home's own video and music folders. library_browse shows them as numbered tiles on the TV and
-returns the list; open a folder or play by its number on screen (n). Video plays on the TV's own
-player (not your screen), so the family uses its remote to come back to you. A folder played whole
-runs as a series / an album. Music from here is controlled by music_control."""
-
-_kind = {"type": "string", "enum": list(KINDS)}
-SKILL = Skill(
-    name="library",
-    summary="медиатека: свои фильмы, мультики, сериалы и музыка с хаба плитками на экране",
-    prompt=PROMPT,
-    tools=[Tool(
-        name="library_browse",
-        description=("Show the home media library on the TV: kind video|music; no args - the top folders; "
-                     "n - open folder n on screen; path - open that folder; up - the parent folder; "
-                     "query - find folders and files by name words."),
-        schema={"type": "object", "additionalProperties": False,
-                "properties": {"kind": _kind, "n": {"type": "integer"}, "path": {"type": "string"},
-                               "up": {"type": "boolean"}, "query": {"type": "string"}}},
-        handler=browse, needs=None,
-    ), Tool(
-        name="library_play",
-        description=("Play from the media library: n (number on screen) or path. A folder plays whole in order; "
-                     "all=true with a file plays its folder from that file on."),
-        schema={"type": "object", "additionalProperties": False,
-                "properties": {"kind": _kind, "n": {"type": "integer"}, "path": {"type": "string"},
-                               "all": {"type": "boolean"}}},
-        handler=play, needs=None,
-    ), Tool(
-        name="video_control",
-        description="The film on the TV: pause, resume, stop, next, previous (episode), seek (to hh:mm:ss), status.",
-        schema={"type": "object", "additionalProperties": False, "required": ["action"],
-                "properties": {"action": {"type": "string", "enum": ["pause", "resume", "stop", "next", "previous",
-                                                                    "seek", "status"]},
-                               "to": {"type": "string"}}},
-        handler=control, needs=None,
-    )],
-)

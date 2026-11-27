@@ -41,8 +41,11 @@ INTENTS = {
     "volume_set": "громкость на N процентов: args.level 0-100",
     "screen_next": "на экране дальше / следующая страница / пролистай",
     "screen_prev": "на экране назад / предыдущая страница",
-    "screen_open": "открыть фото номер N на экране: args.n",
-    "screen_back": "из открытого фото назад к сетке",
+    "screen_open": "открыть / включить номер N на экране (фото, папку или фильм медиатеки): args.n",
+    "screen_back": "из открытого фото назад к сетке; в медиатеке - на папку выше",
+    "library_find": "найти в своей медиатеке фильм, мультик, сериал или музыку по названию: args.query - название как сказано, args.lib - video или music",
+    "library_open": "открыть свою медиатеку на экране: args.lib - video (видеотека, фильмы, мультики, кино, сериалы) или music (своя музыка, музыкальная медиатека)",
+    "video_control": "фильм на телевизоре (идёт видео, не музыка): args.action - pause, resume, stop, next (следующая серия), previous",
     "screen_close": "убрать всё с экрана, вернуться к лицу / на главный экран",
     "avatar": "сменить её вид на экране: args.mode - ascii (лицо из символов), image (аниме лицо, картинка), eq (эквалайзер, без лица), live2d (живая модель)",
     "panel": "показать/скрыть панель на экране: args.panel - chat (окно чата) или stats (панель статуса: её собственные траты на API, токены), args.show true/false. Семейные расходы, деньги, траты по месяцам - это claude",
@@ -62,6 +65,8 @@ SCHEMA = {
         "n": {"type": "integer"},
         "mode": {"type": "string", "enum": ["ascii", "image", "eq", "live2d"]},
         "panel": {"type": "string", "enum": ["chat", "stats"]},
+        "lib": {"type": "string", "enum": ["video", "music"]},
+        "action": {"type": "string", "enum": ["pause", "resume", "stop", "next", "previous"]},
         "show": {"type": "boolean"},
         # said to the end? false: the person goes on («Ева, напиши моей маме» ...
         # pause ... «что я её жду») - the dialog waits for the rest
@@ -100,6 +105,15 @@ SYSTEM = ("Ты классификатор фраз для домашнего г
 "громкость на тридцать" -> {"to_eva":true,"intent":"volume_set","level":30}
 "открой седьмое" -> {"to_eva":true,"intent":"screen_open","n":7}
 "следующую страницу" -> {"to_eva":true,"intent":"screen_next"}
+"ева открой видеотеку" -> {"to_eva":true,"intent":"library_open","lib":"video"}
+"покажи мультики" -> {"to_eva":true,"intent":"library_open","lib":"video"}
+"открой нашу музыку" -> {"to_eva":true,"intent":"library_open","lib":"music"}
+"найди в видеотеке историю игрушек" -> {"to_eva":true,"intent":"library_find","lib":"video","query":"история игрушек"}
+"включи мультик тачки" -> {"to_eva":true,"intent":"library_find","lib":"video","query":"тачки"}
+"открой первую" -> {"to_eva":true,"intent":"screen_open","n":1}
+"включи третий" -> {"to_eva":true,"intent":"screen_open","n":3}
+"поставь фильм на паузу" -> {"to_eva":true,"intent":"video_control","action":"pause"}
+"следующую серию" -> {"to_eva":true,"intent":"video_control","action":"next"}
 "хорошо можешь вернуться на главный экран" -> {"to_eva":true,"intent":"screen_close"}
 "спасибо верни главный экран" -> {"to_eva":true,"intent":"screen_close"}
 "покажи аниме лицо" -> {"to_eva":true,"intent":"avatar","mode":"image"}
