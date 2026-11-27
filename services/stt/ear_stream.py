@@ -436,7 +436,9 @@ class Ear:
                 residual = (sum(o for _, o in played) / (sum(i for i, _ in played) + 1e-12)) if played else 1.0
                 meta = {"dur": round(speech, 2), "start": self.t_start, "speech_start": self.t_speech, "end": now,
                         "playback": round(playback, 3), "residual": round(residual, 3), "chained": not paused,
-                        "music": bool(self.flags & 1) or None}      # hear.py recognises the raw mics too
+                        "music": bool(self.flags & 1) or None,      # hear.py recognises the raw mics too
+                        # cut from the linear canceller (music, not her voice) or from AEC3's output
+                        "src": "lin" if self.flags & 1 and not self.flags & 2 and self.front.lin is not None else "aec3"}
                 if speech < MIN_SPEECH:
                     self.send(None, None, meta)          # a click: the hub only learns it ended
                     self.ui("none")

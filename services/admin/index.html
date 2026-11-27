@@ -112,6 +112,7 @@ label.tog { display: inline-flex; align-items: center; gap: 6px; color: var(--mu
 .bx-strip { position: relative; height: 26px; margin-top: 8px; background: var(--line); border-radius: 4px; cursor: pointer; overflow: hidden; }
 .bx-strip span { position: absolute; }
 .bx-strip .m { top: 0; height: 9px; background: #6ea8fe; }
+.bx-strip .m.w { background: repeating-linear-gradient(90deg, #6ea8fe55 0 4px, transparent 4px 8px); }
 .bx-strip .h { top: 9px; height: 8px; background: #f0a04b; }
 .bx-strip .p { top: 17px; height: 9px; background: #3fb950; }
 .bx-strip i { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); left: 0; }
@@ -1311,18 +1312,28 @@ function bxStrip(it) {
   const inW = ([a, b]) => b > w0 && a < w1;
   // the player's flag, not the speaker's level: ducked music fell under the level's threshold and the
   // strip broke off while it still played (2026-11-27); her voice shorter than 0.6 s is a music tail
-  const music = it.kind === "rec" ? bxSpans(it, 1).filter(inW) : [];
+  // the player is on from the command, the sound only when YouTube delivers it (seconds later): the span is
+  // drawn from the first sound in the speaker, the wait before it pale (2026-11-27 14:42)
+  const sound = it.kind === "rec" ? bxSpans(it, 4) : [];
+  const music = [], wait = [];
+  (it.kind === "rec" ? bxSpans(it, 1) : []).forEach(([a, b]) => {
+    const first = sound.find(([c, d]) => d > a && c < b);
+    const s0 = first ? Math.max(a, first[0]) : b;
+    if (s0 > a) wait.push([a, s0]);
+    if (b > s0) music.push([s0, b]);
+  });
   const her = it.kind === "rec" ? bxSpans(it, 2).filter(inW).filter(([a, b]) => b - a >= 0.6) : [];
   const ph = (it.phrases || []).filter(p => p.t + p.dur > w0 && p.t < w1);
   const mmss = t => bxDur(Math.max(0, t - w0));
   return `<div class="bx-strip" id="bx-strip" title="нажми — перейти к этому месту">
-      ${music.map(([a, b]) => `<span class="m" style="${pos(a, b)}"></span>`).join("")}
+      ${wait.filter(inW).map(([a, b]) => `<span class="m w" style="${pos(a, b)}" title="плеер включён, звук ещё грузится"></span>`).join("")}
+      ${music.filter(inW).map(([a, b]) => `<span class="m" style="${pos(a, b)}"></span>`).join("")}
       ${her.map(([a, b]) => `<span class="h" style="${pos(a, b)}"></span>`).join("")}
       ${ph.map(p => `<span class="p" style="${pos(p.t, p.t + p.dur)}" title="${esc(p.text || "(пусто)")}"></span>`).join("")}
       <i id="bx-head"></i></div>
-    <div class="bx-legend">${it.kind === "rec" ? '<span class="m"></span>играет музыка <span class="h"></span>говорит она ' : ""}<span class="p"></span>ухо вырезало фразу</div>
+    <div class="bx-legend">${it.kind === "rec" ? '<span class="m"></span>играет музыка (пунктир — грузится) <span class="h"></span>говорит она ' : ""}<span class="p"></span>ухо вырезало фразу</div>
     <div class="bx-ph">${ph.length ? `<div class="help">Что ухо вырезало и распознало (время от начала этой минуты; нажми — перейти):</div>` + ph.map(p =>
-      `<div class="bxr" data-t="${p.t - w0}"><b>${mmss(p.t)}</b> после AEC3: «${esc(p.text || "—")}»${p.raw_text != null ? ` · сырые микрофоны: «${esc(p.raw_text || "—")}»` : ""}</div>`).join("")
+      `<div class="bxr" data-t="${p.t - w0}"><b>${mmss(p.t)}</b> ${p.src === "lin" ? "линейное вычитание" : "после AEC3"}: «${esc(p.text || "—")}»${p.raw_text != null ? ` · сырые микрофоны: «${esc(p.raw_text || "—")}»` : ""}</div>`).join("")
       : '<div class="help">В эту минуту ухо не вырезало ни одной фразы.</div>'}</div>`;
 }
 function bxStripWire(it) {

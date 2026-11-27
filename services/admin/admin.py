@@ -1066,7 +1066,11 @@ def _phrases_in(t0, t1):
                 # the clip's own start (hear.py t0); older clips: the name is when STT finished -
                 # minus the STT time and the end silence the cut waited (END_SILENCE 0.8 - TAIL_KEEP 0.3)
                 t0 = info.get("t0") or t - (info.get("ms") or 0) / 1000 - 0.5 - dur
-                out.append({"t": round(t0, 2), "dur": dur, "text": info.get("text") or "",
+                if info.get("t0") and not info.get("t1"):
+                    t0 += 0.64             # 27.11 14:46-15:00 t0 was the clip's start: its pre-roll (20 chunks) off
+                if info.get("t1"):
+                    dur = max(0.1, info["t1"] - t0)
+                out.append({"t": round(t0, 2), "dur": dur, "src": info.get("src"), "text": info.get("text") or "",
                             "raw_text": info.get("raw_text"), "audio": f"{day.isoformat()}/{f[:-5]}"})
         day += datetime.timedelta(days=1)
     return out
