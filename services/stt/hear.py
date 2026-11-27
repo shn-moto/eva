@@ -582,6 +582,17 @@ class Hearing:
             th = threading.Thread(target=lambda: snd.update(r=sound_of(seg)), daemon=True)
             th.start()
         text, letters = st.decode(norm)
+        if meta.get("music") and mics is not None and not meta.get("window") and not record:
+            # over her music AEC3 + NS gate the room to -66 dB between words and bite their starts:
+            # «Ева, стоп» came out «евосток» and the music could not be stopped, while the raw mics,
+            # music and all, read «ева стоп» (2026-11-27 12:34). The raw mix goes to STT as well;
+            # the brain takes its words when only they carry her name or a stop (dialog.py).
+            t_raw = time.time()
+            raw = mics.astype(np.float32).mean(axis=1)
+            rp = float(np.abs(raw).max()) or 1.0
+            meta["raw_text"] = st.decode((raw / rp * 0.9).astype(np.float32))[0]
+            log(f"#{meta.get('seq')} over music: {text!r} / raw mics {meta['raw_text']!r} "
+                f"({int(1000 * (time.time() - t_raw))} ms)")
         out = st._place_and_split(norm, text, letters, mics if not meta.get("window") else None, split)
         mix = mixed_at((out.get("doa") or {}).get("blocks"))
         if mix is not None:

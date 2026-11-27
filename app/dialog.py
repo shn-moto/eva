@@ -47,6 +47,12 @@ LOOSE_NAME = re.compile(r"(ева|евочка|евушка|эва|ев|эв|и�
 # что-то» got "Не расслышала, повтори" (2026-11-23)
 MAYBE_NAME = re.compile(r"^\s*(е|ив|иве|ева\w*|эва\w*|эв|ев)\b", re.I)
 FUSED_STOP = re.compile(r"(?:е|э|и)в[аоы]?(?:сто[пк]\w*|хватит|выключи?\w*)", re.I)   # see music_command
+
+
+def _named_or_stop(text):
+    """Her name (or its start-of-phrase mangling) or a fused «Ева, стоп» in a phrase."""
+    w = re.findall(r"\w+", text.lower())
+    return bool(NAME.search(text) or MAYBE_NAME.search(text) or (len(w) == 1 and FUSED_STOP.match(w[0])))
 # a call on its own, the question comes after a pause ("Ева, … кто такая Ольга"
 # arrived as "евро" + "кто такая ольга")
 CALL_ONLY = re.compile(r"^\s*(?:эй\s+|слушай\s+)?(ева\w{0,3}|эва\w{0,2}|ев\w{0,2}|эв\w{0,2}|ив\w?|иве)\s*$", re.I)
@@ -536,6 +542,12 @@ def on_phrase(item):
     if item.get("end") and not item.get("window"):
         LATENCY["end"] = item["end"]
     VOICE.on_first = _first_sound
+    raw = item.get("raw_text") or ""
+    if raw and music.PLAYER.active() and not _named_or_stop(text) and _named_or_stop(raw):
+        # the ear's canceller bit the words over the music, the raw mics did not (hear.py):
+        # «евосток» there, «ева стоп» here (2026-11-27)
+        log(f"over music: {text!r} -> the raw mics' {raw!r}")
+        text = raw
     words = re.findall(r"\w+", text.lower())
     with LISTEN_LOCK:
         if LISTEN["active"]:
