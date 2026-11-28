@@ -12,7 +12,9 @@ cat > "$D/run.sh" <<EOF
 cd "$D"
 curl -sf -m 3 http://127.0.0.1:8910/health >/dev/null || nohup python3 convert_host.py >> convert.log 2>&1 &
 EOF
-(crontab -l 2>/dev/null | grep -v "print-host/run.sh"; echo "@reboot sh $D/run.sh"; echo "*/5 * * * * sh $D/run.sh") | crontab -
+# `|| true`: with no crontab yet grep finds nothing, exits 1, and set -e ended the subshell before
+# the two lines - an empty crontab was installed and the converter had no keepalive (2026-11-28)
+(crontab -l 2>/dev/null | grep -v "print-host/run.sh" || true; echo "@reboot sh $D/run.sh"; echo "*/5 * * * * sh $D/run.sh") | crontab -
 pkill -f "python3 convert_host.py" || true
 sleep 1
 sh "$D/run.sh"
