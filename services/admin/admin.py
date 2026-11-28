@@ -1390,8 +1390,8 @@ async def eyes_post(request: Request):
         url = str(x.get("url", "")).strip()
         if not CAM_ID.match(cid) or cid in seen:
             raise HTTPException(400, f"id камеры: латиница/цифры/-_, без повторов: «{cid}»")
-        if not url.startswith(("http://", "https://", "rtsp://", "rtsps://", "gopro://")):
-            raise HTTPException(400, f"адрес камеры {cid}: http(s)://, rtsp:// или gopro://")
+        if not url.startswith(("http://", "https://", "rtsp://", "rtsps://", "gopro://", "gopro-usb://")):
+            raise HTTPException(400, f"адрес камеры {cid}: http(s)://, rtsp://, gopro:// или gopro-usb://")
         seen.add(cid)
         cams.append({"id": cid, "name": str(x.get("name") or cid).strip()[:40], "url": url, "on": bool(x.get("on", True)),
                      "motion": min(0.5, max(0.001, float(x.get("motion") or 0.01))), "faces": bool(x.get("faces", True)),

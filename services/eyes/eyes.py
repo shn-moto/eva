@@ -7,7 +7,8 @@ The cameras are in EYES_DIR/eyes.json, edited on the admin page «Глаза»:
      "fps": 5, "quiet_s": 8, "id_threshold": 0.5, "id_floor": 0.45, "min_face": 28}
 
     url      MJPEG over HTTP (multipart/x-mixed-replace), a JPEG snapshot URL (polled), rtsp://, or
-             gopro://<ip> (a GoPro on its own Wi-Fi: preview started over its HTTP API, UDP 8554)
+             gopro://<ip> (a GoPro on its own Wi-Fi: preview started over its HTTP API, UDP 8554), or
+             gopro-usb://<ip> (a GoPro on a USB cable, its webcam mode: 1080p, ?res=&fov=&port=)
     motion   the changed part of the frame that counts as motion (0.01 = 1 %)
     watch    track motion (false: the live frame only, no events)
     faces    look for faces during motion and ask photolib who it is
@@ -227,7 +228,7 @@ class Reader(threading.Thread):
             try:
                 if self.url.startswith(("rtsp://", "rtsps://")):
                     self._rtsp()
-                elif self.url.startswith("gopro://"):
+                elif self.url.startswith(("gopro://", "gopro-usb://")):
                     self._gopro()
                 else:
                     self._http()
@@ -284,18 +285,26 @@ class Reader(threading.Thread):
         sends its preview as MPEG-TS over UDP to whoever asked, and stops without a keep-alive every few
         seconds (HERO11 Black: 1280x1120 at ~29 fps, 2026-11-28)."""
         u = urllib.parse.urlparse(self.url)
-        port = int(urllib.parse.parse_qs(u.query).get("port", ["8554"])[0])
-        api = f"http://{u.hostname}:{u.port or 8080}/gopro/camera"
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+        port = int(q.get("port", "8554"))
+        api = f"http://{u.hostname}:{u.port or 8080}/gopro"
+        # gopro-usb://<172.2X.1YZ.51>: the camera on a USB cable as a network device, its webcam mode -
+        # 1920x1080 and powered by the same cable (2026-11-28, HERO11 on the hub: res 12 = 1080p, fov 0 = wide)
+        if u.scheme == "gopro-usb":
+            start = f"/webcam/start?res={q.get('res', '12')}&fov={q.get('fov', '0')}&port={port}&protocol=TS"
+            stop = "/webcam/stop"
+        else:
+            start, stop = f"/camera/stream/start?port={port}", "/camera/stream/stop"
 
         def get(path):
             with urllib.request.urlopen(api + path, timeout=5) as r:
                 return r.read()
         try:
-            get("/stream/stop")                # a stream left running by the last connection
+            get(stop)                          # a stream left running by the last connection
         except OSError:
             pass
         try:
-            get(f"/stream/start?port={port}")
+            get(start)
         except OSError as e:
             raise IOError(f"GoPro не отвечает ({u.hostname}): {e}")
         alive = [True]
@@ -303,7 +312,7 @@ class Reader(threading.Thread):
         def keep():
             while alive[0] and self.running:
                 try:
-                    get("/keep_alive")
+                    get("/camera/keep_alive")
                 except OSError:
                     pass
                 time.sleep(2.5)
@@ -314,7 +323,7 @@ class Reader(threading.Thread):
         finally:
             alive[0] = False
             try:
-                get("/stream/stop")
+                get(stop)
             except OSError:
                 pass
 
@@ -870,7 +879,7 @@ def events():
 @app.get("/probe")
 def probe(url: str):
     """One frame from a URL: is it a camera, which size."""
-    if not url.startswith(("http://", "https://", "rtsp://", "rtsps://", "gopro://")):
+    if not url.startswith(("http://", "https://", "rtsp://", "rtsps://", "gopro://", "gopro-usb://")):
         raise HTTPException(400, "http(s)://, rtsp:// or gopro://")
     r = Reader(url, 1)
     r.start()
