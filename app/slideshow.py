@@ -224,7 +224,7 @@ class Playlist:
                     got = [x for x in make() if x["id"] not in self.seen]
                 except Exception as e:
                     log(f"slideshow: {name}: {e}")
-                    time.sleep(5)
+                    time.sleep(5 if archive_up() else 60)     # a down archive: not a log line every 5 s
                     continue
                 self.seen.update(x["id"] for x in got)
                 self.items += got
@@ -272,6 +272,23 @@ def _music():
         return None
     return {"title": music.clean(t.get("title")), "artist": music.clean(t.get("artist")),
             "paused": music.PLAYER.paused}
+
+
+_alive = {"at": 0.0, "ok": True}
+
+
+def archive_up():
+    """photolib answers (checked at most every 10 s). The TV loads each slide from it itself: with the
+    archive down the slides queued before kept coming as a broken picture all night (2026-11-28:
+    photolib hung in its shutdown at 01:42)."""
+    if time.time() - _alive["at"] >= 10:
+        try:
+            with urllib.request.urlopen(photolib.API + "/health", timeout=3) as r:
+                _alive["ok"] = r.status == 200
+        except Exception:
+            _alive["ok"] = False
+        _alive["at"] = time.time()
+    return _alive["ok"]
 
 
 def _show(item):
@@ -362,6 +379,12 @@ def run(busy, last_activity, screen_free, restore=None):
                 continue
             if _talking():
                 continue                          # the photo stays while someone speaks: a question may be about it
+            if not archive_up():
+                if state["on"]:                   # no broken picture: the face (or the player) instead
+                    stop("the archive is down")
+                    (restore or (lambda: ui({"type": "view", "kind": "close"})))()
+                shown_at = time.time()            # look again in SECONDS, not every second
+                continue
             item = pl.next()
             if item is None:
                 continue                          # the first photos are still being found
