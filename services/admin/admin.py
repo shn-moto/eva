@@ -1356,9 +1356,16 @@ CAM_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
 @app.get("/api/eyes/cameras")
+def _eyes_rev():
+    try:
+        return str(os.stat(EYES_CONF).st_mtime_ns)
+    except OSError:
+        return "0"
+
+
 def eyes_get():
     c = _jload(EYES_CONF, {})
-    return {"cameras": c.get("cameras", []), "fps": c.get("fps", 5), "quiet_s": c.get("quiet_s", 8),
+    return {"rev": _eyes_rev(), "cameras": c.get("cameras", []), "fps": c.get("fps", 5), "quiet_s": c.get("quiet_s", 8),
             "id_threshold": c.get("id_threshold", 0.5), "motion_on": c.get("motion_on", True) is not False,
             "faces_on": c.get("faces_on", True) is not False}
 
@@ -1367,6 +1374,10 @@ def eyes_get():
 async def eyes_post(request: Request):
     """The whole list from the page; the eyes service follows the file within 3 s."""
     b = await request.json()
+    # a page opened before the file changed must not write its old list back: a camera's new address
+    # was replaced by the old one when the switches were saved from such a page (2026-11-28)
+    if "cameras" in b and b.get("rev") != _eyes_rev():
+        raise HTTPException(409, "Список камер изменился после открытия страницы — закрой и открой «Глаза» заново")
     c = _jload(EYES_CONF, {})
     for k in ("motion_on", "faces_on"):          # the switches for all the cameras
         if k in b:

@@ -1818,6 +1818,7 @@ $("#ey-day").onchange = eyLog; $("#ey-cam").onchange = eyLog; $("#ey-people").on
 $("#ey-open").onclick = async () => {
   $("#ey").hidden = false;
   const conf = await api("/api/eyes/cameras").catch(() => ({ cameras: [] }));
+  EY.rev = conf.rev;
   EY.cams = conf.cameras.map(c => ({ ...c, saved: true }));
   $("#ey-motion-on").checked = conf.motion_on !== false; $("#ey-faces-on").checked = conf.faces_on !== false;
   $("#ey-cam").innerHTML = '<option value="">все камеры</option>' + EY.cams.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
@@ -1832,7 +1833,8 @@ $("#ey-add").onclick = () => {
 $("#ey-save").onclick = async () => {
   if (document.activeElement) document.activeElement.blur();
   try {
-    const r = await api("/api/eyes/cameras", { cameras: EY.cams });
+    const r = await api("/api/eyes/cameras", { cameras: EY.cams, rev: EY.rev });
+    EY.rev = r.rev;
     EY.cams = r.cameras.map(c => ({ ...c, saved: true })); eyRender();
     // the scenarios too: two «Сохранить» buttons and a scenario was never saved (2026-11-27)
     if (EW.loaded) {
@@ -1849,7 +1851,8 @@ $("#ey-close").onclick = () => { $("#ey").hidden = true; clearTimeout(EY.timer);
 // ---- the switches for all cameras (eyes.json motion_on / faces_on) ----
 ["motion", "faces"].forEach(k => $(`#ey-${k}-on`).onchange = async e => {
   try {
-    await api("/api/eyes/cameras", { [`${k}_on`]: e.target.checked });
+    const r = await api("/api/eyes/cameras", { [`${k}_on`]: e.target.checked });
+    EY.rev = r.rev;                                // the page's own change: its next save stays valid
     toast(`${k === "motion" ? "Слежение за движением" : "Лица"} ${e.target.checked ? "включено" : "выключено"} на всех камерах`);
     eyStates();
   } catch (er) { toast("ошибка: " + er.message); e.target.checked = !e.target.checked; }
