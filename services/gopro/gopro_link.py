@@ -152,10 +152,21 @@ async def start_live(gp):
     the stream reached the receiver while that wait hung for good (2026-11-28). Whether it runs is
     the receiver's to say (session)."""
     if SSID:
-        r = await step(f"Wi-Fi {SSID}", gp.access_point.connect(SSID, PASSWORD), 75)
-        if not r.__class__.__name__.startswith("Success"):
-            raise RuntimeError(f"Wi-Fi {SSID}: {r}")
-        note(f"камера в сети {SSID}")
+        # already there - nothing to do: a connect to the network it is on got no confirmation and
+        # timed out (2026-11-28); a failed join does not stop the start either - the receiver decides
+        try:
+            now = (await step("сеть камеры", gp.ble_status.connected_wifi_ssid.get_value(), 10)).data
+        except Exception:
+            now = None
+        if now == SSID:
+            note(f"камера уже в сети {SSID}")
+        else:
+            try:
+                r = await step(f"Wi-Fi {SSID}", gp.access_point.connect(SSID, PASSWORD), 75)
+                note(f"камера в сети {SSID}" if r.__class__.__name__.startswith("Success")
+                     else f"Wi-Fi {SSID}: {r} (была в {now})", error=not r.__class__.__name__.startswith("Success"))
+            except Exception as e:
+                note(f"{e} (была в {now})", error=True)
     await step("стоп", gp.ble_command.set_shutter(shutter=Toggle.DISABLE), 15)
     r = await step("режим трансляции", gp.ble_command.set_livestream_mode(
         url=RTMP, window_size=getattr(proto.EnumWindowSize, RES), lens=None, encode=False,  # not to the SD card
