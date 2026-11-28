@@ -32,6 +32,7 @@ import urllib.request
 from open_gopro import WirelessGoPro
 from open_gopro.models import proto, streaming
 from open_gopro.models.constants import Toggle
+from open_gopro.network.ble.adapters.bleak_wrapper import BleakWrapperController
 from open_gopro.network.wifi.controller import SsidState, WifiController
 
 RTMP = os.environ.get("GOPRO_RTMP", "rtmp://127.0.0.1:1935/live/gopro")
@@ -76,6 +77,19 @@ class NoWifi(WifiController):
 
     def is_on(self):
         return False
+
+
+async def _pair(self, handle):
+    """BlueZ's own pairing over D-Bus (bleak), not the SDK's bluetoothctl dialogue: it waits for a
+    "#" prompt that BlueZ 5.7x prints as ">" and hung on every connect (2026-11-28). Already paired
+    (the host keeps it) - nothing to do."""
+    try:
+        await handle.pair()
+    except Exception as e:                  # already paired / the camera not in pairing mode
+        log.info(f"pair: {e}")
+
+
+BleakWrapperController.pair = _pair
 
 
 def note(msg, error=False):
