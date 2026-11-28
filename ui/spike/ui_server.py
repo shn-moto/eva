@@ -232,7 +232,9 @@ def broadcast(event):
         except OSError:
             pass
     if event.get("type") == "view":
-        LAST_VIEW["ev"] = None if event.get("kind") == "close" else event
+        # a slideshow slide is not kept: the brain sends the next one in 12 s anyway, and a slide
+        # replayed after the archive went down came back as a broken picture (2026-11-28)
+        LAST_VIEW["ev"] = None if event.get("kind") in ("close", "slide") else event
     if event.get("type") == "avatar":
         try:
             with open(AVATAR_FILE, "w") as f:
