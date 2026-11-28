@@ -32,6 +32,7 @@ import urllib.request
 from open_gopro import WirelessGoPro
 from open_gopro.models import proto, streaming
 from open_gopro.models.constants import Toggle
+from open_gopro.network.wifi.controller import SsidState, WifiController
 
 RTMP = os.environ.get("GOPRO_RTMP", "rtmp://127.0.0.1:1935/live/gopro")
 PATH = urllib.parse.urlparse(RTMP).path.lstrip("/")                 # live/gopro
@@ -49,6 +50,32 @@ for noisy in ("bleak", "open_gopro"):
 
 STATE = {"state": "starting", "ble": False, "receiving": False, "wanted": False, "last_error": None,
          "log": collections.deque(maxlen=50)}
+
+
+class NoWifi(WifiController):
+    """The SDK builds a host Wi-Fi driver even for a BLE-only camera and fails without nmcli in the
+    container (2026-11-28) - the hub's Wi-Fi is not used at all: the camera joins the home network."""
+
+    def __init__(self, *a, **k):            # no interface lookup
+        self._interface, self._password = None, None
+
+    async def connect(self, ssid, password, timeout=15):
+        return False
+
+    async def disconnect(self):
+        return True
+
+    def current(self):
+        return None, SsidState.DISCONNECTED
+
+    def available_interfaces(self):
+        return []
+
+    def power(self, power):
+        return False
+
+    def is_on(self):
+        return False
 
 
 def note(msg, error=False):
@@ -107,7 +134,7 @@ async def start_live(gp):
 async def session():
     """One BLE connection: keep the stream at the receiver while the camera is wanted."""
     STATE["state"] = "connecting"
-    async with WirelessGoPro(TARGET, interfaces={WirelessGoPro.Interface.BLE}) as gp:
+    async with WirelessGoPro(TARGET, interfaces={WirelessGoPro.Interface.BLE}, wifi_adapter=NoWifi) as gp:
         STATE["ble"] = True
         note("камера на связи по Bluetooth")
         missing_since = None
