@@ -94,10 +94,12 @@ gpu-arbiter)
 router)
     # no source of ours: the prebuilt llama.cpp CUDA server + a model on the server.
     # 8080 inside: the image's own healthcheck asks there (on 8906 docker said "unhealthy")
+    # --cache-ram 1024: its host-RAM prompt cache defaults to 8 GB and grew by every new prompt -
+    # 3.2 GB in a day, the hub's swap full, earlyoom stopped photolib (2026-11-28)
     image=ghcr.io/ggml-org/llama.cpp:server-cuda; name=eva-router; port=8906
     "${SSH[@]}" "docker rm -f $name >/dev/null 2>&1; docker run -d --name $name --restart unless-stopped --gpus all \
 -p 8906:8080 -v \$HOME/eva-router/models:/models:ro $image \
--m /models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --host 0.0.0.0 --port 8080 -ngl 99 -c 4096 -np 1 --cache-reuse 256 >/dev/null \
+-m /models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --host 0.0.0.0 --port 8080 -ngl 99 -c 4096 -np 1 --cache-reuse 256 --cache-ram 1024 >/dev/null \
 && for i in \$(seq 60); do curl -sf localhost:$port/health >/dev/null && echo $name up && exit 0; sleep 2; done; echo $name NOT up; exit 1"
     exit $? ;;
 *) echo "unknown service $svc" >&2; exit 1 ;;
