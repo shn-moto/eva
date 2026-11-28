@@ -177,7 +177,7 @@ async def main():
             backoff = 5
         except Exception as e:                          # camera away / asleep / out of range: retry
             note(f"{type(e).__name__}: {e}"[:300], error=True)
-            backoff = min(120, backoff * 2)
+            backoff = min(30, backoff * 2)           # a camera put into pairing mode is caught within half a minute
         STATE["ble"] = False
         STATE["state"] = "retry"
         await asyncio.sleep(backoff)
