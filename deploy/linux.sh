@@ -65,7 +65,8 @@ eyes)
     # the cameras (services/eyes/eyes.py): motion, faces, who by photolib; events into assistant_memory.
     # ~/eva-data/eyes: eyes.json (the cameras, edited on the admin page «Глаза») + event frames and face crops
     src=services/eyes; image=eva-eyes; name=eva-eyes; port=8913
-    run="-p 8913:8913 --add-host=host.docker.internal:host-gateway --env-file \$HOME/eva-data/admin.env --cpus 3 \
+    # 8554-8556/udp: a GoPro's preview comes to the asker over UDP (gopro://, eyes.py Reader._gopro)
+    run="-p 8913:8913 -p 8554-8556:8554-8556/udp --add-host=host.docker.internal:host-gateway --env-file \$HOME/eva-data/admin.env --cpus 3 \
 -v /etc/localtime:/etc/localtime:ro -v \$HOME/eva-data/eyes:/eyes"
     cmd=""; health=/health ;;
 print)

@@ -6,7 +6,8 @@ The cameras are in EYES_DIR/eyes.json, edited on the admin page «Глаза»:
                   "motion": 0.01, "faces": true}],
      "fps": 5, "quiet_s": 8, "id_threshold": 0.5, "id_floor": 0.45, "min_face": 28}
 
-    url      MJPEG over HTTP (multipart/x-mixed-replace), a JPEG snapshot URL (polled), or rtsp://
+    url      MJPEG over HTTP (multipart/x-mixed-replace), a JPEG snapshot URL (polled), rtsp://, or
+             gopro://<ip> (a GoPro on its own Wi-Fi: preview started over its HTTP API, UDP 8554)
     motion   the changed part of the frame that counts as motion (0.01 = 1 %)
     watch    track motion (false: the live frame only, no events)
     faces    look for faces during motion and ask photolib who it is
@@ -226,6 +227,8 @@ class Reader(threading.Thread):
             try:
                 if self.url.startswith(("rtsp://", "rtsps://")):
                     self._rtsp()
+                elif self.url.startswith("gopro://"):
+                    self._gopro()
                 else:
                     self._http()
             except Exception as e:
@@ -274,22 +277,64 @@ class Reader(threading.Thread):
                 self.put("jpg", r.read())
 
     def _rtsp(self):
+        self._capture(self.url, open_ms=5000)
+
+    def _gopro(self):
+        """A GoPro (HERO9+, Open GoPro HTTP API) on its own Wi-Fi: gopro://10.5.5.9[?port=8554]. The camera
+        sends its preview as MPEG-TS over UDP to whoever asked, and stops without a keep-alive every few
+        seconds (HERO11 Black: 1280x1120 at ~29 fps, 2026-11-28)."""
+        u = urllib.parse.urlparse(self.url)
+        port = int(urllib.parse.parse_qs(u.query).get("port", ["8554"])[0])
+        api = f"http://{u.hostname}:{u.port or 8080}/gopro/camera"
+
+        def get(path):
+            with urllib.request.urlopen(api + path, timeout=5) as r:
+                return r.read()
+        try:
+            get("/stream/stop")                # a stream left running by the last connection
+        except OSError:
+            pass
+        try:
+            get(f"/stream/start?port={port}")
+        except OSError as e:
+            raise IOError(f"GoPro не отвечает ({u.hostname}): {e}")
+        alive = [True]
+
+        def keep():
+            while alive[0] and self.running:
+                try:
+                    get("/keep_alive")
+                except OSError:
+                    pass
+                time.sleep(2.5)
+        threading.Thread(target=keep, daemon=True).start()
+        try:
+            # UDP: the first frames take a while to probe; no lag check (TS over UDP has no backlog to replay)
+            self._capture(f"udp://@0.0.0.0:{port}?overrun_nonfatal=1&fifo_size=5000000", open_ms=15000, lag=False)
+        finally:
+            alive[0] = False
+            try:
+                get("/stream/stop")
+            except OSError:
+                pass
+
+    def _capture(self, src, open_ms=5000, lag=True):
         # 5 s, not FFmpeg's 30: a stalled camera was waited for 30 s at a time (2026-11-28)
-        cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000,
-                                                          cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000])
+        cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, open_ms,
+                                                     cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000])
         try:
             if not cap.isOpened():
-                raise IOError("rtsp: cannot open")
+                raise IOError(f"{src.split(':')[0]}: cannot open")
             self.error = None
             self.conn += 1
             base = None                    # the smallest (wall clock - stream clock) seen: no lag
             while self.running:
                 ok, img = cap.read()
                 if not ok:
-                    raise IOError("rtsp: no frame")
+                    raise IOError(f"{src.split(':')[0]}: no frame")
                 # how late is this frame: the stream's own clock against ours. A camera that sends
                 # a backlog after a network hiccup is behind - reconnect and start from now.
-                pts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                pts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 if lag else 0
                 if pts > 0:
                     off = time.time() - pts
                     base = off if base is None else min(base, off)
@@ -825,8 +870,8 @@ def events():
 @app.get("/probe")
 def probe(url: str):
     """One frame from a URL: is it a camera, which size."""
-    if not url.startswith(("http://", "https://", "rtsp://", "rtsps://")):
-        raise HTTPException(400, "http(s):// or rtsp://")
+    if not url.startswith(("http://", "https://", "rtsp://", "rtsps://", "gopro://")):
+        raise HTTPException(400, "http(s)://, rtsp:// or gopro://")
     r = Reader(url, 1)
     r.start()
     t = time.time()
@@ -839,4 +884,4 @@ def probe(url: str):
     if img is None:
         return {"ok": False, "error": "кадр не читается"}
     return {"ok": True, "size": [img.shape[1], img.shape[0]],
-            "kind": "rtsp" if url.startswith("rtsp") else ("mjpeg" if len(r.got) > 1 else "jpeg")}
+            "kind": "gopro" if url.startswith("gopro") else "rtsp" if url.startswith("rtsp") else ("mjpeg" if len(r.got) > 1 else "jpeg")}

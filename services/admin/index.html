@@ -1710,7 +1710,7 @@ function eyRender() {
       <div class="form">
         <span>Название</span><input type="text" data-k="name" value="${esc(c.name)}" placeholder="кабинет, детская, зал">
         <span>Id</span><input type="text" data-k="id" value="${esc(c.id)}" ${c.saved ? "disabled" : ""} placeholder="cam1">
-        <span>Адрес</span><input type="text" data-k="url" value="${esc(c.url)}" placeholder="http://камера:8080/stream или rtsp://…">
+        <span>Адрес</span><input type="text" data-k="url" value="${esc(c.url)}" placeholder="http://камера:8080/stream, rtsp://… или gopro://10.5.5.9">
         <span>Движение от</span><span><input class="num" style="width:4em" data-k="motion" value="${((c.motion ?? 0.01) * 100).toFixed(1)}">% кадра
           <span class="help" data-now></span></span>
         <span></span><span><label class="tog" title="Подключаться к камере (картинка)"><input type="checkbox" data-k="on" ${c.on !== false ? "checked" : ""}> камера</label>
