@@ -60,7 +60,9 @@ IDLE_FACE_EVERY = 5.0     # s between face passes with no event (a person sittin
 FACE_LOG_EVERY = 3.0      # s between logged faces of one event: a person at the desk is not 400 rows
 QUERY_EVERY = 2.0         # s between photolib questions of one camera (~0.7 s each there)
 ACTIVE_EVERY = 10.0        # s between "still moving" events of an open event (the scenarios)
-RECHECK_S = 30            # a name found at a place in the frame holds there this long, then asked again
+RECHECK_S = 15            # a tracked face keeps its name this long, then photolib is asked again
+TRACK_IOU = 0.3           # a face is the same face as one in the last pass when the boxes overlap this much
+TRACK_GAP = 2.0           # s: a face not seen longer starts a new track (asked anew)
 MAX_EVENT_S = 300         # a long presence is split into 5-minute events
 RECENT_MOTION_S = 60      # a face keeps an event only this long after the last motion
 LIGHT = 0.5               # more of the frame changed at once = the light, not a person
@@ -282,6 +284,7 @@ class Eye(threading.Thread):
         self.motion = 0.0                # changed part of the frame now
         self.mbox = None                 # motion bbox (full coords)
         self.faces = []                  # [(box, score, name)] of the last face pass
+        self.tracks = []                 # faces followed between passes: {box, seen, name, pid, sim, named_at, asked_at}
         self.faces_ts = 0
         self.event = None
         self.last_motion = 0
@@ -461,38 +464,55 @@ class Eye(threading.Thread):
         self.faces_ts = time.time()
         return out
 
+    def _track(self, found, t):
+        """Each face of this pass -> its track: the same face as in the last pass when the boxes overlap
+        (IoU) and it was seen moments ago, else a new one. A name moves only along its own track: by a
+        coarse 120 px cell a child in her father's arms took his name (2026-11-28, «детская», 480x640)."""
+        self.tracks = [k for k in self.tracks if t - k["seen"] <= TRACK_GAP]
+        free, out = list(self.tracks), []
+        for b, sc, _ in found:
+            best = max(free, key=lambda k: _iou(k["box"], b), default=None)
+            if best is not None and _iou(best["box"], b) >= TRACK_IOU:
+                free.remove(best)
+            else:
+                best = {"name": None, "pid": None, "sim": None, "named_at": 0, "asked_at": 0}
+                self.tracks.append(best)
+            best.update(box=b, seen=t)
+            out.append(best)
+        return out
+
     def log_faces(self, found, kind, data, t):
         ev = self.event
-        named = lambda b: (ev["names_at"].get(_cell(b)) or (None, None, None, 0))
+        tracks = self._track(found, t)
+        self.faces = [(b, sc, k["name"]) for (b, sc, _), k in zip(found, tracks)]
         if t - ev["last_face_log"] < FACE_LOG_EVERY:
-            # not logged this time, but a name seen already is drawn on the live frame
-            self.faces = [(b, sc, named(b)[1]) for b, sc, _ in found]
             return
         ev["last_face_log"] = t
         if not ev["peak_frame"]:                      # an event of faces only: its frame is a face's
             ev["peak_frame"] = (kind, data)
         img = found[0][2]
         H, W = img.shape[:2]
-        for (x, y, w, h), score, _ in found:
+        for ((x, y, w, h), score, _), k in zip(found, tracks):
             m = int(max(w, h) * 0.5)
             crop = img[max(0, y - m):min(H, y + h + m), max(0, x - m):min(W, x + w + m)]
             rel = _save_jpg("faces", crop, 90)
-            # a face where a name was confirmed lately takes it without asking photolib: a fixed cap
-            # of 20 questions an event left 71 of 91 faces of a 5-minute event as «?» (2026-11-27)
-            pid, name, _, named_at = named((x, y, w, h))
-            inherit = name and t - named_at < RECHECK_S
+            # the same face named lately keeps its name without asking photolib: a fixed cap of 20
+            # questions an event left 71 of 91 faces of a 5-minute event as «?» (2026-11-27)
+            pid, name = k["pid"], k["name"]
+            inherit = bool(name) and t - k["named_at"] < RECHECK_S
             row = sql("INSERT INTO eye_faces (event_id, camera, ts, crop, score, box, person_id, person) "
                       "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                       (ev["id"], self.id, now(), rel, score, [x, y, w, h], pid if inherit else None,
                        name if inherit else None), one=True)
             fid = row[0] if row else None
-            if not inherit and min(w, h) >= 40 and t - ev["last_query"] >= QUERY_EVERY:
-                ev["last_query"] = t
+            # each track asked at most every QUERY_EVERY s: two people in the frame are both asked
+            if not inherit and min(w, h) >= 40 and t - k["asked_at"] >= QUERY_EVERY:
+                k["asked_at"] = t
                 ok, jpg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
                 if ok:
-                    threading.Thread(target=self._identify, args=(ev, fid, jpg.tobytes(), (x, y, w, h)), daemon=True).start()
+                    threading.Thread(target=self._identify, args=(ev, fid, jpg.tobytes(), k), daemon=True).start()
 
-    def _identify(self, ev, fid, jpg, box):
+    def _identify(self, ev, fid, jpg, track):
         try:
             pid, name, sim = identify(jpg, float(self.g.get("id_threshold", 0.5)))
         except Exception as e:
@@ -502,20 +522,20 @@ class Eye(threading.Thread):
             sql("UPDATE eye_faces SET person_id=%s, person=%s, similarity=%s WHERE id=%s", (pid, name, sim, fid))
         publish({"type": "face", "camera": self.id, "place": self.cam.get("name") or self.id, "event_id": ev.get("id"),
                  "person": name, "similarity": sim})
+        # photolib's answer is the track's name now - "nobody" too: a name inherited wrongly is dropped
+        track.update(name=name, pid=pid, sim=sim, named_at=time.time() if name else 0)
         if name:
-            ev["names_at"][_cell(box)] = (pid, name, sim, time.time())
             if name not in ev["people"]:
                 ev["people"].add(name)
                 log(f"{self.id}: {name} ({sim})")
                 if ev.get("id"):
                     sql("UPDATE eye_events SET people=%s WHERE id=%s", (sorted(ev["people"]), ev["id"]))
-            self.faces = [(b, s, name if _cell(b) == _cell(box) else n) for b, s, n in self.faces]
 
     def open_event(self, t, split=False, by="motion"):
         st = now()
         row = sql("INSERT INTO eye_events (camera, started) VALUES (%s,%s) RETURNING id", (self.id, st), one=True)
         self.event = {"id": row[0] if row else None, "started": st, "t0": t, "last_active": t, "frames": 0,
-                      "peak": 0.0, "peak_frame": None, "people": set(), "last_query": 0, "last_face_log": 0, "names_at": {}}
+                      "peak": 0.0, "peak_frame": None, "people": set(), "last_face_log": 0}
         if not split and by == "motion":           # a face's event is told by its face events
             publish({"type": "motion", "camera": self.id, "place": self.cam.get("name") or self.id,
                      "event_id": self.event["id"]})
@@ -539,10 +559,14 @@ class Eye(threading.Thread):
                      "seconds": int(time.time() - ev["t0"]), "people": sorted(ev["people"])})
 
 
-def _cell(box):
-    """A face's place on the frame, coarse: the name found for a face stays on it between passes."""
-    x, y, w, h = box
-    return (int((x + w / 2) // 120), int((y + h / 2) // 120))
+def _iou(a, b):
+    """Overlap of two (x, y, w, h) boxes: intersection over union, 0..1."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    iw = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    ih = max(0, min(ay + ah, by + bh) - max(ay, by))
+    inter = iw * ih
+    return inter / float(aw * ah + bw * bh - inter) if inter else 0.0
 
 
 _TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
