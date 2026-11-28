@@ -355,13 +355,21 @@ class Eye(threading.Thread):
         """Motion tracking on (the page's switches: all cameras, this one); off - the live frame only."""
         return self.g.get("motion_on", True) is not False and self.cam.get("watch", True) is not False
 
+    def faces_enabled(self):
+        """Faces on (the page's switches) - on their own: motion tracking off must not blind them
+        (2026-11-28: «лица» ticked with «движение» off at the top, and no face was ever looked for)."""
+        return self.g.get("faces_on", True) is not False and self.cam.get("faces", True) is not False
+
     def step(self, fr):
         t, kind, data = fr
-        if not self.watching():
+        watch, faces_on = self.watching(), self.faces_enabled()
+        if not watch and not faces_on:                 # the live frame only
             if self.event:
                 self.close_event()
             self.bg, self.motion, self.faces = None, 0.0, []
             return
+        # the motion is measured whenever the camera is analysed: with tracking off it opens no event,
+        # but the faces still need it - a face keeps an event only after motion (a photo on the wall)
         if self.reduce is None:
             full = decode(kind, data)
             if full is None:
@@ -396,10 +404,10 @@ class Eye(threading.Thread):
             r = self.reduce
             self.mbox = (int(xs.min() * r), int(ys.min() * r), int(xs.max() * r), int(ys.max() * r))
         ev = self.event
-        if moving and not ev:
+        if moving and watch and not ev:
             self.open_event(t)
             ev = self.event
-        if ev:
+        if ev and watch:
             if moving:
                 ev["last_active"] = t
                 ev["frames"] += 1
@@ -412,14 +420,13 @@ class Eye(threading.Thread):
                 if frac > ev["peak"]:
                     ev["peak"], ev["peak_frame"] = frac, (kind, data)
         # faces: often during an event, rarely without one (a still person is not motion)
-        want_faces = (self.g.get("faces_on", True) is not False and self.cam.get("faces", True) is not False
-                      and t - self.light > 2)
+        want_faces = faces_on and t - self.light > 2
         every = FACE_EVERY if ev else IDLE_FACE_EVERY
         if want_faces and t - self.last_face_pass >= every and t - self.last_motion < RECENT_MOTION_S:
             self.last_face_pass = t
             found = self.face_pass(kind, data)
             if found and not self.event:
-                self.open_event(t)
+                self.open_event(t, by="face")
             if found and self.event:
                 self.event["last_active"] = t
                 self.log_faces(found, kind, data, t)
@@ -462,6 +469,8 @@ class Eye(threading.Thread):
             self.faces = [(b, sc, named(b)[1]) for b, sc, _ in found]
             return
         ev["last_face_log"] = t
+        if not ev["peak_frame"]:                      # an event of faces only: its frame is a face's
+            ev["peak_frame"] = (kind, data)
         img = found[0][2]
         H, W = img.shape[:2]
         for (x, y, w, h), score, _ in found:
@@ -502,12 +511,12 @@ class Eye(threading.Thread):
                     sql("UPDATE eye_events SET people=%s WHERE id=%s", (sorted(ev["people"]), ev["id"]))
             self.faces = [(b, s, name if _cell(b) == _cell(box) else n) for b, s, n in self.faces]
 
-    def open_event(self, t, split=False):
+    def open_event(self, t, split=False, by="motion"):
         st = now()
         row = sql("INSERT INTO eye_events (camera, started) VALUES (%s,%s) RETURNING id", (self.id, st), one=True)
         self.event = {"id": row[0] if row else None, "started": st, "t0": t, "last_active": t, "frames": 0,
                       "peak": 0.0, "peak_frame": None, "people": set(), "last_query": 0, "last_face_log": 0, "names_at": {}}
-        if not split:
+        if not split and by == "motion":           # a face's event is told by its face events
             publish({"type": "motion", "camera": self.id, "place": self.cam.get("name") or self.id,
                      "event_id": self.event["id"]})
 
@@ -626,11 +635,11 @@ def cameras():
     there and tells «выключена» itself (2026-11-28: a skill present only when a camera was on at
     the brain's start needed a restart of the brain for every switch)."""
     c = conf() or {}
-    out = [dict(e.state(), watching=e.watching()) for e in EYES.values()]
+    out = [dict(e.state(), watching=e.watching(), faces_enabled=e.faces_enabled()) for e in EYES.values()]
     for x in c.get("cameras", []):
         if x.get("id") not in EYES:
             out.append({"id": x.get("id"), "name": x.get("name") or x.get("id"), "online": False, "off": True,
-                        "error": "выключена", "watching": False, "faces": []})
+                        "error": "выключена", "watching": False, "faces_enabled": False, "faces": []})
     return {"cameras": out, "motion_on": c.get("motion_on", True) is not False,
             "faces_on": c.get("faces_on", True) is not False}
 

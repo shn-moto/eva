@@ -40,10 +40,8 @@ def _why_blind(c, st):
         return "камера выключена на админке"
     if not c.get("online"):
         return f"нет связи с камерой ({c.get('error') or 'нет кадров'})"
-    if not st.get("motion_on", True):
-        return "слежение выключено для всех камер"
-    if not c.get("watching", True):
-        return "слежение за этой камерой выключено"
+    if not c.get("watching", True) and not c.get("faces_enabled", True):
+        return "слежение за движением и лицами выключено"
     return None
 
 
@@ -60,7 +58,9 @@ def state(args, person):
             now.append({"camera": c["name"], "sees": False, "why": why})
             continue
         ev = c.get("event")
-        now.append({"camera": c["name"], "sees": why is None, "why": why, "motion_now": bool(ev),
+        now.append({"camera": c["name"], "sees": why is None, "why": why,
+                    "tracks": {"motion": c.get("watching", True), "faces": c.get("faces_enabled", True)},
+                    "motion_now": bool(ev),
                     "since": ev and ev["since"][11:19], "recognised_now": ev and ev["people"],
                     "faces_in_frame": len(c.get("faces") or []),
                     "last_motion": (c.get("last_motion") or "")[:19].replace("T", " ") or None})
@@ -101,8 +101,8 @@ SKILL = Skill(
     summary="глаза: камеры дома - движение, лица, кто где был",
     tools=[Tool(
         name="eyes",
-        description=("The home's cameras: now (motion, faces in frame, who is recognised; sees=false with why - "
-                     "a camera off, tracking off) plus the journal of motion events with the people recognised "
+        description=("The home's cameras: now (motion, faces in frame, who is recognised; tracks - what is "
+                     "watched; sees=false with why - a camera off, nothing watched) plus the journal of motion events with the people recognised "
                      "by face (similarity 0-1; 0.5+ is a match). Default: the last 2 hours; hours or since/until "
                      "(ISO) for another period, camera and person to narrow. A camera sees one room only: for "
                      "who is home, weigh it with the voices."),

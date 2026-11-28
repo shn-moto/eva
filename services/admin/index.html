@@ -1675,7 +1675,10 @@ function eyStatus(id) {
   if (st.off) return { cls: "off", txt: "выключена" };
   if (!st.online) return { cls: "off", txt: "нет связи: " + (st.error || "") };
   const c = EY.cams.find(x => x.id === id) || {};
-  if (!$("#ey-motion-on").checked || c.watch === false) return { cls: "", txt: `слежение выключено · ${st.fps} к/с` };
+  const mo = $("#ey-motion-on").checked && c.watch !== false, fa = $("#ey-faces-on").checked && c.faces !== false;
+  if (!mo && !fa) return { cls: "", txt: `слежение выключено · ${st.fps} к/с` };
+  if (!mo) return { cls: st.event ? "mv" : "", txt: `только лица${st.faces.length ? ` · лиц: ${st.faces.length}` : ""}${
+    st.event && st.event.people.length ? " · " + st.event.people.join(", ") : ""} · ${st.fps} к/с` };
   const ppl = st.event && st.event.people.length ? " · " + st.event.people.join(", ") : "";
   const fc = st.faces.length ? ` · лиц: ${st.faces.length}` : "";
   // the share of the frame that changed against the background, with the camera's threshold
