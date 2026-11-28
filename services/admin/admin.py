@@ -1386,7 +1386,8 @@ async def eyes_post(request: Request):
                      "motion": min(0.5, max(0.001, float(x.get("motion") or 0.01))), "faces": bool(x.get("faces", True)),
                      "watch": bool(x.get("watch", True))})
     c["cameras"] = cams
-    for k, lo, hi in (("fps", 1, 15), ("quiet_s", 2, 120), ("id_threshold", 0.3, 0.9)):
+    for k, lo, hi in (("fps", 1, 15), ("quiet_s", 2, 120), ("id_threshold", 0.3, 0.9), ("id_floor", 0.3, 0.9),
+                      ("min_face", 16, 200)):
         if k in b:
             c[k] = min(hi, max(lo, float(b[k])))
     os.makedirs(EYES_DIR, exist_ok=True)

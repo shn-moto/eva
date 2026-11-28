@@ -4,7 +4,7 @@ The cameras are in EYES_DIR/eyes.json, edited on the admin page «Глаза»:
 
     {"cameras": [{"id": "cam1", "name": "кабинет", "url": "http://<cam>:8080/stream", "on": true,
                   "motion": 0.01, "faces": true}],
-     "fps": 5, "quiet_s": 8, "id_threshold": 0.5}
+     "fps": 5, "quiet_s": 8, "id_threshold": 0.5, "id_floor": 0.45, "min_face": 28}
 
     url      MJPEG over HTTP (multipart/x-mixed-replace), a JPEG snapshot URL (polled), or rtsp://
     motion   the changed part of the frame that counts as motion (0.01 = 1 %)
@@ -61,7 +61,8 @@ FACE_LOG_EVERY = 3.0      # s between logged faces of one event: a person at the
 QUERY_EVERY = 2.0         # s between photolib questions of one camera (~0.7 s each there)
 ACTIVE_EVERY = 10.0        # s between "still moving" events of an open event (the scenarios)
 RECHECK_S = 15            # a tracked face keeps its name this long, then photolib is asked again
-MIN_ASK = 24              # px: smaller faces are not sent to photolib at all
+MIN_FACE = 28             # px (eyes.json min_face): smaller faces are neither caught nor asked - photolib's
+                          # answer for a 28x42 profile across the room was already borderline (2026-11-28)
 TRACK_IOU = 0.3           # a face is the same face as one in the last pass when the boxes overlap this much
 TRACK_GAP = 2.0           # s: a face not seen longer starts a new track (asked anew)
 MAX_EVENT_S = 300         # a long presence is split into 5-minute events
@@ -147,8 +148,12 @@ def _multipart(field, name, data, ctype="image/jpeg"):
     return body, f"multipart/form-data; boundary={b}"
 
 
-def identify(jpg, threshold):
-    """A face crop -> (person_id, name, similarity) by photolib's face base, or (None, None, best)."""
+def identify(jpg, threshold, floor=None):
+    """A face crop -> (person_id, name, similarity) by photolib's face base, or (None, None, best).
+    A match: the top named face >= threshold, or >= floor with 3 faces of that person among the top 5.
+    Measured on «детская» (28-30 px profile faces across the room, 2026-11-28): the user at 0.47-0.53,
+    a miss at 0.44 - threshold 0.5, floor 0.45."""
+    floor = threshold - 0.05 if floor is None else floor
     body, ctype = _multipart("file", "face.jpg", jpg)
     req = urllib.request.Request(f"{PHOTOLIB}/search/face?top_k=5&similarity_threshold=0.3",
                                  data=body, headers={"Content-Type": ctype})
@@ -159,8 +164,8 @@ def identify(jpg, threshold):
         return None, None, (res[0]["similarity"] if res else None)
     best = named[0]
     # the top named face decides; a second face of the same person near it makes a weak match count
-    votes = sum(1 for x in named if x["person_id"] == best["person_id"] and x["similarity"] >= threshold - 0.08)
-    if best["similarity"] >= threshold or (votes >= 3 and best["similarity"] >= threshold - 0.05):
+    votes = sum(1 for x in named if x["person_id"] == best["person_id"] and x["similarity"] >= floor - 0.03)
+    if best["similarity"] >= threshold or (votes >= 3 and best["similarity"] >= floor):
         return best["person_id"], best.get("person_name"), round(best["similarity"], 3)
     return None, None, round(best["similarity"], 3)
 
@@ -458,7 +463,7 @@ class Eye(threading.Thread):
         out = []
         for f in (res if res is not None else []):
             x, y, fw, fh = (f[:4] / s).astype(int).tolist()
-            if min(fw, fh) < 28:
+            if min(fw, fh) < int(self.g.get("min_face", MIN_FACE)):
                 continue
             out.append(((max(0, x), max(0, y), fw, fh), float(f[14]), img))
         self.faces = [(b, sc, None) for b, sc, _ in out]
@@ -507,9 +512,9 @@ class Eye(threading.Thread):
                        name if inherit else None), one=True)
             fid = row[0] if row else None
             # each track asked at most every QUERY_EVERY s: two people in the frame are both asked
-            # from 24 px: a face across the room (28x42) was never asked and the journal showed «?»
-            # with no number; photolib answers 0.44-0.53 for such a profile - borderline, but said (2026-11-28)
-            if not inherit and min(w, h) >= MIN_ASK and t - k["asked_at"] >= QUERY_EVERY:
+            # every caught face (>= min_face) is asked: a 28x42 face across the room had been skipped
+            # by a 40 px gate and the journal showed «?» with no number (2026-11-28)
+            if not inherit and t - k["asked_at"] >= QUERY_EVERY:
                 k["asked_at"] = t
                 ok, jpg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
                 if ok:
@@ -517,7 +522,7 @@ class Eye(threading.Thread):
 
     def _identify(self, ev, fid, jpg, track):
         try:
-            pid, name, sim = identify(jpg, float(self.g.get("id_threshold", 0.5)))
+            pid, name, sim = identify(jpg, float(self.g.get("id_threshold", 0.5)), float(self.g.get("id_floor", 0.45)))
         except Exception as e:
             log(f"{self.id}: photolib:", e)
             return
