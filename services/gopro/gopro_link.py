@@ -50,7 +50,7 @@ log = logging.getLogger("gopro")
 for noisy in ("bleak", "open_gopro"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
-STATE = {"state": "starting", "ble": False, "receiving": False, "wanted": False, "last_error": None,
+STATE = {"fresh": True, "state": "starting", "ble": False, "receiving": False, "wanted": False, "last_error": None,
          "log": collections.deque(maxlen=50)}
 
 
@@ -128,7 +128,8 @@ def receiving():
 
 class Health(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        body = json.dumps(dict(STATE, log=list(STATE["log"])), ensure_ascii=False).encode()
+        body = json.dumps({k: (list(v) if k == "log" else v) for k, v in STATE.items() if k != "fresh"},
+                          ensure_ascii=False).encode()
         self.send_response(200 if self.path.startswith("/health") else 404)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -138,20 +139,32 @@ class Health(http.server.BaseHTTPRequestHandler):
         pass
 
 
+async def step(what, coro, timeout=40):
+    """One BLE step with a bound: the SDK waits for notifications a HERO11 does not always send."""
+    try:
+        return await asyncio.wait_for(coro, timeout)
+    except asyncio.TimeoutError:
+        raise RuntimeError(f"{what}: нет ответа за {timeout} с")
+
+
 async def start_live(gp):
+    """The two commands the SDK's start_stream sends, without its wait for a "starting" notification:
+    the stream reached the receiver while that wait hung for good (2026-11-28). Whether it runs is
+    the receiver's to say (session)."""
     if SSID:
-        r = await gp.access_point.connect(SSID, PASSWORD)
+        r = await step(f"Wi-Fi {SSID}", gp.access_point.connect(SSID, PASSWORD), 75)
         if not r.__class__.__name__.startswith("Success"):
             raise RuntimeError(f"Wi-Fi {SSID}: {r}")
         note(f"камера в сети {SSID}")
-    if gp.streaming.is_streaming:                      # the SDK still holds a stream that died
-        await gp.streaming.stop_active_stream()
-    r = await gp.streaming.start_stream(streaming.StreamType.LIVE, streaming.LivestreamOptions(
-        url=RTMP, resolution=getattr(proto.EnumWindowSize, RES), encode=False,   # encode: not to the SD card
-        minimum_bitrate=800, maximum_bitrate=3000, starting_bitrate=2000))
-    if not r.__class__.__name__.startswith("Success"):
-        raise RuntimeError(f"трансляция не запустилась: {r}")
-    note(f"трансляция запущена на {RTMP}")
+    await step("стоп", gp.ble_command.set_shutter(shutter=Toggle.DISABLE), 15)
+    r = await step("режим трансляции", gp.ble_command.set_livestream_mode(
+        url=RTMP, window_size=getattr(proto.EnumWindowSize, RES), lens=None, encode=False,  # not to the SD card
+        minimum_bitrate=800, maximum_bitrate=3000, starting_bitrate=2000), 20)
+    if not r.ok:
+        raise RuntimeError(f"режим трансляции не принят: {r}")
+    await asyncio.sleep(5)                              # the camera gets the stream ready
+    await step("старт", gp.ble_command.set_shutter(shutter=Toggle.ENABLE), 15)
+    note(f"трансляция запрошена на {RTMP}")
 
 
 async def session():
@@ -161,6 +174,13 @@ async def session():
         STATE["ble"] = True
         note("камера на связи по Bluetooth")
         missing_since = None
+        if STATE.pop("fresh", False) and wanted():
+            # the first connect after the service starts: the stream restarted on our network and
+            # settings, not left as the phone app (or an older config) set it - a bad 5 GHz network was
+            # kept that way (2026-11-28)
+            note("первое подключение - перезапускаю трансляцию со своими настройками")
+            await start_live(gp)
+            missing_since = time.time() + 30
         while gp.is_ble_connected:
             STATE["wanted"], STATE["receiving"] = wanted(), receiving()
             if not STATE["wanted"]:
