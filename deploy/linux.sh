@@ -117,6 +117,10 @@ git archive "$sha" "$src" | "${SSH[@]}" "rm -rf ~/eva-src/$svc && mkdir -p ~/eva
 && docker rm -f $name >/dev/null 2>&1; docker run -d --name $name --restart unless-stopped $run $image:$short $cmd >/dev/null \
 && for i in \$(seq 60); do curl -sf localhost:$port$health >/dev/null && echo $name up at $short && exit 0; sleep 2; done; echo $name NOT up; docker logs --tail 20 $name; exit 1"
 
+if [ "$svc" = eyes ]; then
+    # the GoPro link watchdog on the host (services/eyes/gopro_link.sh), from the user's crontab
+    "${SSH[@]}" 'sh ~/eva-src/eyes/install_host.sh'
+fi
 if [ "$svc" = print ]; then
     # office files -> PDF by the host's own LibreOffice: convert_host.py on the host's
     # system Python, kept alive by the user's crontab (no sudo needed)

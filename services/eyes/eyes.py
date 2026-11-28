@@ -217,7 +217,7 @@ class Reader(threading.Thread):
             self.down_since = None
         self.frame = (t, kind, data)
         self.seq += 1
-        self.got = [x for x in self.got[-60:] if t - x < 5] + [t]
+        self.got = [x for x in self.got[-300:] if t - x < 5] + [t]      # 60 capped the shown fps at 12
 
     def stop(self):
         self.running = False
