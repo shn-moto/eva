@@ -147,35 +147,28 @@ async def step(what, coro, timeout=40):
         raise RuntimeError(f"{what}: нет ответа за {timeout} с")
 
 
-async def start_live(gp):
-    """The two commands the SDK's start_stream sends, without its wait for a "starting" notification:
-    the stream reached the receiver while that wait hung for good (2026-11-28). Whether it runs is
-    the receiver's to say (session)."""
-    if SSID:
-        # already there - nothing to do: a connect to the network it is on got no confirmation and
-        # timed out (2026-11-28); a failed join does not stop the start either - the receiver decides
+async def start_live(gp, join=False):
+    """The SDK's start (it waits for the camera to report the stream ready before the shutter - five
+    blind seconds were not enough, 2026-11-28), bounded: its own wait after the start once hung while
+    the stream already ran. Whether it runs is the receiver's to say (session). The home network is
+    joined only on a retry: the camera keeps its last one, and a join to the network it was on got no
+    confirmation and cost 75 s."""
+    if join and SSID:
         try:
-            now = (await step("сеть камеры", gp.ble_status.connected_wifi_ssid.get_value(), 10)).data
-        except Exception:
-            now = None
-        if now == SSID:
-            note(f"камера уже в сети {SSID}")
-        else:
-            try:
-                r = await step(f"Wi-Fi {SSID}", gp.access_point.connect(SSID, PASSWORD), 75)
-                note(f"камера в сети {SSID}" if r.__class__.__name__.startswith("Success")
-                     else f"Wi-Fi {SSID}: {r} (была в {now})", error=not r.__class__.__name__.startswith("Success"))
-            except Exception as e:
-                note(f"{e} (была в {now})", error=True)
-    await step("стоп", gp.ble_command.set_shutter(shutter=Toggle.DISABLE), 15)
-    r = await step("режим трансляции", gp.ble_command.set_livestream_mode(
-        url=RTMP, window_size=getattr(proto.EnumWindowSize, RES), lens=None, encode=False,  # not to the SD card
-        minimum_bitrate=800, maximum_bitrate=3000, starting_bitrate=2000), 20)
-    if not r.ok:
-        raise RuntimeError(f"режим трансляции не принят: {r}")
-    await asyncio.sleep(5)                              # the camera gets the stream ready
-    await step("старт", gp.ble_command.set_shutter(shutter=Toggle.ENABLE), 15)
-    note(f"трансляция запрошена на {RTMP}")
+            r = await step(f"Wi-Fi {SSID}", gp.access_point.connect(SSID, PASSWORD), 75)
+            ok = r.__class__.__name__.startswith("Success")
+            note(f"камера в сети {SSID}" if ok else f"Wi-Fi {SSID}: {r}", error=not ok)
+        except Exception as e:
+            note(str(e), error=True)
+    if gp.streaming.is_streaming:                      # the SDK still holds a stream that died
+        await step("стоп прошлой", gp.streaming.stop_active_stream(), 15)
+    try:
+        await step("запуск трансляции", gp.streaming.start_stream(streaming.StreamType.LIVE, streaming.LivestreamOptions(
+            url=RTMP, resolution=getattr(proto.EnumWindowSize, RES), encode=False,     # not to the SD card
+            minimum_bitrate=800, maximum_bitrate=3000, starting_bitrate=2000)), 60)
+        note(f"трансляция запущена на {RTMP}")
+    except RuntimeError as e:                          # the receiver will tell whether it came
+        note(f"{e} - смотрю на приёмник")
 
 
 async def session():
@@ -184,12 +177,11 @@ async def session():
     async with WirelessGoPro(TARGET, interfaces={WirelessGoPro.Interface.BLE}, wifi_adapter=NoWifi) as gp:
         STATE["ble"] = True
         note("камера на связи по Bluetooth")
-        missing_since = None
-        if STATE.pop("fresh", False) and wanted():
-            # the first connect after the service starts: the stream restarted on our network and
-            # settings, not left as the phone app (or an older config) set it - a bad 5 GHz network was
-            # kept that way (2026-11-28)
-            note("первое подключение - перезапускаю трансляцию со своими настройками")
+        missing_since, tries = None, 0
+        if STATE.pop("fresh", False) and wanted() and not receiving():
+            # the first connect after the service starts and no stream: start it at once, not after
+            # RESTART_AFTER. A running stream is left alone - restarting a good one broke it (2026-11-28)
+            note("первое подключение, потока нет - запускаю трансляцию")
             await start_live(gp)
             missing_since = time.time() + 30
         while gp.is_ble_connected:
@@ -201,16 +193,15 @@ async def session():
                     note("камера выключена в «Глазах» - трансляция остановлена")
                 return                                  # BLE released: the camera may sleep
             if STATE["receiving"]:
-                missing_since = None
+                missing_since, tries = None, 0
                 STATE["state"] = "streaming"
             else:
                 missing_since = missing_since or time.time()
                 STATE["state"] = "waiting"
                 if time.time() - missing_since >= RESTART_AFTER:
-                    note("приёмник не получает поток - запускаю трансляцию")
-                    await gp.ble_command.set_shutter(shutter=Toggle.DISABLE)     # a stream stuck half-way
-                    await asyncio.sleep(3)
-                    await start_live(gp)
+                    tries += 1
+                    note(f"приёмник не получает поток - запускаю трансляцию (попытка {tries})")
+                    await start_live(gp, join=tries > 1)
                     missing_since = time.time() + 30    # give it time to reach the receiver
             await asyncio.sleep(5)
         note("Bluetooth-связь с камерой потеряна", error=True)
