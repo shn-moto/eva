@@ -44,6 +44,8 @@ that spends money (paid APIs beyond a normal test), and flashing / rebooting the
 | sound events + speech emotion (PANNs, GigaAM-Emo) | `services/voice-events` | `eva-voice-events` :8911 | `deploy/linux.sh voice-events` |
 | admin page (journal, voices, places, calendar, listeners) | `services/admin` | `eva-admin` :8908 | `deploy/linux.sh admin` |
 | eyes: cameras, motion, faces (YuNet CPU, named by photolib `/search/face`), `eye_events`/`eye_faces` | `services/eyes` (cameras: `~/eva-data/eyes/eyes.json`, admin «Глаза») | `eva-eyes` :8913 | `deploy/linux.sh eyes` |
+| RTMP receiver for cameras that push (GoPro live) -> RTSP for the eyes | no source, prebuilt mediamtx | `eva-rtmp` :1935 RTMP, :8555 RTSP (host net) | `deploy/linux.sh rtmp` |
+| GoPro kept live over Bluetooth (Open GoPro SDK): starts / restarts its RTMP live stream, follows the eyes' camera switch | `services/gopro` (`~/eva-data/gopro.env`: GOPRO_WIFI_SSID) | `eva-gopro` :8914 /health (host net, D-Bus, apparmor unconfined) | `deploy/linux.sh gopro` |
 | music | `services/music` | `newalisa-music` :8904 | `deploy/linux.sh music` |
 | print + office->PDF | `services/print` | `eva-print` :8909 (host net, CUPS) | `deploy/linux.sh print` |
 | local router (Qwen3-4B, llama.cpp CUDA) | no source, a prebuilt image | `eva-router` :8906 | `deploy/linux.sh router` |
