@@ -233,7 +233,18 @@ async def main():
             await asyncio.sleep(10)
             continue
         try:
-            await session()
+            # the SDK's connect retries for minutes: the eyes' switch must not wait for it (the camera
+            # moved to USB, and this went on «connecting» to Bluetooth, 2026-11-28)
+            task = asyncio.create_task(session())
+            while not task.done():
+                await asyncio.sleep(5)
+                if not wanted():
+                    task.cancel()
+                    note("камера больше не нужна в «Глазах» - отпускаю")
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
             backoff = 5
         except Exception as e:                          # camera away / asleep / out of range: retry
             note(f"{type(e).__name__}: {e}"[:300], error=True)
