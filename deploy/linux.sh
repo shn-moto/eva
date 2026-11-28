@@ -18,7 +18,7 @@ HUB_KEY=${HUB_KEY:?set HUB_KEY in deploy/local.env}
 HUB_KEY=${HUB_KEY/#\~/$HOME}
 SSH=(ssh -i "$HUB_KEY" -o ConnectTimeout=10 "$HOST")
 
-svc=${1:?service: stt | music | router | gpu-arbiter | admin | print | eyes | brain}
+svc=${1:?service: stt | music | router | gpu-arbiter | admin | print | eyes | rtmp | brain}
 ref=${2:-origin/main}
 git fetch -q origin
 sha=$(git rev-parse --verify "$ref^{commit}")
@@ -102,6 +102,16 @@ router)
 -p 8906:8080 -v \$HOME/eva-router/models:/models:ro $image \
 -m /models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --host 0.0.0.0 --port 8080 -ngl 99 -c 4096 -np 1 --cache-reuse 256 --cache-ram 1024 >/dev/null \
 && for i in \$(seq 60); do curl -sf localhost:$port/health >/dev/null && echo $name up && exit 0; sleep 2; done; echo $name NOT up; exit 1"
+    exit $? ;;
+rtmp)
+    # no source of ours: mediamtx receives cameras that push RTMP (a GoPro's live stream from the home
+    # Wi-Fi: rtmp://<hub>:1935/live/<name>) and gives them to the eyes as rtsp://127.0.0.1:8555/live/<name>.
+    # 8555, not 8554: the eyes take a GoPro's own UDP preview on 8554-8556/udp (2026-11-28)
+    image=bluenviron/mediamtx:latest; name=eva-rtmp; port=9997
+    "${SSH[@]}" "docker rm -f $name >/dev/null 2>&1; docker pull -q $image >/dev/null; docker run -d --name $name --restart unless-stopped --network host \
+-e MTX_RTMPADDRESS=:1935 -e MTX_RTSPADDRESS=:8555 -e MTX_RTPADDRESS=:8560 -e MTX_RTCPADDRESS=:8561 \
+-e MTX_HLS=no -e MTX_WEBRTC=no -e MTX_SRT=no -e MTX_API=yes -e MTX_APIADDRESS=127.0.0.1:9997 $image >/dev/null \
+&& for i in \$(seq 30); do curl -sf localhost:$port/v3/paths/list >/dev/null && echo $name up && exit 0; sleep 1; done; echo $name NOT up; docker logs --tail 15 $name; exit 1"
     exit $? ;;
 *) echo "unknown service $svc" >&2; exit 1 ;;
 esac
