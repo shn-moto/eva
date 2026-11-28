@@ -1403,7 +1403,7 @@ def eyes_live(path: str, request: Request):
     import urllib.error
     import urllib.request
     from fastapi.responses import Response
-    if not (path in ("cameras", "probe", "presence") or re.fullmatch(r"frame/[a-z0-9_-]+\.jpg", path)):
+    if not (path in ("cameras", "probe", "presence") or re.fullmatch(r"frame/[a-z0-9_-]+\.jpg|log/[a-z0-9_-]+", path)):
         raise HTTPException(404, "not found")
     url = f"{EYES_URL}/{path}" + (f"?{request.url.query}" if request.url.query else "")
     try:

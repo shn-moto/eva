@@ -328,6 +328,21 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
 #ew-list .li:hover .del { opacity: .8; }
 #ew-list .li .del:hover { opacity: 1; }
 #ey-tc.on, #ey-tj.on, #ey-tw.on { background: var(--accent-soft); color: var(--accent); }
+.hb { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; color: var(--mute);
+  border-top: 1px solid var(--line); }
+.hb i { width: 34px; height: 8px; border-radius: 4px; background: var(--faint); flex: none; }
+.hb span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hb.green i { background: #3fb950; } .hb.yellow i { background: #e3b341; } .hb.red i { background: #e5534b; }
+.hb.red span { color: var(--danger); }
+#ey-hlog { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; z-index: 61; }
+#ey-hlog[hidden] { display: none; }
+#ey-hlog .box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: min(760px, 94vw);
+  max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; }
+#ey-hlog .box .hb { border-top: 0; cursor: default; }
+#ey-hlog .rows { overflow: auto; padding: 6px 14px 12px; font-size: 12.5px; }
+.hl { display: grid; grid-template-columns: 120px 110px 1fr; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
+.hl .t { color: var(--mute); font-variant-numeric: tabular-nums; } .hl.error .lv { color: var(--danger); }
+.hl.warn .lv { color: #b08800; } .hl.info .lv { color: #2f8f46; }
 #ey-big { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: flex; align-items: center; justify-content: center; z-index: 60; }
 #ey-big[hidden] { display: none; }
 #ey-big img { max-width: 94vw; max-height: 94vh; }
@@ -423,6 +438,7 @@ mark { background: var(--keep-soft); color: inherit; padding: 0 1px; border-radi
   </div>
 </div>
 <div id="ey-big" hidden><img alt=""></div>
+<div id="ey-hlog" hidden></div>
 <div id="rc" class="modal" hidden>
   <div class="rs-box">
     <div class="bar"><span class="title">Ресурсы</span><span class="sub">медиатека Евы: свои фильмы и музыка с хаба</span><span style="flex:1"></span>
@@ -1690,6 +1706,7 @@ function eyRender() {
     const s = eyStatus(c.id);
     return `<div class="ey-cam" data-i="${i}">
       <div class="live"><img data-id="${esc(c.id)}" alt=""><span class="st ${s.cls}">${esc(s.txt)}</span></div>
+      <div class="hb" title="Здоровье камеры — нажми, чтобы открыть журнал сбоев"><i></i><span></span></div>
       <div class="form">
         <span>Название</span><input type="text" data-k="name" value="${esc(c.name)}" placeholder="кабинет, детская, зал">
         <span>Id</span><input type="text" data-k="id" value="${esc(c.id)}" ${c.saved ? "disabled" : ""} placeholder="cam1">
@@ -1726,6 +1743,10 @@ function eyStates() {
     const c = EY.cams[+el.dataset.i]; if (!c) return;
     const s = eyStatus(c.id), st = el.querySelector(".st"), live = EY.state[c.id];
     st.className = "st " + s.cls; st.textContent = s.txt;
+    // the health strip (eyes.py Eye.health): green / yellow / red, off - grey
+    const h = (live && live.health) || { level: c.on === false ? "off" : "red", why: c.on === false ? "выключена" : "глаза не видят камеру" };
+    const hb = el.querySelector(".hb"); hb.className = "hb " + h.level; hb.querySelector("span").textContent = h.why;
+    hb.onclick = () => eyHealthLog(c);
     el.querySelector("[data-now]").textContent = live && live.online ? `сейчас ${(live.motion * 100).toFixed(1)}%` : "";
   });
 }
@@ -1754,6 +1775,18 @@ async function eyPoll() {
   eyStates(); eyFrames();
   EY.timer = setTimeout(eyPoll, 1500);
 }
+async function eyHealthLog(c) {
+  const r = await api(`/api/eyes/live/log/${encodeURIComponent(c.id)}`).catch(e => ({ log: [], health: { level: "red", why: e.message } }));
+  const LV = { error: "ошибка", warn: "предупреждение", info: "ок" };
+  $("#ey-hlog").innerHTML = `<div class="box"><div class="bar"><span class="title">${esc(c.name || c.id)}: здоровье</span>
+      <span class="hb ${r.health.level}" style="flex:1"><i></i><span>${esc(r.health.why)}</span></span>
+      <button class="btn" id="ey-hlog-close">Закрыть</button></div>
+    <div class="rows">${(r.log || []).map(l => `<div class="hl ${l.level}"><span class="t">${esc(l.t)}</span><span class="lv">${LV[l.level] || l.level}</span>${esc(l.msg)}</div>`).join("")
+      || '<div class="help">Сбоев не было (журнал — с последнего запуска глаз).</div>'}</div></div>`;
+  $("#ey-hlog").hidden = false;
+  $("#ey-hlog-close").onclick = () => { $("#ey-hlog").hidden = true; };
+}
+$("#ey-hlog").onclick = e => { if (e.target.id === "ey-hlog") $("#ey-hlog").hidden = true; };
 function eyBig(src) { $("#ey-big img").src = src; $("#ey-big").hidden = false; }
 $("#ey-big").onclick = () => { $("#ey-big").hidden = true; };
 async function eyLog() {

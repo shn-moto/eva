@@ -26,6 +26,7 @@ must not keep a camera "busy" forever.
     GET /presence?minutes=10     who was seen where (from the database)
     GET /journal?hours=2         events of a period with who was recognised (camera=, person=, since=, until=)
     GET /probe?url=              one frame from a URL (the admin page's «Проверить»)
+    GET /log/<id>                a camera's health log (reconnects, stalls, lag, photolib errors)
     GET /events                  SSE: motion (an event opens) / active (still moving, every 10 s) / face / end
 
 Database (assistant_memory, ASSISTANT_PG_DSN), tables made here:
@@ -33,6 +34,7 @@ Database (assistant_memory, ASSISTANT_PG_DSN), tables made here:
     eye_faces   a face seen in an event: crop, box, person (photolib), similarity
 Files: EYES_DIR/events/<day>/<id>.jpg (the frame at the peak), faces/<day>/<id>.jpg; KEEP_DAYS.
 """
+import collections
 import datetime
 import json
 import os
@@ -62,6 +64,7 @@ FACE_EVERY = 0.7          # s between face passes during an event
 IDLE_FACE_EVERY = 5.0     # s between face passes with no event (a person sitting still)
 FACE_LOG_EVERY = 3.0      # s between logged faces of one event: a person at the desk is not 400 rows
 QUERY_EVERY = 2.0         # s between photolib questions of one camera (~0.7 s each there)
+HEALTH_WINDOW = 600        # s: problems this recent make a camera yellow
 LAG_MAX = 3.0              # s an RTSP stream may fall behind real time before it is reconnected
 GAP_RESET = 2.0            # s without frames: the background starts anew (no motion out of a stall)
 ACTIVE_EVERY = 10.0        # s between "still moving" events of an open event (the scenarios)
@@ -200,9 +203,17 @@ class Reader(threading.Thread):
         self.error = None
         self.got = []              # arrival times, for the camera's fps
         self.conn = 0              # +1 on every (re)connect: the analyser starts its background anew
+        self.issues = collections.deque(maxlen=200)    # (ts, level, msg): the camera's health log
+        self.down_since = None     # the first failure of an outage: one log line per outage, not per retry
+
+    def note(self, level, msg):
+        self.issues.append((time.time(), level, str(msg)[:300]))
 
     def put(self, kind, data):
         t = time.time()
+        if self.down_since is not None:
+            self.note("info", f"кадры снова идут (не было {int(t - self.down_since)} с)")
+            self.down_since = None
         self.frame = (t, kind, data)
         self.seq += 1
         self.got = [x for x in self.got[-60:] if t - x < 5] + [t]
@@ -219,6 +230,10 @@ class Reader(threading.Thread):
                     self._http()
             except Exception as e:
                 self.error = str(e)[:200]
+                # an outage logged once with its first reason; a lag reconnect each time (it is the point)
+                if self.down_since is None or "behind" in self.error:
+                    self.note("error", self.error)
+                self.down_since = self.down_since or time.time()
             if self.running:
                 time.sleep(3)
 
@@ -326,12 +341,31 @@ class Eye(threading.Thread):
         self.reader.stop()
 
     # -- state for the page --
+    def health(self):
+        """green - frames come, nothing wrong in HEALTH_WINDOW; yellow - frames come, but there were
+        reconnects / errors lately or the camera sends under 3 fps; red - no frames now."""
+        t = time.time()
+        fr = self.reader.frame
+        if not (fr and t - fr[0] < 5):
+            return {"level": "red", "why": self.reader.error or "нет кадров"}
+        bad = [(ts, lv, m) for ts, lv, m in self.reader.issues if lv != "info" and t - ts < HEALTH_WINDOW]
+        fps = len(self.reader.got) / 5
+        if bad:
+            return {"level": "yellow", "why": f"{len(bad)} сбоев за {HEALTH_WINDOW // 60} мин: {bad[-1][2]}"}
+        if fps < 3:
+            return {"level": "yellow", "why": f"мало кадров: {fps:.1f} к/с"}
+        return {"level": "green", "why": f"всё хорошо · {fps:.1f} к/с"}
+
+    def issue_log(self):
+        return [{"t": datetime.datetime.fromtimestamp(ts).strftime("%d.%m %H:%M:%S"), "level": lv, "msg": m}
+                for ts, lv, m in reversed(self.reader.issues)]
+
     def state(self):
         t = time.time()
         fr = self.reader.frame
         online = bool(fr and t - fr[0] < 5)
         ev = self.event
-        return {"id": self.id, "name": self.cam.get("name") or self.id, "online": online,
+        return {"id": self.id, "name": self.cam.get("name") or self.id, "online": online, "health": self.health(),
                 "error": None if online else (self.reader.error or "нет кадров"),
                 "fps": round(len(self.reader.got) / 5, 1), "analysed_fps": round(len([x for x in self.analysed if t - x < 5]) / 5, 1),
                 "size": self.size, "motion": round(self.motion, 4), "threshold": self.cam.get("motion", 0.01),
@@ -375,6 +409,7 @@ class Eye(threading.Thread):
                     self.step(fr)
                 except Exception as e:
                     log(f"{self.id}: step:", e)
+                    self.reader.note("error", f"анализ кадра: {e}")
             elif self.event and (not fr or t0 - fr[0] > 5):
                 self.close_event()          # the camera went away mid-event
             time.sleep(max(0.01, period - (time.time() - t0)))
@@ -550,6 +585,7 @@ class Eye(threading.Thread):
             pid, name, sim = identify(jpg, float(self.g.get("id_threshold", 0.5)), float(self.g.get("id_floor", 0.45)))
         except Exception as e:
             log(f"{self.id}: photolib:", e)
+            self.reader.note("warn", f"photolib не ответил: {e}")
             return
         if fid:
             sql("UPDATE eye_faces SET person_id=%s, person=%s, similarity=%s WHERE id=%s", (pid, name, sim, fid))
@@ -696,9 +732,18 @@ def cameras():
     for x in c.get("cameras", []):
         if x.get("id") not in EYES:
             out.append({"id": x.get("id"), "name": x.get("name") or x.get("id"), "online": False, "off": True,
+                        "health": {"level": "off", "why": "выключена"},
                         "error": "выключена", "watching": False, "faces_enabled": False, "faces": []})
     return {"cameras": out, "motion_on": c.get("motion_on", True) is not False,
             "faces_on": c.get("faces_on", True) is not False}
+
+
+@app.get("/log/{cid}")
+def issue_log(cid: str):
+    """A camera's health log, newest first (reconnects, stalls, lag, photolib errors)."""
+    e = EYES.get(cid)
+    return {"id": cid, "health": e.health() if e else {"level": "off", "why": "выключена"},
+            "log": e.issue_log() if e else []}
 
 
 @app.get("/frame/{cid}.jpg")
