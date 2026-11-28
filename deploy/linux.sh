@@ -18,7 +18,7 @@ HUB_KEY=${HUB_KEY:?set HUB_KEY in deploy/local.env}
 HUB_KEY=${HUB_KEY/#\~/$HOME}
 SSH=(ssh -i "$HUB_KEY" -o ConnectTimeout=10 "$HOST")
 
-svc=${1:?service: stt | music | router | gpu-arbiter | admin | print | eyes | rtmp | brain}
+svc=${1:?service: stt | music | router | gpu-arbiter | admin | print | eyes | rtmp | gopro | brain}
 ref=${2:-origin/main}
 git fetch -q origin
 sha=$(git rev-parse --verify "$ref^{commit}")
@@ -68,6 +68,15 @@ eyes)
     # 8554-8556/udp: a GoPro's preview comes to the asker over UDP (gopro://, eyes.py Reader._gopro)
     run="-p 8913:8913 -p 8554-8556:8554-8556/udp --add-host=host.docker.internal:host-gateway --env-file \$HOME/eva-data/admin.env --cpus 3 \
 -v /etc/localtime:/etc/localtime:ro -v \$HOME/eva-data/eyes:/eyes"
+    cmd=""; health=/health ;;
+gopro)
+    # a GoPro kept live for the eyes over Bluetooth (services/gopro): the host's bluetoothd over D-Bus
+    # (AppArmor lets a container onto the system bus only unconfined). ~/eva-data/gopro.env (not in git):
+    # GOPRO_WIFI_SSID (+ _PASSWORD for a network new to the camera); it streams to eva-rtmp
+    src=services/gopro; image=eva-gopro; name=eva-gopro; port=8914
+    run="--network host --security-opt apparmor=unconfined -v /var/run/dbus:/var/run/dbus \
+-v /etc/localtime:/etc/localtime:ro -v \$HOME/eva-data/eyes:/eyes:ro --env-file \$HOME/eva-data/gopro.env \
+-e GOPRO_RTMP=rtmp://${HOST#*@}:1935/live/gopro"
     cmd=""; health=/health ;;
 print)
     # files sent to Eva in Telegram (kept a week) + printing through the home's CUPS
