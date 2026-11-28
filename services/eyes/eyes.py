@@ -622,7 +622,17 @@ def health():
 
 @app.get("/cameras")
 def cameras():
-    return {"cameras": [e.state() for e in EYES.values()]}
+    """Every camera of eyes.json - the switched-off ones too, with why: the brain's tool is always
+    there and tells «выключена» itself (2026-11-28: a skill present only when a camera was on at
+    the brain's start needed a restart of the brain for every switch)."""
+    c = conf() or {}
+    out = [dict(e.state(), watching=e.watching()) for e in EYES.values()]
+    for x in c.get("cameras", []):
+        if x.get("id") not in EYES:
+            out.append({"id": x.get("id"), "name": x.get("name") or x.get("id"), "online": False, "off": True,
+                        "error": "выключена", "watching": False, "faces": []})
+    return {"cameras": out, "motion_on": c.get("motion_on", True) is not False,
+            "faces_on": c.get("faces_on", True) is not False}
 
 
 @app.get("/frame/{cid}.jpg")
