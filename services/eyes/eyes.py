@@ -61,6 +61,7 @@ FACE_LOG_EVERY = 3.0      # s between logged faces of one event: a person at the
 QUERY_EVERY = 2.0         # s between photolib questions of one camera (~0.7 s each there)
 ACTIVE_EVERY = 10.0        # s between "still moving" events of an open event (the scenarios)
 RECHECK_S = 15            # a tracked face keeps its name this long, then photolib is asked again
+MIN_ASK = 24              # px: smaller faces are not sent to photolib at all
 TRACK_IOU = 0.3           # a face is the same face as one in the last pass when the boxes overlap this much
 TRACK_GAP = 2.0           # s: a face not seen longer starts a new track (asked anew)
 MAX_EVENT_S = 300         # a long presence is split into 5-minute events
@@ -506,7 +507,9 @@ class Eye(threading.Thread):
                        name if inherit else None), one=True)
             fid = row[0] if row else None
             # each track asked at most every QUERY_EVERY s: two people in the frame are both asked
-            if not inherit and min(w, h) >= 40 and t - k["asked_at"] >= QUERY_EVERY:
+            # from 24 px: a face across the room (28x42) was never asked and the journal showed «?»
+            # with no number; photolib answers 0.44-0.53 for such a profile - borderline, but said (2026-11-28)
+            if not inherit and min(w, h) >= MIN_ASK and t - k["asked_at"] >= QUERY_EVERY:
                 k["asked_at"] = t
                 ok, jpg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 92])
                 if ok:
