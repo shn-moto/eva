@@ -43,6 +43,9 @@ import urllib.parse
 import urllib.request
 import uuid
 
+# RTSP the live way: TCP, no demuxer buffer, low delay - a Wi-Fi camera's stall was played back late
+# as if live (a face recognised after the person had left, 2026-11-28). Read before cv2 opens a stream.
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;500000")
 import cv2
 import numpy as np
 import psycopg
@@ -59,6 +62,8 @@ FACE_EVERY = 0.7          # s between face passes during an event
 IDLE_FACE_EVERY = 5.0     # s between face passes with no event (a person sitting still)
 FACE_LOG_EVERY = 3.0      # s between logged faces of one event: a person at the desk is not 400 rows
 QUERY_EVERY = 2.0         # s between photolib questions of one camera (~0.7 s each there)
+LAG_MAX = 3.0              # s an RTSP stream may fall behind real time before it is reconnected
+GAP_RESET = 2.0            # s without frames: the background starts anew (no motion out of a stall)
 ACTIVE_EVERY = 10.0        # s between "still moving" events of an open event (the scenarios)
 RECHECK_S = 15            # a tracked face keeps its name this long, then photolib is asked again
 MIN_FACE = 28             # px (eyes.json min_face): smaller faces are neither caught nor asked - photolib's
@@ -194,6 +199,7 @@ class Reader(threading.Thread):
         self.seq = 0
         self.error = None
         self.got = []              # arrival times, for the camera's fps
+        self.conn = 0              # +1 on every (re)connect: the analyser starts its background anew
 
     def put(self, kind, data):
         t = time.time()
@@ -217,9 +223,10 @@ class Reader(threading.Thread):
                 time.sleep(3)
 
     def _http(self):
-        with urllib.request.urlopen(self.url, timeout=10) as r:
+        with urllib.request.urlopen(self.url, timeout=5) as r:
             ctype = r.headers.get("Content-Type", "")
             self.error = None
+            self.conn += 1
             if ctype.startswith("image/"):
                 self.put("jpg", r.read())
                 return self._poll()
@@ -252,15 +259,27 @@ class Reader(threading.Thread):
                 self.put("jpg", r.read())
 
     def _rtsp(self):
-        cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+        # 5 s, not FFmpeg's 30: a stalled camera was waited for 30 s at a time (2026-11-28)
+        cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000,
+                                                          cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000])
         try:
             if not cap.isOpened():
                 raise IOError("rtsp: cannot open")
             self.error = None
+            self.conn += 1
+            base = None                    # the smallest (wall clock - stream clock) seen: no lag
             while self.running:
                 ok, img = cap.read()
                 if not ok:
                     raise IOError("rtsp: no frame")
+                # how late is this frame: the stream's own clock against ours. A camera that sends
+                # a backlog after a network hiccup is behind - reconnect and start from now.
+                pts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                if pts > 0:
+                    off = time.time() - pts
+                    base = off if base is None else min(base, off)
+                    if off - base > LAG_MAX:
+                        raise IOError(f"rtsp: {off - base:.1f} s behind the camera - reconnecting")
                 self.put("bgr", img)
         finally:
             cap.release()
@@ -299,6 +318,8 @@ class Eye(threading.Thread):
         self.det = None
         self.det_size = None
         self.analysed = []
+        self.conn_seen = 0
+        self.prev_t = 0.0
 
     def stop(self):
         self.running = False
@@ -354,7 +375,7 @@ class Eye(threading.Thread):
                     self.step(fr)
                 except Exception as e:
                     log(f"{self.id}: step:", e)
-            elif self.event and (not fr or t0 - fr[0] > 10):
+            elif self.event and (not fr or t0 - fr[0] > 5):
                 self.close_event()          # the camera went away mid-event
             time.sleep(max(0.01, period - (time.time() - t0)))
         if self.event:
@@ -391,7 +412,11 @@ class Eye(threading.Thread):
             return
         self.analysed = [x for x in self.analysed[-50:] if t - x < 5] + [t]
         small = cv2.GaussianBlur(small, (5, 5), 0).astype(np.float32)
-        if self.bg is None or self.bg.shape != small.shape:
+        # after a reconnect or a stall the first frame differs from the old background as a whole:
+        # that is not motion (events of one frame at each RTSP timeout, 2026-11-28)
+        fresh = self.reader.conn != self.conn_seen or t - self.prev_t > GAP_RESET
+        self.conn_seen, self.prev_t = self.reader.conn, t
+        if fresh or self.bg is None or self.bg.shape != small.shape:
             self.bg = small.copy()
             return
         diff = cv2.absdiff(small, self.bg)
