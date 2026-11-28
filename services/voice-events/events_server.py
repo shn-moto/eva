@@ -21,6 +21,8 @@ emotion - speech emotion (GigaAM-Emo, Dusha: angry / sad / neutral / positive), 
     MODELS   the cache with panns_data/Cnn14_mAP=0.431.pth (~/eva-data/bench-cache)
     THREADS  torch threads (4)
 """
+import concurrent.futures
+import ctypes
 import io
 import os
 import time
@@ -29,7 +31,7 @@ import wave
 import numpy as np
 import torch
 from fastapi import FastAPI, Request
-from fastapi.concurrency import run_in_threadpool
+import asyncio
 
 torch.set_num_threads(int(os.environ.get("THREADS", "4")))
 from panns_inference import AudioTagging, labels  # noqa: E402
@@ -128,9 +130,30 @@ def emotion(a32):
         os.remove(path)
 
 
+# One thread per model, not FastAPI's pool of 40: every pool thread got a malloc arena of its own,
+# torch's buffers for clips of every length stayed in them, and the service sat at 3.2 GB with 1.1 GB
+# of it in swap - the hub's swap full, earlyoom stopped photolib (2026-11-28). With MALLOC_ARENA_MAX=2
+# (the Dockerfile) and malloc_trim after each call the freed memory goes back to the system.
+_CLS = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix="classify")
+_EMO = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix="emotion")
+try:
+    _trim = ctypes.CDLL("libc.so.6").malloc_trim
+except OSError:
+    _trim = None
+
+
+def _trimmed(fn, *a):
+    try:
+        return fn(*a)
+    finally:
+        if _trim:
+            _trim(0)
+
+
 @app.post("/classify")
 async def classify_route(request: Request):
-    return await run_in_threadpool(classify, await request.body())
+    body = await request.body()
+    return await asyncio.get_running_loop().run_in_executor(_CLS, _trimmed, classify, body)
 
 
 @app.post("/emotion")
@@ -138,7 +161,7 @@ async def emotion_route(request: Request):
     if EMO is None:
         return {"error": "no emotion model"}
     a = _audio(await request.body())
-    return await run_in_threadpool(emotion, a)
+    return await asyncio.get_running_loop().run_in_executor(_EMO, _trimmed, emotion, a)
 
 
 @app.get("/health")

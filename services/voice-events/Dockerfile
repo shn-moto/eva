@@ -9,6 +9,8 @@ RUN pip install --no-cache-dir panns_inference fastapi==0.162.0 "uvicorn[standar
     git+https://github.com/salute-developers/GigaAM.git
 # PANNs looks for its checkpoint and labels in ~/panns_data
 RUN ln -s /root/.cache/panns_data /root/panns_data
+# two malloc arenas, not 8 per core: torch's freed buffers go back to the system (events_server.py)
+ENV MALLOC_ARENA_MAX=2
 WORKDIR /app
 COPY events_server.py /app/
 EXPOSE 8911
