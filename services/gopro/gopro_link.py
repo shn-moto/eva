@@ -32,6 +32,7 @@ import urllib.request
 from open_gopro import WirelessGoPro
 from open_gopro.models import proto, streaming
 from open_gopro.models.constants import Toggle
+from open_gopro.api.ble_commands import BleCommands
 from open_gopro.features.cohn_feature import CohnFeature
 from open_gopro.network.ble.adapters.bleak_wrapper import BleakWrapperController
 from open_gopro.network.wifi.controller import SsidState, WifiController
@@ -99,6 +100,20 @@ async def _no_cohn(self):
 
 
 CohnFeature.wait_until_ready = _no_cohn
+
+_pairing_complete = BleCommands.set_pairing_complete
+
+
+async def _quiet_pairing_complete(self):
+    """«Pairing done, clear your pairing screen» - a camera no longer in pairing mode does not answer,
+    and the SDK failed the whole connect on it (2026-11-28, the camera carried to the kids' room)."""
+    try:
+        return await _pairing_complete(self)
+    except Exception as e:
+        log.info(f"pairing complete: {type(e).__name__} (not in pairing mode)")
+
+
+BleCommands.set_pairing_complete = _quiet_pairing_complete
 
 
 def note(msg, error=False):
