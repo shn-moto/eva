@@ -32,6 +32,7 @@ import urllib.request
 from open_gopro import WirelessGoPro
 from open_gopro.models import proto, streaming
 from open_gopro.models.constants import Toggle
+from open_gopro.features.cohn_feature import CohnFeature
 from open_gopro.network.ble.adapters.bleak_wrapper import BleakWrapperController
 from open_gopro.network.wifi.controller import SsidState, WifiController
 
@@ -90,6 +91,14 @@ async def _pair(self, handle):
 
 
 BleakWrapperController.pair = _pair
+
+
+async def _no_cohn(self):
+    """COHN (the camera on the home network as a client) exists from HERO12 on: on a HERO11 the SDK
+    waited 30 s for its status on every connect and gave up (2026-11-28). The live stream needs none."""
+
+
+CohnFeature.wait_until_ready = _no_cohn
 
 
 def note(msg, error=False):
