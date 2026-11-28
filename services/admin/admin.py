@@ -1355,7 +1355,6 @@ EYES_URL = os.environ.get("EYES_URL", "http://host.docker.internal:8913")
 CAM_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
-@app.get("/api/eyes/cameras")
 def _eyes_rev():
     try:
         return str(os.stat(EYES_CONF).st_mtime_ns)
@@ -1363,6 +1362,7 @@ def _eyes_rev():
         return "0"
 
 
+@app.get("/api/eyes/cameras")
 def eyes_get():
     c = _jload(EYES_CONF, {})
     return {"rev": _eyes_rev(), "cameras": c.get("cameras", []), "fps": c.get("fps", 5), "quiet_s": c.get("quiet_s", 8),
